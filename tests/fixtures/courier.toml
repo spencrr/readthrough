@@ -1,0 +1,303 @@
+# Architecture profile for octo/courier, a fictional message-delivery library used by the tests.
+# It exercises every part of the schema: nested components, a catch-all, contracts, rules, signals,
+# paired files, line heuristics with an exempt marker, and author kinds.
+schema = 1
+repo = 'octo/courier'
+title = 'Courier'
+
+# Reading order for a diff: types first, then the code that uses them, then tests.
+read_order = [
+  'models',
+  'common',
+  'store',
+  'transports',
+  'pipeline',
+  'steps',
+  'api',
+  'cli',
+  'tests',
+  'docs',
+  'infra',
+  'other',
+]
+
+[[layers]]
+id = 'entry'
+label = 'Entry points'
+
+[[layers]]
+id = 'orchestration'
+label = 'Orchestration'
+flow = true
+
+[[layers]]
+id = 'core'
+label = 'Core components'
+
+[[layers]]
+id = 'shared'
+label = 'Shared library'
+
+[[layers]]
+id = 'support'
+label = 'Tests / docs / infra'
+source = false
+
+# First match wins, so specific paths come before broader ones (courier/** catches the rest of the library).
+[[components]]
+id = 'api'
+label = 'HTTP API'
+layer = 'entry'
+paths = ['courier/api/**']
+questions = ['Are request and response types drawn from courier.models?']
+
+[[components]]
+id = 'cli'
+label = 'CLI'
+layer = 'entry'
+paths = ['courier/cli/**']
+
+[[components]]
+id = 'steps'
+label = 'Pipeline steps'
+layer = 'orchestration'
+paths = ['courier/pipeline/steps/**']
+contract = 'Steps'
+questions = ['Does the step only transform the envelope, without sending or persisting anything?']
+
+[[components]]
+id = 'pipeline'
+label = 'Pipeline'
+layer = 'orchestration'
+paths = ['courier/pipeline/**']
+contract = 'Pipeline'
+questions = ['Is every retry decision driven by a transport result rather than raw response text?']
+
+[[components]]
+id = 'transports'
+label = 'Transports'
+layer = 'core'
+paths = ['courier/transports/**']
+contract = 'Transports'
+questions = [
+  'Does the transport avoid writing to the store (the pipeline owns persistence)?',
+  'Are retries confined to known exceptions at the transport layer?',
+]
+
+[[components]]
+id = 'store'
+label = 'Store'
+layer = 'shared'
+paths = ['courier/store/**']
+contract = 'Store'
+questions = ['If the schema changes, does the migration upgrade and downgrade?']
+
+[[components]]
+id = 'models'
+label = 'Models'
+layer = 'shared'
+paths = ['courier/models/**']
+contract = 'Models'
+questions = ['Does courier.models still depend only on the stdlib and courier.common?']
+
+[[components]]
+id = 'common'
+label = 'Common'
+layer = 'shared'
+paths = ['courier/**']
+
+[[components]]
+id = 'tests'
+label = 'Tests'
+layer = 'support'
+paths = ['tests/**']
+
+[[components]]
+id = 'docs'
+label = 'Docs'
+layer = 'support'
+paths = ['docs/**', 'examples/**']
+questions = ['Are the .py and .ipynb pairs in sync?']
+
+[[components]]
+id = 'infra'
+label = 'Build / CI / Infra'
+layer = 'support'
+paths = ['.github/**', 'pyproject.toml', 'uv.lock', 'Makefile']
+
+[[components]]
+id = 'other'
+label = 'Other'
+layer = 'support'
+paths = ['**']
+
+[contracts]
+source = 'docs/architecture.md'
+parser = 'markdown-sections'
+labels = { responsibility = 'Responsibility', does_not_own = 'Does not own' }
+
+[rules]
+instructions_dir = '.github/instructions'
+guidance_file = '.github/copilot-instructions.md'
+
+[questions]
+always = [
+  'In one sentence, what user-visible behavior changes after this merges?',
+  'What would break for an existing user or caller (signatures, defaults, stored data)?',
+  'What happens on the unhappy path: empty input, None, timeouts, partial failure?',
+  'Do the tests fail without the change, or would they pass against main too?',
+]
+
+[[signals]]
+id = 'migration'
+kind = 'risk'
+message = 'Store migration: verify upgrade and downgrade'
+paths = ['courier/store/migrations/**']
+
+[[signals]]
+id = 'public-api'
+kind = 'risk'
+message = '`__init__.py` exports changed: public API surface'
+paths = ['courier/**/*__init__.py']
+
+[[signals]]
+id = 'deps'
+kind = 'risk'
+message = 'Dependency manifest changed'
+paths = ['pyproject.toml', 'uv.lock', '**/package.json']
+
+[[signals]]
+id = 'deletes'
+kind = 'risk'
+message = 'Deletes library files: check for a deprecation path'
+paths = ['courier/**']
+change_types = ['DELETED']
+
+[[paired_files]]
+id = 'example-pair'
+kind = 'convention'
+message = 'example .py/.ipynb pair changed on one side only'
+under = 'examples/'
+extensions = ['.py', '.ipynb']
+
+# Line heuristics on added lines. Prompts to look closer, never verdicts.
+[[smells]]
+id = 'async-suffix'
+kind = 'convention'
+message = 'async function without `_async` suffix'
+path = '^courier/.*\.py$'
+line = '^\s*async def (?!__)(?!_*test_)\w+(?<!_async)\((?!.*async-suffix-exempt)'
+
+[[smells]]
+id = 'kw-only'
+kind = 'convention'
+message = 'several positional parameters (the style guide wants keyword-only `*`)'
+path = '^courier/.*\.py$'
+line = '^\s*(?:async )?def (?!__)\w+\(self, \w+[^*()]*, \w+[^*()]*\)'
+strip_brackets = true   # ignore commas inside type hints like dict[str, Any]
+
+[[smells]]
+id = 'legacy-typing'
+kind = 'convention'
+message = 'legacy typing syntax (use `X | None`, `list[...]`)'
+path = '\.py$'
+line = '\b(?:Optional|List|Dict|Tuple|Union)\['
+
+[[smells]]
+id = 'broad-except'
+kind = 'convention'
+message = 'broad exception handler'
+path = '^courier/.*\.py$'
+line = '^\s*except(?:\s+Exception\b|\s*:)'
+
+[[smells]]
+id = 'blocking-io'
+kind = 'correctness'
+message = 'blocking call (check it is not on an async path)'
+path = '^courier/.*\.py$'
+line = '\btime\.sleep\(|\brequests\.(?:get|post|put|delete|request)\('
+
+[[smells]]
+id = 'print'
+kind = 'responsibility'
+message = 'print() outside the CLI'
+path = '^courier/(?!cli/).*\.py$'
+line = '^\s*print\('
+
+[[smells]]
+id = 'type-ignore'
+kind = 'info'
+message = 'type: ignore added'
+path = '\.py$'
+line = '#\s*type:\s*ignore'
+
+[[smells]]
+id = 'todo'
+kind = 'info'
+message = 'TODO/FIXME added'
+path = '.'
+line = '\b(?:TODO|FIXME|XXX|HACK)\b'
+
+[[smells]]
+id = 'transport-store'
+kind = 'responsibility'
+message = 'transport touching the store (the pipeline owns persistence)'
+path = '^courier/transports/'
+line = '\bStore\b|\.save\('
+
+[[smells]]
+id = 'step-sends'
+kind = 'responsibility'
+message = 'pipeline step sending directly (transports own delivery)'
+path = '^courier/pipeline/steps/'
+line = '\.send\(|\.deliver\('
+
+[checks]
+test_paths = ['tests/**', '**/tests/**']
+tests_component = 'tests'
+no_tests_min_lines = 20
+cross_cutting_layers = 3
+large_lines = 800
+stale_days = 21
+
+[weights]
+# Generated or lock files count for at most capped_lines toward a PR's size.
+capped_paths = ['**/*.ipynb', '**/*.lock', '**/*package-lock.json']
+capped_lines = 20
+
+[overlap]
+# Files every PR touches; sharing them doesn't mean two PRs are related.
+ignore = ['pyproject.toml', 'uv.lock', 'docs/toc.yml']
+# Hidden by the overlap graph's 'source files only' toggle.
+non_source = ['tests/**', 'docs/**', '**/*.lock']
+
+[authors]
+internal = []
+external = []
+
+[authors.kinds.external]
+signal = { id = 'external', kind = 'author', message = 'External contributor: look closely at new dependencies, network, file, and subprocess access' }
+questions = [
+  'Is there a linked issue or earlier discussion showing the maintainers want this change?',
+  'Does it add dependencies, network calls, file writes, or subprocesses? Read each of those lines.',
+]
+
+[authors.kinds.first-time]
+signal = { id = 'first-time', kind = 'author', message = 'First-time contributor: check the CLA, and that maintainers asked for this change' }
+questions = [
+  'Is there a linked issue or earlier discussion showing the maintainers want this change?',
+  'Does it add dependencies, network calls, file writes, or subprocesses? Read each of those lines.',
+]
+
+[review]
+guidance = '''
+Comment only on bugs, responsibility bleed against docs/architecture.md's "Does not own" lists, real
+readability problems, and the critical conventions (async suffix, keyword-only arguments). No style nits.
+'''
+test_cmd = '{clone}/.venv/bin/python -m pytest {tests} -q'
+
+[study]
+guidance = '''
+The learner maintains Courier. Questions about which component owns what should lean on
+docs/architecture.md's "Does not own" lists.
+'''

@@ -1,0 +1,135 @@
+# readthrough's tunable settings, with their defaults.
+#
+# To change one, put it under a [tuning.<section>] table in your config.toml, for example:
+#
+#   [tuning.github]
+#   timeout_seconds = 120
+#
+# Sections marked "per repo" can also be set for one repo, under that repo's [[repos]] entry:
+#
+#   [[repos]]
+#   name = "microsoft/vscode"
+#   [repos.tuning.planning]
+#   estimate_max_minutes = 120
+#
+# `readthrough config --defaults` prints this file; `readthrough config --check` validates yours.
+# Values outside the allowed range, wrong types, and unknown keys are rejected with a clear message.
+
+[github]
+# Seconds before a single `gh` call is abandoned. Without a limit, one hung call stalls a repo forever.
+timeout_seconds = 60
+# How many times a call that failed for a temporary reason (connection reset, timeout, GitHub 5xx) is retried.
+retries = 3
+# Seconds to wait before the first retry. Each later retry waits twice as long, plus up to 25% random jitter.
+retry_backoff_seconds = 2.0
+# The longest wait between two retries.
+retry_max_backoff_seconds = 30.0
+# Seconds to wait when GitHub says you're being rate limited (429, or 403 with a rate-limit message).
+rate_limit_wait_seconds = 60.0
+# The most `gh` calls running at once, across every repo the server refreshes.
+# Lower it if you see connection resets; GitHub also throttles bursts of parallel requests.
+concurrency = 6
+# Open PRs fetched per GraphQL page. Smaller pages are slower but less likely to time out.
+pr_page_size = 20
+# A PR's files, CI checks, and review threads are fetched page by page up to these limits.
+# 3,000 files is the most GitHub will list for one PR.
+max_files_per_pr = 3000
+max_checks_per_pr = 500
+max_review_threads_per_pr = 300
+# Days to keep cached diffs of PRs that are no longer in the fetched list (closed, merged, or past `limit`).
+diff_cache_days = 14
+
+[git]
+# Seconds before a git command (fetching a PR, adding a worktree) is abandoned.
+timeout_seconds = 300
+
+[server]
+# Seconds between checks for changes made outside the server (CLI builds, ledger edits, Copilot sessions).
+watch_seconds = 3.0
+# Seconds between keep-alive messages on the dashboard's live connection.
+keepalive_seconds = 15.0
+# Seconds between the first refreshes of each repo, so they don't all hit GitHub at once.
+start_stagger_seconds = 20
+# Each refresh interval is varied by up to this fraction, so repos drift apart instead of refreshing together.
+refresh_jitter = 0.1
+# After a failed refresh, retry after these many minutes in turn (then every refresh interval).
+retry_after_failure_minutes = [1, 2, 5]
+
+[planning]  # per repo
+# Reading-time estimate: base + minutes per changed line by kind + minutes per extra layer, capped.
+estimate_base_minutes = 5.0
+estimate_minutes_per_source_line = 0.08
+estimate_minutes_per_test_line = 0.03
+estimate_minutes_per_other_line = 0.01
+estimate_minutes_per_extra_layer = 4.0
+estimate_max_minutes = 240
+# Burn-down order. A ready PR scores priority_base, plus its age in days (up to priority_age_cap_days),
+# plus the bonuses below. Approved PRs get priority_approved; other lanes 0.
+priority_base = 50.0
+priority_age_cap_days = 30.0
+priority_review_requested = 40.0
+priority_re_review = 15.0
+priority_quick_minutes = 15
+priority_quick_bonus = 20.0
+priority_short_minutes = 30
+priority_short_bonus = 10.0
+priority_closes_issue = 5.0
+priority_approved = 30.0
+priority_ci_passing = 10.0
+priority_ci_failing_on_main = 5.0
+priority_ci_failing_optional = -10.0
+priority_ci_not_run = -5.0
+
+[onboarding]  # per repo
+# Share of recently changed lines that must land in a named component before a profile can be accepted.
+min_coverage = 0.85
+# Below this share of open-PR changes landing in a named component, the dashboard says the map is drifting.
+drift_coverage = 0.75
+# How many recently merged PRs onboarding learns from.
+merged_sample = 100
+# Minutes the browser setup page reuses what it read about a repo before reading it again.
+facts_cache_minutes = 30
+
+[freshness]  # per repo
+# Hours before the dashboard warns that its data is old: on the live server, and in a static snapshot.
+stale_live_hours = 2.0
+stale_snapshot_hours = 26.0
+# Hours before `readthrough doctor` flags a repo's last build as too old.
+doctor_build_hours = 36.0
+
+[payload]  # per repo
+# How much of each PR's text is kept in the dashboard's data. Longer text is cut off.
+description_chars = 4000
+description_html_chars = 60000
+thread_comment_chars = 400
+thread_comment_html_chars = 8000
+line_heuristic_code_chars = 160
+
+[study]  # per repo
+# Seconds before a study-assistant turn is abandoned.
+turn_timeout_seconds = 600
+# The most text one of the study assistant's tools returns to Copilot.
+max_tool_output_chars = 60000
+# The same two limits for Copilot-assisted onboarding, plus how much of each doc it's shown up front.
+onboarding_turn_timeout_seconds = 900
+onboarding_tool_output_chars = 30000
+onboarding_doc_excerpt_chars = 8000
+
+[sessions]
+# Seconds between scans for new Copilot sessions to link to their PRs.
+scan_seconds = 5.0
+# How far into a session's event log to look for its first message.
+first_message_bytes = 512000
+
+[authors]  # per repo
+# Days a team or org membership check is remembered.
+membership_cache_days = 7.0
+
+[logging]
+# debug, info, warning, or error. `--verbose` on the command line means debug.
+level = "info"
+# "text" for people, "json" for one JSON object per line (for log tools).
+format = "text"
+# readthrough.log is rotated at this size, keeping this many old files.
+file_max_kb = 1024
+file_backups = 3

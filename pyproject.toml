@@ -1,0 +1,158 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "readthrough"
+version = "0.3.0"
+description = "Lay a repo's open pull requests out on its architecture, then study each one before you review it."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Spencer Schoenberg" }]
+keywords = ["code-review", "pull-requests", "github", "dashboard", "learning", "copilot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Typing :: Typed",
+]
+# The tool itself needs only the standard library and the gh CLI on PATH.
+dependencies = []
+
+[project.optional-dependencies]
+# The Copilot study assistant and Copilot-drafted profiles. Without it, the rules-based assistant is used.
+study = ["github-copilot-sdk>=1.0.11,<2"]
+
+[project.scripts]
+readthrough = "readthrough.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/spencrr/readthrough"
+Documentation = "https://github.com/spencrr/readthrough/blob/main/docs/guide.md"
+Changelog = "https://github.com/spencrr/readthrough/blob/main/CHANGELOG.md"
+Issues = "https://github.com/spencrr/readthrough/issues"
+
+[dependency-groups]
+# The dev group installs the [study] extra too, so the Copilot assistant's code is type-checked and tested.
+dev = [
+    "readthrough[study]",
+    "playwright>=1.47",
+    "pytest>=8",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.6",
+    "ty==0.0.87",
+]
+
+[tool.uv.sources]
+readthrough = { workspace = true }
+
+[tool.hatch.build.targets.sdist]
+include = ["src/readthrough", "tests", "docs", "examples", "CHANGELOG.md", "LICENSE", "README.md", "AGENTS.md"]
+exclude = ["docs/img"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/readthrough"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Formatting is ruff format's job; these conflict with it.
+    "E501", "COM812", "ISC001",
+    # Docstrings: public modules and classes get prose; we don't require one on every function and don't
+    # enforce a docstring style. The prose is checked by people.
+    "D1", "D2", "D4",
+    # Messages are written where they're raised: a raise with an f-string is clearer than an EM variable.
+    "EM101", "EM102", "TRY003",
+    # Expected failures are logged as one line on purpose (see logs.py).
+    "TRY400",
+    # gh and git are run by name with argument lists, never through a shell.
+    "S603", "S607",
+    # `Any` is the honest type for JSON from GitHub and Copilot SDK objects; narrowing it is churn.
+    "ANN401",
+    # Deferred imports are a tool here: optional extras (the Copilot SDK), platform modules (winreg), and
+    # breaking import cycles between the registries and config.
+    "PLC0415",
+    # Under `from __future__ import annotations` moving imports into TYPE_CHECKING blocks adds noise.
+    "TC001", "TC002", "TC003",
+    # Ambiguous unicode is the point in a few user-facing strings (ellipses, middle dots).
+    "RUF001", "RUF002", "RUF003",
+    # Copyright notices belong in LICENSE, not in every file.
+    "CPY001",
+    # Keyword-only `flag=True` reads fine; forbidding bool positionals doesn't buy clarity in a small codebase.
+    "FBT001", "FBT002", "FBT003",
+    # Complexity ceilings: the CLI parser and the analysis of one PR are long by nature. Split when it helps,
+    # not to satisfy a number.
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+    # Comparing to a literal (HTTP 404, "schema" == 1) with a name next to it is clearer than a constant.
+    "PLR2004",
+    # Exceptions are named for what they mean (Busy, Conflict, BodyTooLarge), not with an Error suffix.
+    "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: asserts are the point; test helpers take fakes; private access is how you test internals.
+"tests/**" = [
+    "S101", "S105", "S106", "S310", "S311", "BLE001", "ANN", "ARG", "SLF001", "PT011", "PT012", "PT018",
+    "INP001", "PLW0108", "PLW1510", "DTZ", "FBT", "E731", "A002", "PLR0904", "PLR0917", "PLR6301", "PLC2701",
+]
+# A fake winreg has to spell its functions the way the real one does.
+"tests/test_system.py" = ["N802"]
+# The fake gh is a program: its output is its stdout.
+"tests/fake_gh.py" = ["T201"]
+# scripts/ and examples/ are standalone programs, not packages; printing is their output. An example plugin
+# shares the registry's uniform signature.
+"scripts/**" = ["INP001", "T201"]
+"examples/**" = ["INP001", "T201", "ARG001"]
+# The CLI prints to the user on purpose, and every `cmd_*` handler takes (settings, args) whether it needs both or not.
+"src/readthrough/cli.py" = ["T201", "ARG001"]
+# Plugins share one signature per registry (finders, launchers, assistants); most don't need every argument.
+"src/readthrough/profile.py" = ["ARG001"]
+"src/readthrough/terminals.py" = ["ARG001"]
+"src/readthrough/assistants.py" = ["ARG002"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["readthrough"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "browser: drives the dashboard in a real browser (skipped when none is installed)",
+    "e2e: runs the real `readthrough` executable as a subprocess against a fake gh",
+]
+
+[tool.coverage.run]
+source = ["readthrough"]
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+# A ratchet: raise it when coverage goes up, never lower it to get a change in. Measured 91% with the browser tests.
+fail_under = 88
+show_missing = true
+skip_covered = true
+
+[tool.ty.environment]
+python-version = "3.11"
+# tests/ is a root too, so `from conftest import ...` resolves the way pytest's rootdir import does.
+root = ["src", "tests"]
+
+[tool.ty.src]
+include = ["src", "tests", "scripts"]

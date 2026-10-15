@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or PR cancels the runs it supersedes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  UV_LOCKED: "1" # fail if uv.lock is out of date rather than silently resolving anew
+
+jobs:
+  lint:
+    name: lint, format, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check . --output-format github
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      # Browser tests need a Chromium-family browser and skip without one; the hosted runners have Chrome.
+      - run: uv run pytest -q --cov --cov-report=term-missing:skip-covered --cov-report=xml
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: coverage-${{ matrix.os }}-py${{ matrix.python }}
+          path: coverage.xml
+          retention-days: 7
+
+  build:
+    name: build artifacts
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - run: uv build
+      # Install the wheel into a clean environment without the extra, and prove the CLI runs on the stdlib alone.
+      - run: |
+          uv venv --python 3.11 /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          /tmp/clean/bin/readthrough --version
+          /tmp/clean/bin/python -c "from readthrough import assistants; print(assistants.resolve())"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error

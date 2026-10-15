@@ -1,0 +1,14 @@
+# Normalise line endings in the repository to LF; working copies follow core.autocrlf.
+* text=auto
+
+# Files that must keep LF even on Windows: shell hooks, and web assets inlined into one served page.
+.githooks/* text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+
+# Binary
+*.png binary
+*.gz binary

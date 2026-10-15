@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__NONCE__'; style-src 'unsafe-inline'; img-src data: https:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Readthrough</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" id="favicon" href="data:,">
+<style>
+/*__READTHROUGH_CSS__*/
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow top">
+    <h1><span id="logo"></span><span id="title">Readthrough</span> <small id="meta"></small></h1>
+    <div class="hactions"><span id="repos"></span><span id="refresh"></span><button class="btn icon" id="theme"></button></div>
+  </div>
+  <div class="hrow">
+    <nav class="tabs" id="tabs" aria-label="Views"></nav>
+    <input type="search" id="q" placeholder="Filter: text, @author, #123, comp:scorer, is:external, ci:failing">
+  </div>
+  <div class="hrow" id="filterrow">
+    <div class="filters" id="lanes" role="group" aria-label="Lanes"></div>
+    <span class="sep"></span>
+    <div class="filters" id="authors" role="group" aria-label="Authors"></div>
+    <span class="sep"></span>
+    <div class="filters" id="cis" role="group" aria-label="CI"></div>
+    <span id="filtered"></span>
+    <span class="spacer"></span>
+    <div class="progress"><span id="progtext"></span><div class="bar" id="progbar"></div></div>
+  </div>
+</header>
+<main>
+  <div id="banners"></div>
+  <section class="view" id="v-map"></section>
+  <section class="view" id="v-plan"></section>
+  <section class="view" id="v-overlap"></section>
+  <section class="view" id="v-table"></section>
+</main>
+<aside id="drawer"><div id="grip" title="Drag to resize. Double-click to reset."></div><div id="dinner" style="display:contents"></div></aside>
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+<script nonce="__NONCE__">/*__READTHROUGH_VENDOR__*/</script>
+<script nonce="__NONCE__">
+/*__READTHROUGH_APP__*/
+</script>
+</body>
+</html>
