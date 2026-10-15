@@ -43,6 +43,7 @@ query MergedPullRequests($owner:String!,$name:String!,$count:Int!){
 """
 
 TEST_DIRS = {"tests", "test", "spec", "specs", "__tests__", "testing", "e2e", "integration_tests", "unit_tests"}
+GENERIC_DIRS = {"src", "lib", "app", "core", "pkg", "internal", "common", "main"}  # mean nothing without their parent
 DOC_DIRS = {"doc", "docs", "documentation", "website", "site", "examples", "example", "samples"}
 INFRA_DIRS = {
     ".github",
@@ -173,14 +174,22 @@ def _label(path: str) -> str:
     return name[:1].upper() + name[1:]
 
 
-def _source_roots(tree: list[str]) -> list[str]:
-    """Top-level directories holding most of the code, excluding tests, docs, and infra."""
+def _source_roots(tree: list[str], churn: Counter[str] | None = None) -> list[str]:
+    """Top-level directories holding the code, excluding tests, docs, and infra.
+
+    Ordered by where recent PRs changed lines, then by file count. Churn first, because a new directory with
+    few files and a lot of change (a port in progress, say) matters more to a reviewer than an old one with
+    many files and none; ranking by size alone dropped exactly such a directory on a large repo.
+    """
     counts: Counter[str] = Counter(p.split("/", 1)[0] for p in tree if "/" in p)
-    roots = [
-        d
-        for d, n in counts.most_common()
-        if d.lower() not in TEST_DIRS | DOC_DIRS | INFRA_DIRS and not d.startswith(".")
-    ]
+    churn_by_root: Counter[str] = Counter()
+    for path, lines in (churn or {}).items():
+        if "/" in path:
+            churn_by_root[path.split("/", 1)[0]] += lines
+    roots = sorted(
+        (d for d in counts if d.lower() not in TEST_DIRS | DOC_DIRS | INFRA_DIRS and not d.startswith(".")),
+        key=lambda d: (-churn_by_root[d], -counts[d], d),
+    )
     # "src/<pkg>" layouts: look one level deeper.
     expanded = []
     for root in roots:
@@ -203,7 +212,7 @@ def draft_components(facts: RepoFacts, *, max_components: int = 16) -> list[dict
             if len(parts) > depth:
                 churn_by_dir["/".join(parts[:depth])] += lines
     components: list[dict[str, Any]] = []
-    roots = _source_roots(facts.tree)
+    roots = _source_roots(facts.tree, live_churn(facts))
     for root in roots[:6]:
         subdirs = sorted(
             {
@@ -215,10 +224,18 @@ def draft_components(facts: RepoFacts, *, max_components: int = 16) -> list[dict
         busy = [d for d in subdirs if churn_by_dir[f"{root}/{d}"] > 0 and d.lower() not in TEST_DIRS]
         busy.sort(key=lambda d: -churn_by_dir[f"{root}/{d}"])
         layer = _slug(root.split("/")[-1])
-        components.extend(
-            {"id": _slug(d), "label": _label(d), "layer": layer, "paths": [f"{root}/{d}/**"]}
-            for d in busy[: max(2, max_components // max(1, len(roots)))]
-        )
+        root_name = root.split("/")[-1]
+        for d in busy[: max(2, max_components // max(1, len(roots)))]:
+            # "src", "lib", or "core" says nothing on its own; name it after the directory it's in.
+            generic = d.lower() in GENERIC_DIRS
+            components.append(
+                {
+                    "id": _slug(f"{root_name}-{d}") if generic else _slug(d),
+                    "label": f"{_label(root_name)} {d}" if generic else _label(d),
+                    "layer": layer,
+                    "paths": [f"{root}/{d}/**"],
+                }
+            )
         components.append(
             {
                 "id": _slug(root.split("/")[-1]) if busy else _slug(root),

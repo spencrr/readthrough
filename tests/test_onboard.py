@@ -103,6 +103,14 @@ def test_source_roots_expand_src_layouts():
     assert onboard._source_roots(tree) == ["src/other", "src/pkg", "lib"]
 
 
+def test_source_roots_rank_recent_churn_above_file_count():
+    """A small new directory that recent PRs pour into must outrank a big quiet one (seen on microsoft/vscode)."""
+    tree = [f"big/{i}.ts" for i in range(50)] + ["shim/lib.rs", "shim/main.rs", "tests/t.py"]
+    assert onboard._source_roots(tree) == ["big", "shim"]
+    churn = Counter({"shim/lib.rs": 9000, "shim/main.rs": 400, "big/1.ts": 30})
+    assert onboard._source_roots(tree, churn) == ["shim", "big"]
+
+
 def test_drift_only_when_open_prs_leave_the_map():
     fits = [{"by_comp": {"a": 90, "other": 10}, "files": [{"path": "z/q.py", "comp": "other", "add": 10, "del": 0}]}]
     assert onboard.drift(fits) is None
