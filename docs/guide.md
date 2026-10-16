@@ -137,7 +137,7 @@ The first half checks the machine: `gh` and which accounts are signed in, the re
 
 The theme button in the corner (sun, moon, or both) cycles through auto (follows your OS), light, and dark. The panel that opens when you click a PR can be resized by dragging its left edge; double-click the edge to reset it. Both settings stick. The browser tab's icon shows how many PRs are waiting on you (your review requested, or a re-review), so you can see it from another tab.
 
-![Architecture map](img/map.png)
+![Architecture map](img/map.webp)
 
 Every PR lands in one lane, shown as the colored pills at the top. Clicking a pill shows only that lane; click it again to show everything. Ctrl-click (⌘-click on a Mac) adds or removes one lane, so you can build "Ready and Approved". The author and CI pills work the same way, independently. While anything is filtered, a blue "Only … · show all" chip says what, and clears it. Filters and the search are part of the page's URL, so a view like "only my PRs" can be bookmarked.
 
@@ -184,13 +184,13 @@ The bar along the bottom of each component shows how much is changing there. Its
 
 The **Burn-down plan** is the to-do list.
 
-![Burn-down plan](img/plan.png)
+![Burn-down plan](img/plan.webp)
 
 Ready PRs are packed into sessions of about an hour, and each session stays inside one component, so you build context instead of switching it. Your requested reviews and re-reviews come first, then small quick wins, then the oldest. The chart on the left plots size against age. Small, old PRs in the bottom right are the cheapest to clear.
 
 The **Overlap graph** connects PRs that edit the same files, with each PR boxed inside its main component. Clusters are worth reviewing together, and they're also where the merge-order fights will happen. Drag nodes around, scroll to zoom, and hover a node to fade everything it isn't connected to. Hovering an edge lists the shared files. By default it ignores the paths the profile calls non-source (tests, docs, lockfiles), which otherwise connect everything to everything, and hides PRs that share nothing. Underneath is a list of hot files. When seven open PRs touch the same module, whichever lands first makes the other six rebase.
 
-![Overlap graph](img/overlap.png)
+![Overlap graph](img/overlap.webp)
 
 **All PRs** is a sortable table. The search box understands `@author`, `#1234`, `comp:<component id>`, `flag:<signal id>`, `is:external`, and `ci:failing`, and you can combine them.
 
@@ -226,7 +226,7 @@ This is the part that's meant to slow you down a little.
 
 Press **Start deep review** on a PR (or run `readthrough review 2897`). A new terminal opens with an agent session in your clone, already working on that PR. Which agent is up to you: by default the Copilot CLI if it's installed, else Claude Code, and `agent = "claude"` in `config.toml` picks one, with its options under `[agents.claude]`. Which terminal is up to you too: by default it's the first one found for your platform (Windows Terminal, then a plain console; Terminal.app; `x-terminal-emulator`, then GNOME Terminal), and `terminal = "wt"` in `config.toml` names one, with its options under `[terminals.wt]` (see [Configuration](#configuration)). `readthrough review 2897 --here` runs the session in the terminal you're already in.
 
-![A PR's detail panel with the review buttons](img/review.png)
+![A PR's detail panel with the review buttons](img/review.webp)
 
 The session follows a fixed routine:
 
@@ -253,7 +253,7 @@ The deep review is a long, guided conversation in a terminal. The **Study** tab 
 
 Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. With the `[study]` install, it's **Copilot**: it reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. Without it, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when Copilot is installed. The rest of this section describes the Copilot assistant; the stages, the log, and the brief are the same for both.
 
-![The study tab after a quiz question was answered and assessed](img/study.png)
+![The study tab after a quiz question was answered and assessed](img/study.webp)
 
 It's one conversation with a single box underneath, and a small indicator at the top shows how far you've got: Predict, Quiz, Teach back. What the box does follows where you are:
 

@@ -37,6 +37,8 @@
   that wasn't *correct*; before, reflections could be written only through the API and appeared only in the
   brief. The transcript opens at its end, where the latest exchange and the composer are, and follows new
   entries while you're there.
+- `scripts/screenshots.py` takes the documentation screenshots from a repo you've built, through the live
+  server and a headless browser, as WebP. The ones in `docs/` are of microsoft/vscode.
 
 ### Changed
 
@@ -53,9 +55,14 @@
 - The onboarding drafter ranks source roots by recent churn rather than file count, and names a generic
   directory (`src`, `lib`, `core`) after its parent. Onboarding microsoft/vscode went from 76% coverage, refused,
   to 100%.
+- On GitHub the whole tree is read in one call, so `max_tree_files` no longer applies there and a repo the size
+  of vscode is judged against all of its files.
+- A profile found in the repo's data directory, or named by `profile = ...`, is labelled with a `~`-relative path
+  on the map and in `doctor`, not an absolute one.
 - A PR's worktree whose clone or data directory has moved since it was made (its `.git` file points at a gitdir
   that is gone) is set aside as `pr-<n>.detached-<time>` and made afresh, instead of every deep review and
   study turn failing with "not a git repository".
+- The documentation images are WebP at 1.5× instead of PNG, a third of the size, and the logo is an SVG.
 
 ### Removed
 

@@ -18,6 +18,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from readthrough.config import portable_path
 from readthrough.model import ChangedFile
 from readthrough.registry import Registry
 from readthrough.rules import glob_to_regex
@@ -290,7 +291,8 @@ def _explicit(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
     path = Path(cfg.profile).expanduser()
     if not path.is_file():
         raise ProfileError(f"The profile configured for {cfg.repo}, {path}, doesn't exist")
-    return ProfileSource("explicit", str(path), lambda: load_profile(path), path)
+    label = portable_path(path)
+    return ProfileSource("explicit", label, lambda: load_profile(path, origin=label), path)
 
 
 @PROFILE_SOURCES.add("local", "your draft from onboarding, in the repo's data directory")
@@ -298,7 +300,8 @@ def _local(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
     local = cfg.local_profile_path
     if not local.exists():
         return None
-    return ProfileSource("local", str(local), lambda: load_profile(local), local)
+    label = portable_path(local)
+    return ProfileSource("local", label, lambda: load_profile(local, origin=label), local)
 
 
 @PROFILE_SOURCES.add(

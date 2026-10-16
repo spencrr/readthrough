@@ -37,8 +37,8 @@ pr_page_size = 20
 max_files_per_pr = 3000
 max_checks_per_pr = 500
 max_review_threads_per_pr = 300
-# The most files onboarding lists from a repo's tree through the API. Forges that page trees 100 files at a
-# time (GitLab, Forgejo) would otherwise take minutes on a big repo; onboarding with a local clone has no limit.
+# The most files onboarding lists from a repo's tree through an API that pages it (GitLab, Forgejo), which would
+# otherwise take minutes on a big repo. GitHub sends the whole tree in one call, and a local clone has no limit.
 max_tree_files = 20000
 # Days to keep cached diffs of PRs that are no longer in the fetched list (closed, merged, or past `limit`).
 diff_cache_days = 14

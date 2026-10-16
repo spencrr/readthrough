@@ -168,7 +168,10 @@ def test_profile_actions(isolated, capsys):
     assert dashboard(isolated, "profile", "sources") == 0
     assert capsys.readouterr().out.startswith("-> local")
     assert dashboard(isolated, "profile", "path") == 0
-    assert capsys.readouterr().out.strip() == str(isolated.profile)
+    shown = capsys.readouterr().out.strip()
+    assert Path(shown).expanduser().resolve() == isolated.profile.resolve(), (
+        "the path, written ~-relative when it can be"
+    )
     assert dashboard(isolated, "profile", "export") == 0
     assert f"Architecture profile for {REPO}" in capsys.readouterr().out
     assert dashboard(isolated, "--repo", "o/waiting", "profile") == 1

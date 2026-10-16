@@ -14,6 +14,7 @@ uv run pytest tests/test_engine.py -q    # one file; -k NAME for one test; -m e2
 uv run readthrough --help                # the CLI from the checkout
 uv build                                 # sdist and wheel into dist/
 git config core.hooksPath .githooks      # once per clone: run --quick before every commit
+uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw docs/img/*.webp from a built repo
 ```
 
 CI runs the same gate on Linux, macOS, and Windows for every supported Python. Nothing passes locally that

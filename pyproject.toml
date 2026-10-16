@@ -53,6 +53,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.6",
     "ty==0.0.87",
+    "pillow>=10",
 ]
 
 [tool.uv.sources]

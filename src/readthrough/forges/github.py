@@ -236,11 +236,9 @@ class GitHub(Forge):
         return {"rest": res["core"]["remaining"], "graphql": res["graphql"]["remaining"]}
 
     def tree(self, branch: str) -> tuple[list[str], bool]:
+        # One call for the whole tree, so max_tree_files doesn't apply; GitHub itself truncates past ~100,000 entries.
         data = json.loads(self.api(f"repos/{self.repo}/git/trees/{branch}?recursive=1"))
-        paths = [e["path"] for e in data.get("tree", []) if e.get("type") == "blob"]
-        return paths[: self.tuning.max_tree_files], not data.get("truncated") and len(
-            paths
-        ) <= self.tuning.max_tree_files
+        return [e["path"] for e in data.get("tree", []) if e.get("type") == "blob"], not data.get("truncated")
 
     def read_file(self, path: str) -> str | None:
         try:

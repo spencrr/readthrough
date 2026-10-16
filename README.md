@@ -1,4 +1,4 @@
-# readthrough
+# <img src="docs/img/logo.svg" alt="" width="36" height="36" align="top"> readthrough
 
 Busy repos have fifty-plus open pull requests. I wanted two things from a queue like that: a picture of where the work is landing in the architecture, and a way to review PRs that leaves me actually understanding them, instead of skimming a diff and clicking approve.
 
@@ -6,7 +6,7 @@ readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure
 
 From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. With the Copilot SDK installed the assistant reads the code and grades your answers; without it, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
-![Architecture map](docs/img/map.png)
+![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](docs/img/map.webp)
 
 ## A repo has to be onboarded first
 
@@ -27,7 +27,7 @@ Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/f
 
 That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with Copilot drafting the profile if you like. `readthrough install skill` teaches Copilot the deep-review routine, and `readthrough doctor` tells you what's missing.
 
-![Studying a PR](docs/img/study.png)
+![Studying a vscode PR: the prediction, a question Copilot asked, the answer, and its verdict with evidence](docs/img/study.webp)
 
 ## Docs
 

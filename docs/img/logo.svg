@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="96" height="96" role="img" aria-label="readthrough">
+  <!-- The dashboard's logo (assets/web/dashboard.js), with its colours written in so it stands alone. -->
+  <rect x="5.5" y="3.5" width="21" height="25" rx="3" fill="none" stroke="#57606a" stroke-opacity=".6"/>
+  <rect x="7.5" y="7.25" width="17" height="5.5" rx="2.75" fill="#0969da" fill-opacity=".18"/>
+  <g stroke="#57606a" stroke-width="2" stroke-linecap="round" stroke-opacity=".7">
+    <line x1="10" y1="10" x2="21" y2="10"/><line x1="10" y1="14.5" x2="18" y2="14.5"/>
+    <line x1="10" y1="19" x2="21" y2="19"/><line x1="10" y1="23.5" x2="16" y2="23.5"/>
+  </g>
+  <circle cx="22.5" cy="14.5" r="1.8" fill="#1a7f37"/><circle cx="20.5" cy="23.5" r="1.8" fill="#d1242f"/>
+</svg>
