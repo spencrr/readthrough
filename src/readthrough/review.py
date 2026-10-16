@@ -12,6 +12,7 @@ first message carries one back to its PR.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import re
@@ -25,6 +26,7 @@ from urllib.parse import quote, urlsplit
 from readthrough import agents, forges
 from readthrough.agents import Agent, SessionInfo
 from readthrough.config import Config
+from readthrough.faults import ForgeError
 from readthrough.process import run
 from readthrough.tuning import default_tuning
 
@@ -324,6 +326,13 @@ def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Pa
     clone, ref, remote = str(cfg.clone), f"refs/remotes/readthrough/pr-{number}", repo_remote(cfg)
     run(["git", "-C", clone, "fetch", "--quiet", remote, f"+{forges.make(cfg).pr_ref(number)}:{ref}", base])
     path = worktree_path(cfg, number)
+    if (path / ".git").exists() and not _worktree_attached(clone, path):
+        # The clone or the data directory moved since this was made, so its `.git` file points nowhere.
+        aside = path.with_name(f"{path.name}.detached-{dt.datetime.now(dt.UTC):%Y%m%dT%H%M%S}")
+        path.rename(aside)
+        log.warning(
+            "The worktree for #%d no longer belonged to %s; moved it to %s and made a fresh one", number, clone, aside
+        )
     if (path / ".git").exists():
         run(["git", "-C", str(path), "checkout", "--quiet", "--detach", ref])
     else:
@@ -332,6 +341,16 @@ def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Pa
     head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
     merge_base = run(["git", "-C", clone, "merge-base", ref, f"{remote}/{base}"]).strip()
     return path, merge_base, head
+
+
+def _worktree_attached(clone: str, path: Path) -> bool:
+    """Whether git still knows ``path`` as a worktree of ``clone``, repairing the link if moving broke it."""
+    run(["git", "-C", clone, "worktree", "repair", str(path)], check=False)
+    try:
+        common = run(["git", "-C", str(path), "rev-parse", "--git-common-dir"]).strip()
+    except ForgeError:
+        return False
+    return Path(path, common).resolve() == Path(clone, ".git").resolve()
 
 
 def remove_worktree(cfg: Config, number: int) -> bool:

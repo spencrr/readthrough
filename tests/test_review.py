@@ -201,3 +201,43 @@ def test_review_prompt_starts_with_the_marker(tmp_path: Path):
     assert match is not None and match.groups() == ("github/o/r", "7")
     ado = review.MARKER_RE.search(review.pr_marker("ado/org/proj/repo", 12))
     assert ado is not None and ado.groups() == ("ado/org/proj/repo", "12")
+
+
+def test_ensure_worktree_replaces_one_whose_clone_moved(tmp_path: Path, monkeypatch, fake_forge):
+    """A worktree made before the clone or the data directory moved points at a gitdir that is gone. It is
+    moved aside, never deleted, and a fresh one is added; a healthy one is just checked out."""
+    clone = tmp_path / "clone"
+    cfg = _cfg(tmp_path, clone=clone)
+    path = review.worktree_path(cfg, 7)
+    path.mkdir(parents=True)
+    (path / ".git").write_text("gitdir: /old/place/.git/worktrees/pr-7", encoding="utf-8")
+    (path / "notes.txt").write_text("edits in the stale checkout", encoding="utf-8")
+    calls: list[list[str]] = []
+    attached = {"ok": False}
+
+    def fake_run(cmd: list[str], *, check: bool = True, **_kw) -> str:
+        calls.append(cmd)
+        if cmd[3:5] == ["worktree", "repair"]:
+            return ""
+        if cmd[3:] == ["rev-parse", "--git-common-dir"]:
+            if not attached["ok"]:
+                raise review.ForgeError("fatal: not a git repository", what="git")
+            return str(clone / ".git")
+        if cmd[3:5] == ["worktree", "add"]:
+            attached["ok"] = True
+            Path(cmd[-2]).mkdir()
+            (Path(cmd[-2]) / ".git").write_text("gitdir: new", encoding="utf-8")
+        return "deadbeef\n"
+
+    monkeypatch.setattr(review, "run", fake_run)
+    where, merge_base, head = review.ensure_worktree(cfg, 7)
+
+    assert (where, merge_base, head) == (path, "deadbeef", "deadbeef")
+    assert [c[3] for c in calls] == ["fetch", "worktree", "rev-parse", "worktree", "rev-parse", "merge-base"]
+    assert calls[1][4] == "repair" and calls[3][4] == "add"
+    aside = [p for p in path.parent.iterdir() if p.name.startswith("pr-7.detached-")]
+    assert len(aside) == 1 and (aside[0] / "notes.txt").exists(), "what was in it is kept, not deleted"
+
+    calls.clear()
+    review.ensure_worktree(cfg, 7)
+    assert [c[3] for c in calls] == ["fetch", "worktree", "rev-parse", "checkout", "rev-parse", "merge-base"]

@@ -53,6 +53,9 @@
 - The onboarding drafter ranks source roots by recent churn rather than file count, and names a generic
   directory (`src`, `lib`, `core`) after its parent. Onboarding microsoft/vscode went from 76% coverage, refused,
   to 100%.
+- A PR's worktree whose clone or data directory has moved since it was made (its `.git` file points at a gitdir
+  that is gone) is set aside as `pr-<n>.detached-<time>` and made afresh, instead of every deep review and
+  study turn failing with "not a git repository".
 
 ### Removed
 
