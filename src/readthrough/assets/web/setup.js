@@ -177,7 +177,7 @@ function renderSettings(repo){
   ${editorCard(e, "e", {editable: e.editable})}
   <div class="card"><h2>${icon("info")}Set from the command line only</h2>
     <p class="sub">These change what the server launches or reads, so the browser can't edit them.</p>
-    <dl class="ro"><dt>copilot_args</dt><dd><code>${esc(JSON.stringify(repo.copilot_args))}</code></dd>
+    <dl class="ro"><dt>agent_args</dt><dd><code>${esc(JSON.stringify(repo.agent_args))}</code></dd>
       <dt>profile override</dt><dd>${repo.profile_override ? `<code>${esc(repo.profile_override)}</code>` : '<span class="sub">none</span>'}</dd></dl>
     <div class="cli">Edit them with <code>readthrough config --edit</code>.</div></div>
   <div class="card"><h2 style="color:var(--bad)">${icon("x")}Stop tracking</h2>

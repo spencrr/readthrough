@@ -23,6 +23,13 @@
 - `[tuning.forge] max_tree_files` caps how much of a repo's tree onboarding lists through an API that pages a
   hundred files at a time. A partial tree is reported as partial, and path patterns aren't judged against it.
 - `scripts/probe_forge.py` exercises an adapter against a real repo and can record its responses for the tests.
+- Deep reviews can run in Claude Code as well as the Copilot CLI. `agent = "auto" | "copilot" | "claude"` in
+  `config.toml` chooses (`auto` takes the first one installed), with per-agent options under `[agents.<name>]`
+  and per-repo flags in `agent_args` (which replaces `copilot_args`). Sessions started in either agent are
+  linked to their PR by the marker in their first message and resumed in the agent that owns them; the PR
+  panel says which agent each one ran in. `readthrough install skill` installs the skill for every agent
+  found (`--agent` for one). Claude Code leaves no trace of an open session, so for its sessions the panel
+  shows when they were last written rather than claiming they're closed.
 
 ### Changed
 

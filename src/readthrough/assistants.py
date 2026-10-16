@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from readthrough import review, study
+from readthrough.agents import Copilot
 from readthrough.config import AUTO, Config
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
@@ -463,7 +464,7 @@ class CopilotAssistant:
         }
         if self.cfg.study_model:
             options["model"] = self.cfg.study_model
-        exists = bool(review.session_info(session_id)["exists"])
+        exists = Copilot().session_info(session_id).exists  # the SDK shares the Copilot CLI's session store
         session, session_id, created = await open_study_session(self._client, session_id, options, resume=exists)
         self._pr_by_session[session_id] = number
         self._sessions[number] = session

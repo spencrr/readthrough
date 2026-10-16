@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from readthrough import review
+from readthrough import agents, review
 from readthrough import serve as serve_mod
 from readthrough.config import Config, Settings
 from readthrough.limits import MAX_REQUEST_BYTES
@@ -96,7 +96,7 @@ def test_ledger_round_trip_broadcasts(live):
 def test_external_changes_are_picked_up(live):
     dashboard, _ = live
     events = dashboard.subscribe()
-    folder = review.copilot_home() / "session-state" / review.default_session_id(dashboard.cfg, 7)
+    folder = agents.copilot_home() / "session-state" / review.default_session_id(dashboard.cfg, 7)
     folder.mkdir(parents=True)
     (folder / f"inuse.{os.getpid()}.lock").write_text("x")
     dashboard._watch_once()
@@ -168,8 +168,8 @@ def test_stale_lock_is_not_active(tmp_path: Path, monkeypatch):
     folder = tmp_path / "session-state" / "abc"
     folder.mkdir(parents=True)
     (folder / "inuse.999999.lock").write_text("x")
-    info = review.session_info("abc")
-    assert info["exists"] and not info["active"]
+    info = agents.Copilot().session_info("abc")
+    assert info.exists and info.active is False
 
 
 def test_routes_are_per_repo(live):
@@ -270,12 +270,12 @@ def test_http_errors_refresh_and_review_endpoint(live, monkeypatch):
     assert _request(port, R + "/api/refresh", method="POST", body=huge, headers=token)[0] == 413
 
     launched = []
-    plan = SimpleNamespace(session_id="11111111-1111-1111-1111-111111111111", resuming=True)
+    plan = SimpleNamespace(session_id="11111111-1111-1111-1111-111111111111", resuming=True, agent="copilot")
     monkeypatch.setattr(serve_mod.review, "plan_review", lambda *args, **kwargs: plan)
     monkeypatch.setattr(serve_mod.review, "launch_in_terminal", lambda launch, cfg: launched.append(launch) or "wt")
     assert _request(port, R + "/api/review/7", method="POST", body={"session": "bad"}, headers=token)[0] == 400
     status, body = _request(port, R + "/api/review/7", method="POST", body={"session": plan.session_id}, headers=token)
-    assert status == 200 and json.loads(body) == {"session": plan.session_id, "resuming": True}
+    assert status == 200 and json.loads(body) == {"session": plan.session_id, "resuming": True, "agent": "copilot"}
     assert launched == [plan]
 
 

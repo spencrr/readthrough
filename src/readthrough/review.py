@@ -1,22 +1,20 @@
-"""Deep-review sessions: one persistent GitHub Copilot CLI session per PR, plus an isolated git worktree.
+"""Deep-review sessions: one persistent agent session per PR (Copilot CLI or Claude Code), plus an isolated
+git worktree.
 
 The session ID is derived from the PR URL, so the same button starts the session the first time and
 resumes it afterwards. ``review --fresh`` starts over with a random ID and remembers it in the ledger.
 
 Sessions started anywhere else (VS Code's agent window, a pasted prompt) get IDs readthrough didn't choose.
 Every prompt readthrough writes starts with a marker like ``[readthrough:github/owner/name#123]`` (the repo's
-slug: its forge, then its path there), and ``SessionIndex`` links any session whose first message carries
-one back to its PR.
+slug: its forge, then its path there), and ``SessionIndex`` links any session of any installed agent whose
+first message carries one back to its PR.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import shutil
-import sys
 import threading
 import time
 import uuid
@@ -24,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from readthrough import forges
+from readthrough import agents, forges
+from readthrough.agents import Agent, SessionInfo
 from readthrough.config import Config
 from readthrough.process import run
 from readthrough.tuning import default_tuning
@@ -34,11 +33,6 @@ log = logging.getLogger(__name__)
 URL_SCHEME = "readthrough"
 URL_ACTIONS = ("review", "refresh", "open")
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-
-
-def copilot_home() -> Path:
-    return Path(os.environ.get("COPILOT_HOME", Path.home() / ".copilot"))
-
 
 MARKER_RE = re.compile(r"\[readthrough:([\w.-]+(?:/[\w.-]+)+)#(\d{1,7})\]")
 
@@ -53,49 +47,21 @@ def _same_repo(found: str, slug: str) -> bool:
     return found == slug or (slug.startswith(f"{forges.DEFAULT}/") and found == slug.split("/", 1)[1])
 
 
-def _first_user_message(folder: Path, max_bytes: int | None = None) -> str | None:
-    """The first user message of a session, or None if it hasn't been written yet."""
-    events = folder / "events.jsonl"
-    if not events.exists():
-        return None
-    read = 0
-    with events.open("rb") as handle:
-        for raw in handle:
-            read += len(raw)
-            if read > (max_bytes or default_tuning().sessions.first_message_bytes):
-                return ""
-            if b'"user.message"' not in raw:
-                continue
-            try:
-                event = json.loads(raw)
-            except ValueError:
-                return None  # still being written
-            if event.get("type") == "user.message":
-                return str((event.get("data") or {}).get("content") or "")
-    return None
-
-
-def _workspace_fields(folder: Path) -> dict[str, str]:
-    path = folder / "workspace.yaml"
-    if not path.exists():
-        return {}
-    fields = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        key, sep, value = line.partition(":")
-        if sep and key in ("name", "client_name"):
-            fields[key] = value.strip()
-    return fields
+def _agents(cfg: Config) -> list[Agent]:
+    """Every agent this machine has, so sessions started in any of them are found."""
+    return [a for a in agents.all_agents(cfg.agent_options) if a.available()]
 
 
 class SessionIndex:
-    """Which Copilot sessions belong to which PR, found by the marker in their first message.
+    """Which agent sessions belong to which PR, found by the marker in their first message.
 
     The answer for a session never changes, so it's cached in ``session-index.json``; each scan only
     reads sessions it hasn't seen. Sessions without a first message yet are checked again later.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, available: list[Agent]) -> None:
         self.path = path
+        self.agents = available
         self._lock = threading.Lock()
         self._last = 0.0
         try:
@@ -108,29 +74,27 @@ class SessionIndex:
             if not force and time.monotonic() - self._last < default_tuning().sessions.scan_seconds:
                 return False
             self._last = time.monotonic()
-            root = copilot_home() / "session-state"
-            try:
-                ids = {e.name for e in os.scandir(root) if e.is_dir()}
-            except FileNotFoundError:
-                ids = set()
+            records = {r.id: (agent, r) for agent in self.agents for r in agent.sessions()}
             changed = False
-            for gone in set(self._known) - ids:
+            for gone in set(self._known) - set(records):
                 del self._known[gone]
                 changed = True
-            for sid in ids - set(self._known):
-                first = _first_user_message(root / sid)
+            for sid in set(records) - set(self._known):
+                agent, record = records[sid]
+                first = agent.first_user_message(record)
                 if first is None:
                     # Still starting up? Look again later. Long-idle sessions that never got a message are settled.
-                    if time.time() - (root / sid).stat().st_mtime < 3600:
+                    if time.time() - record.updated < 3600:
                         continue
                     first = ""
                 match = MARKER_RE.search(first[:2000])
-                fields = _workspace_fields(root / sid)
+                meta = agent.session_meta(record)
                 self._known[sid] = (
                     {
                         "pr": f"{match.group(1).lower()}#{match.group(2)}",
-                        "client": fields.get("client_name", ""),
-                        "name": fields.get("name", ""),
+                        "agent": agent.name,
+                        "client": meta.get("client", ""),
+                        "name": meta.get("name", ""),
                     }
                     if match
                     else None
@@ -153,32 +117,56 @@ class SessionIndex:
                         out[sid] = meta
             return out
 
+    def agent_of(self, session_id: str) -> str | None:
+        with self._lock:
+            meta = self._known.get(session_id)
+            return meta.get("agent") if meta else None
+
 
 _indexes: dict[Path, SessionIndex] = {}
 _indexes_lock = threading.Lock()
 
 
-def session_index(home: Path) -> SessionIndex:
+def session_index(cfg: Config) -> SessionIndex:
     with _indexes_lock:
-        if home not in _indexes:
-            _indexes[home] = SessionIndex(home / "session-index.json")
-        return _indexes[home]
+        if cfg.home not in _indexes:
+            _indexes[cfg.home] = SessionIndex(cfg.home / "session-index.json", _agents(cfg))
+        return _indexes[cfg.home]
+
+
+def agent_for(cfg: Config, session_id: str | None = None) -> Agent:
+    """The agent a session belongs to (by the index, else by asking each), or the configured one for a new session."""
+    configured = agents.resolve(cfg.agent, cfg.agent_options)
+    if session_id is None:
+        return configured
+    name = session_index(cfg).agent_of(session_id)
+    if name:
+        return agents.make(name, cfg.agent_options)
+    for agent in _agents(cfg):
+        if agent.name != configured.name and agent.session_info(session_id).exists:
+            return agent
+    return configured
 
 
 def pr_sessions(cfg: Config, number: int, primary: str) -> list[dict[str, object]]:
-    """Every Copilot session for this PR, the default one first, then the most recently used."""
-    found = session_index(cfg.home).sessions_for(cfg.slug, number)
+    """Every agent session for this PR, the default one first, then the most recently used."""
+    found = session_index(cfg).sessions_for(cfg.slug, number)
     out = []
     for sid in dict.fromkeys([primary, *found]):
-        info = session_info(sid)
-        if info["exists"]:
-            meta = found.get(sid) or _workspace_fields(copilot_home() / "session-state" / sid)
-            meta = {"client": meta.get("client") or meta.get("client_name", ""), "name": meta.get("name", "")}
-            client = meta["client"]
-            terminal = sid == primary or any(k in client for k in ("cli", "autopilot"))
-            info["where"] = "VS Code" if "vscode" in client else "terminal" if terminal else client or "other"
-            info["name"] = meta.get("name", "")
-            out.append(info)
+        agent = agent_for(cfg, sid)
+        info = agent.session_info(sid)
+        if info.exists:
+            meta = found.get(sid) or {}
+            client = meta.get("client", "")
+            terminal = sid == primary or any(k in client for k in ("cli", "autopilot", "claude"))
+            out.append({
+                **info.payload(),
+                "where": "VS Code" if "vscode" in client else "terminal" if terminal else client or "other",
+                "name": meta.get("name", ""),
+                "agent": agent.name,
+                "agent_label": agent.label,
+                "editor_url": agent.editor_url(sid),
+            })  # fmt: skip
 
     def newest_first(info: dict[str, object]) -> float:
         updated = info.get("updated", 0)
@@ -196,37 +184,10 @@ def session_id_for(cfg: Config, number: int, ledger_entry: dict | None) -> str:
     return (ledger_entry or {}).get("session") or default_session_id(cfg, number)
 
 
-def session_info(session_id: str) -> dict[str, object]:
-    folder = copilot_home() / "session-state" / session_id
-    if not folder.is_dir():
-        return {"id": session_id, "exists": False, "active": False}
-    events = folder / "events.jsonl"
-    stamp = (events if events.exists() else folder).stat().st_mtime
-    pids = (re.fullmatch(r"inuse\.(\d+)\.lock", p.name) for p in folder.glob("inuse.*.lock"))
-    active = any(_pid_alive(int(m.group(1))) for m in pids if m)
-    return {"id": session_id, "exists": True, "updated": round(stamp), "active": active}
-
-
-def _pid_alive(pid: int) -> bool:
-    """Copilot leaves ``inuse.<pid>.lock`` behind while a session is open; check that process still runs."""
-    if sys.platform == "win32":
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        code = ctypes.c_ulong()
-        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel32.CloseHandle(handle)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+def session_info(cfg: Config, session_id: str) -> dict[str, object]:
+    """Whether the session exists, when it was last written, and whether it's open now (when the agent can say)."""
+    info: SessionInfo = agent_for(cfg, session_id).session_info(session_id)
+    return info.payload()
 
 
 def review_prompt(cfg: Config, number: int, brief: Path) -> str:
@@ -243,17 +204,17 @@ class ReviewLaunch:
     session_id: str
     resuming: bool
     title: str
+    agent: str = "copilot"
 
 
 def plan_review(
     cfg: Config, number: int, *, ledger_entry: dict | None, fresh: bool = False, session_id: str | None = None
 ) -> ReviewLaunch:
-    """Start or resume this PR's session. ``session_id`` resumes a specific session already linked to the PR."""
-    copilot = shutil.which("copilot")
-    if not copilot:
-        raise RuntimeError(
-            "GitHub Copilot CLI (`copilot`) is not on PATH. Install it with `winget install GitHub.Copilot`."
-        )
+    """Start or resume this PR's session. ``session_id`` resumes a specific session already linked to the PR.
+
+    A new session runs in the configured agent; an existing one is resumed in the agent that owns it, so a
+    Claude Code session linked by its marker resumes in Claude Code even when Copilot is the default.
+    """
     if cfg.clone is None:
         raise RuntimeError(
             f"No local clone of {cfg.repo} configured. Set it with `readthrough onboard {cfg.repo} --clone PATH`."
@@ -264,21 +225,21 @@ def plan_review(
             raise ValueError(f"Session {session_id} isn't linked to #{number}")
     else:
         session_id = str(uuid.uuid4()) if fresh else session_id_for(cfg, number, ledger_entry)
-    resuming = bool(session_info(session_id)["exists"])
-    common = ["--add-dir", str(cfg.repo_dir), *cfg.copilot_args]
+    agent = agent_for(cfg, session_id)
+    if not agent.available():
+        raise RuntimeError(f"{agent.label} (`{agent.program}`) is not on PATH. Install it with `{agent.install_hint}`.")
+    resuming = agent.session_info(session_id).exists
     short = cfg.repo.rsplit("/", 1)[-1]
     if resuming:
-        argv = [copilot, f"--resume={session_id}", *common]
+        argv = agent.resume_argv(session_id, add_dirs=[cfg.repo_dir], extra=cfg.agent_args)
     else:
         brief = cfg.briefs_dir / f"pr-{number}.md"
-        argv = [
-            copilot,
-            f"--session-id={session_id}",
-            f"--name={short} #{number} deep review",
-            "-i", review_prompt(cfg, number, brief),
-            *common,
-        ]  # fmt: skip
-    return ReviewLaunch(argv=argv, cwd=cfg.clone, session_id=session_id, resuming=resuming, title=f"{short} #{number}")
+        argv = agent.new_session_argv(
+            session_id=session_id, name=f"{short} #{number} deep review", prompt=review_prompt(cfg, number, brief),
+            add_dirs=[cfg.repo_dir], extra=cfg.agent_args,
+        )  # fmt: skip
+    return ReviewLaunch(argv=argv, cwd=cfg.clone, session_id=session_id, resuming=resuming, title=f"{short} #{number}",
+                        agent=agent.name)  # fmt: skip
 
 
 def launch_in_terminal(launch: ReviewLaunch, cfg: Config) -> str:
@@ -332,11 +293,6 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
 
 def review_url(slug: str, number: int) -> str:
     return f"{URL_SCHEME}://review/{slug}/{number}"
-
-
-def vscode_session_url(session_id: str) -> str:
-    """Open an existing Copilot CLI session in VS Code's Agents window (VS Code 1.138+)."""
-    return f"vscode://agents/agent-host-session/copilotcli/{session_id}"
 
 
 def vscode_new_session_url(prompt: str, workspace: Path | None) -> str:

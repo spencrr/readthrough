@@ -119,29 +119,34 @@ function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add(
 function copy(text, msg){ navigator.clipboard.writeText(text).then(() => toast(msg || "Copied")); }
 const deepPrompt = n => `[readthrough:${SLUG}#${n}] Use the readthrough skill to run a deep review session for ${DATA.repo}#${n}. The study brief is at ${(LINKS.briefs_dir || "").replace(/\\/g, "/")}/pr-${n}.md`;
 const reviewUrl = n => `readthrough://review/${SLUG}/${n}`;
-const sessionUrl = id => `vscode://agents/agent-host-session/copilotcli/${id}`;
+// A session's editor link comes from the agent that owns it (Copilot sessions open in VS Code's agent window;
+// Claude Code sessions have none), so the page never guesses one.
 const vscodeUrl = n => {
-  const s = (byNum[n].sessions || [])[0];
-  if (s) return sessionUrl(s.id);
+  const s = (byNum[n].sessions || []).find(s => s.editor_url);
+  if (s) return s.editor_url;
   return `vscode://agents/new?prompt=${encodeURIComponent(deepPrompt(n))}` + (LINKS.clone_uri ? `&workspace=${encodeURIComponent(LINKS.clone_uri)}` : "");
 };
 const ago = ts => { const h = (Date.now() - ts) / 3.6e6; return h < 1 ? `${Math.max(1, Math.round(h * 60))} min ago` : h < 48 ? `${Math.round(h)} h ago` : `${Math.round(h / 24)} d ago`; };
+const agentLabel = s => s.agent_label || "Copilot";
 const sessDot = p => {
   const all = p.sessions || (p.session?.exists ? [p.session] : []);
   if (!all.length) return "";
   const live = all.filter(s => s.active).length, latest = Math.max(...all.map(s => s.updated || 0));
-  const what = all.length > 1 ? `${all.length} Copilot sessions` : "A Copilot review session";
+  const labels = [...new Set(all.map(agentLabel))].join(" and ");
+  const what = all.length > 1 ? `${all.length} ${labels} sessions` : `A ${labels} review session`;
   return live ? `<span class="sess live" title="${what}; ${live} open right now"></span>`
               : `<span class="sess" title="${what}, last active ${ago(latest * 1000)}"></span>`;
 };
+// `active` is true, false, or null: null means the agent leaves no trace of whether the session is open.
+const activity = s => s.active ? "<b>open now</b>" : s.active === false ? ago(s.updated * 1000) : `last written ${ago(s.updated * 1000)}`;
 function sessionList(n){
   const all = byNum[n].sessions || [];
-  if (!all.length) return `<div class="hint">No Copilot session yet. Starting one keeps it for this PR, so you can come back to it. Sessions started from VS Code or a copied prompt show up here too.</div>`;
+  if (!all.length) return `<div class="hint">No review session yet. Starting one keeps it for this PR, so you can come back to it. Sessions started from VS Code, Claude Code, or a copied prompt show up here too.</div>`;
   return `<div class="sessions">${all.map(s => `<div class="srow">${icon(s.where === "VS Code" ? "square-code" : "terminal", "ico sm")}
       <span class="sname" title="${esc(s.id)}">${esc(s.name || s.id.slice(0, 8))}</span>
-      <span class="muted">${esc(s.where)} · ${s.active ? "<b>open now</b>" : ago(s.updated * 1000)}</span>
+      <span class="muted">${esc(agentLabel(s))} · ${esc(s.where)} · ${activity(s)}</span>
       ${LIVE ? `<button class="btn small" data-review="${n}" data-session="${s.id}" title="Resume this session in a new terminal">terminal</button>` : ""}
-      <a class="btn small" href="${sessionUrl(s.id)}" title="Open this session in VS Code's agent window">VS Code</a></div>`).join("")}</div>`;
+      ${s.editor_url ? `<a class="btn small" href="${esc(s.editor_url)}" title="Open this session in VS Code's agent window">VS Code</a>` : ""}</div>`).join("")}</div>`;
 }
 const whoBadge = p => {
   const k = p.author_kind || "external";
@@ -156,7 +161,7 @@ const scoreBadge = p => {
 };
 function reviewButton(n, cls = "btn small"){
   const resume = byNum[n].session && byNum[n].session.exists;
-  const label = resume ? "resume" : "review", title = `${resume ? "Resume" : "Start"} the Copilot CLI deep-review session for #${n}`;
+  const label = resume ? "resume" : "review", title = `${resume ? "Resume" : "Start"} the deep-review session for #${n} in a terminal`;
   if (LIVE) return `<button class="${cls}" data-review="${n}" title="${title}">${label}</button>`;
   if (LINKS.protocol) return `<a class="${cls}" href="${reviewUrl(n)}" title="${title}">${label}</a>`;
   return `<button class="${cls}" data-copy="readthrough review ${n}" title="Copies the command. Run 'readthrough serve' (or 'readthrough install protocol') to make this one click.">${label}</button>`;
@@ -387,7 +392,7 @@ function renderPlan(){
       ${lane("mine","your PRs")}
       ${lane("draft","not ready yet")}
     </div><div>
-      <p class="muted" style="margin-top:0">Ready PRs are packed into sessions of about an hour, each in one component so you build context instead of switching it. Requested reviews and re-reviews come first, then quick wins, then the oldest. The menu on each row is your status (to do, understood, reviewed, and so on)${LIVE ? ", saved to the ledger the review sessions also write to" : ""}. New commits reset it. A <span class="sess"></span> means a Copilot review session exists; <span class="score">quiz 2/3</span> is your study-log score; <span class="cib passing">✓</span> <span class="cib failing">✗</span> <span class="cib failing-optional">!</span> show CI.</p>
+      <p class="muted" style="margin-top:0">Ready PRs are packed into sessions of about an hour, each in one component so you build context instead of switching it. Requested reviews and re-reviews come first, then quick wins, then the oldest. The menu on each row is your status (to do, understood, reviewed, and so on)${LIVE ? ", saved to the ledger the review sessions also write to" : ""}. New commits reset it. A <span class="sess"></span> means a review session exists; <span class="score">quiz 2/3</span> is your study-log score; <span class="cib passing">✓</span> <span class="cib failing">✗</span> <span class="cib failing-optional">!</span> show CI.</p>
       <p style="margin-top:0"><label><input type="checkbox" id="greenFirst" ${state.greenFirst ? "checked" : ""}> CI passing first</label> <span class="muted">· a red check doesn't block review, but a green one means the PR is less likely to change under you.</span></p>
       ${sessions || `<div class="card">${EMPTY("Nothing ready matches these filters.")}</div>`}
     </div></div>`;
@@ -538,7 +543,7 @@ function overviewTab(n){
   return `<div class="actions">
       ${reviewButton(n, "btn primary").replace(/>(review|resume)</, (m, w) => `>${w === "resume" ? "Resume" : "Start"} deep review<`)}
       ${LIVE ? `<button class="btn" data-dtab="study">Study with Copilot</button>` : ""}
-      <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.length ? "Open this PR's latest Copilot session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
+      <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest Copilot session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
       <button class="btn" data-deep="${n}">Copy prompt</button>
       <button class="btn" data-copy="readthrough worktree ${n}">Copy worktree cmd</button></div>
     ${sessionList(n)}
@@ -750,7 +755,7 @@ document.addEventListener("click", e => {
   if (t.dataset.author) return pick("authors", t.dataset.author, e);
   if (t.dataset.ci) return pick("cis", t.dataset.ci, e);
   if (t.hasAttribute("data-clear")) { for (const [g, labels] of Object.entries(GROUPS)) Object.keys(labels).forEach(k => state[g].add(k)); return render(); }
-  if (t.dataset.deep) return copy(deepPrompt(t.dataset.deep), "Prompt copied. Paste it into any Copilot chat");
+  if (t.dataset.deep) return copy(deepPrompt(t.dataset.deep), "Prompt copied. Paste it into any agent chat (Copilot, Claude Code, VS Code)");
   if (t.dataset.copy) return copy(t.dataset.copy);
   if (t.dataset.sort) { sortDir = sortKey === t.dataset.sort ? -sortDir : (t.dataset.sort === "ci" ? 1 : -1); sortKey = t.dataset.sort; return render(); }
   if (t.dataset.open || t.dataset.pr) return openDrawer(+(t.dataset.open || t.dataset.pr));

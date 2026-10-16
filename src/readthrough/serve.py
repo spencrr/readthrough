@@ -376,10 +376,10 @@ class Dashboard:
         launch = review.plan_review(self.cfg, number, ledger_entry=entry, session_id=session_id)
         terminal = review.launch_in_terminal(launch, self.cfg)
         log.info(
-            "%s Copilot session %s for #%d in %s",
-            "Resumed" if launch.resuming else "Started", launch.session_id, number, terminal,
+            "%s %s session %s for #%d in %s",
+            "Resumed" if launch.resuming else "Started", launch.agent, launch.session_id, number, terminal,
         )  # fmt: skip
-        return {"session": launch.session_id, "resuming": launch.resuming}
+        return {"session": launch.session_id, "resuming": launch.resuming, "agent": launch.agent}
 
 
 class Handler(BaseHTTPRequestHandler):

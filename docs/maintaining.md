@@ -123,14 +123,16 @@ The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`,
 
 ## Plugins
 
-Four things are chosen by name in `config.toml` and go through `registry.Registry`: where PRs come from (`forges.FORGES`), where profiles come from (`profile.PROFILE_SOURCES`), how a review session gets a window (`terminals.TERMINALS`), and who answers in the Study tab (`assistants.ASSISTANTS`). To add one:
+Five things are chosen by name in `config.toml` and go through `registry.Registry`: where PRs come from (`forges.FORGES`), where profiles come from (`profile.PROFILE_SOURCES`), which agent runs a deep review (`agents.AGENTS`), how a review session gets a window (`terminals.TERMINALS`), and who answers in the Study tab (`assistants.ASSISTANTS`). To add one:
 
 1. Write a dataclass of options with defaults, or use `registry.NoOptions`. Field types can be `str`, `int`, `float`, `bool`, `Path`, `list[...]` of those, or `X | None`; the loader checks them and resolves relative paths against the config file.
 2. Register the implementation with `REGISTRY.add("name", "one-line summary", options=Options)`. The name is what users write; the summary is what `doctor` and errors show.
-3. Keep the precedence or `auto` policy where it is (`profile.PRECEDENCE`, `terminals.AUTO_ORDER`, `assistants.AUTO_ORDER`); a plugin never decides its own priority.
+3. Keep the precedence or `auto` policy where it is (`profile.PRECEDENCE`, `agents.AUTO_ORDER`, `terminals.AUTO_ORDER`, `assistants.AUTO_ORDER`); a plugin never decides its own priority.
 4. Add a test in `test_registry.py` that builds its command or result without running anything, and one in `test_e2e.py` or the module's tests if it changes what a user sees.
 
 A forge subclasses `forges.Forge`: class attributes for its name, label, dot-directory, repo shape, and `capabilities`, then the fetching methods (`repo_info`, `fetch_prs`, `merged_prs`, `tree`, `read_file`, `list_dir`, `ci_context`, `fetch_diff`, and `is_member` when `memberships` is claimed), each producing the records in `model.py`. Use `forges.Rest` for HTTP and `credential()` for the token so timeouts, redaction, and retries come for free; mark what the platform can't say `unsupported` and what failed `unavailable`, with the reason. Before it ships, run `scripts/probe_forge.py` against a real public repo and record the responses for `test_forges.py`.
+
+A review agent subclasses `agents.Agent`: how to start a session with a given id, name, and prompt and how to resume one by id; where its sessions live and how to read a session's first user message (the PR marker in it is what links the session to a PR); whether a session is open right now, when the agent leaves a trace of that (Copilot does, Claude Code doesn't, and the adapter says `None` rather than `False`); and where its skills go. What ships is what could be run here: Codex or Gemini CLI would be the same shape, verified against their session formats first.
 
 A terminal launcher is a pure function from a `Command` to a `Spawn`; only the Windows ones run on the author's machine, so the others carry the invocation their terminal documents and a note to that effect. A study assistant implements `assistants.Assistant` (`turn` and `stop`) and writes to the log only through the `Harness` it's given, with its own name in `by`; it must never write a verdict unless it read the code to reach it.
 

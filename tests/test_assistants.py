@@ -13,6 +13,7 @@ import pytest
 from conftest import NOW, PROFILE, PROFILE_PATH, REPO
 
 from readthrough import assistants, study
+from readthrough.agents import SessionInfo
 from readthrough.analyze import analyze
 from readthrough.assistants import (
     ASSISTANTS,
@@ -337,7 +338,7 @@ def test_session_for_starts_client_builds_options_and_caches_session(harness, tm
     worktree.mkdir()
     _install_fake_copilot(monkeypatch, client)
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
-    monkeypatch.setattr(assistants.review, "session_info", lambda _sid: {"exists": True})
+    monkeypatch.setattr(assistants.Copilot, "session_info", lambda _self, sid: SessionInfo(sid, exists=True))
 
     copilot = CopilotAssistant(harness, None)
     harness.cfg.study_model = "gpt-test"

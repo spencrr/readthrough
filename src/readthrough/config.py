@@ -53,16 +53,18 @@ class Config:
     internal_authors: list[str] = field(default_factory=list)
     external_authors: list[str] = field(default_factory=list)
     study_model: str | None = None
-    copilot_args: list[str] = field(default_factory=list)
+    agent_args: list[str] = field(default_factory=list)  # extra flags for the review agent, for this repo
     port: int = 8765
     refresh_minutes: int = 10
     tuning: Tuning = field(default_factory=default_tuning)
-    # Machine-wide choices from the top of config.toml; see terminals.py, assistants.py, profile.py.
+    # Machine-wide choices from the top of config.toml; see terminals.py, assistants.py, agents.py, profile.py.
     # The option dicts map a plugin name to its validated options object.
     terminal: str = AUTO
     assistant: str = AUTO
+    agent: str = AUTO
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
+    agent_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
     forge_options: dict[str, Any] = field(default_factory=dict)
 
@@ -120,24 +122,26 @@ class Config:
         return self.home / "config.toml"
 
 
+MACHINE_CHOICES = ("terminal", "assistant", "agent")  # `name = "..."` keys at the top of config.toml
 MACHINE_KEYS = {
-    "terminal",
-    "assistant",
+    *MACHINE_CHOICES,
     "terminal_options",
     "assistant_options",
+    "agent_options",
     "profile_source_options",
     "forge_options",
 }
 REPO_KEYS = ({f.name for f in fields(Config)} - {"home", "repo", "port", "refresh_minutes"} - MACHINE_KEYS) | {"name"}
 GLOBAL_KEYS = {
     "schema", "default_repo", "port", "refresh_minutes", "defaults", "tuning", "repos",
-    "terminal", "assistant", "terminals", "assistants", "profile_sources", "forges",
+    *MACHINE_CHOICES, "terminals", "assistants", "agents", "profile_sources", "forges",
 }  # fmt: skip
 PATH_KEYS = {"clone", "profile"}
 # config.toml table -> the Settings attribute holding its validated per-plugin options.
 PLUGIN_TABLES = {
     "terminals": "terminal_options",
     "assistants": "assistant_options",
+    "agents": "agent_options",
     "profile_sources": "profile_source_options",
     "forges": "forge_options",
 }
@@ -155,8 +159,10 @@ class Settings:
     config_file: Path | None = None
     terminal: str = AUTO
     assistant: str = AUTO
+    agent: str = AUTO
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
+    agent_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
     forge_options: dict[str, Any] = field(default_factory=dict)
     plugin_raw: dict[str, dict[str, Any]] = field(default_factory=dict)  # the option tables as written, for saving
@@ -228,11 +234,13 @@ class Settings:
         except TuningError as exc:
             raise ConfigError(f"{self.path}: {exc}") from exc
         cfg = Config(
-            home=self.home, repo=entry["name"], port=self.port, refresh_minutes=self.refresh_minutes, tuning=tuning,
-            terminal=self.terminal, assistant=self.assistant, terminal_options=self.terminal_options,
-            assistant_options=self.assistant_options, profile_source_options=self.profile_source_options,
-            forge_options=self.forge_options,
-        )  # fmt: skip
+            home=self.home,
+            repo=entry["name"],
+            port=self.port,
+            refresh_minutes=self.refresh_minutes,
+            tuning=tuning,
+            **{key: getattr(self, key) for key in MACHINE_KEYS},
+        )
         for key, value in merged.items():
             setattr(cfg, key, Path(value).expanduser() if key in PATH_KEYS and value else value)
         return cfg
@@ -367,18 +375,20 @@ def _validate_repo(forge: str, repo: str) -> str | None:
 
 
 def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
-    """``terminal``, ``assistant``, and the ``[terminals.*]``, ``[assistants.*]``, ``[profile_sources.*]`` tables.
+    """``terminal``, ``assistant``, ``agent``, and the ``[terminals.*]``, ``[assistants.*]``, ``[agents.*]``,
+    ``[profile_sources.*]``, ``[forges.*]`` tables.
 
     Each name is checked against its registry and each table against the plugin's options, so a typo
     fails here, where the message can say what was meant, rather than when a review is launched.
     """
+    from readthrough.agents import AGENTS
     from readthrough.assistants import ASSISTANTS
     from readthrough.forges import FORGES
     from readthrough.profile import PROFILE_SOURCES
     from readthrough.terminals import TERMINALS
 
     base = settings.path.parent
-    for key, registry in (("terminal", TERMINALS), ("assistant", ASSISTANTS)):
+    for key, registry in (("terminal", TERMINALS), ("assistant", ASSISTANTS), ("agent", AGENTS)):
         name = raw.get(key, AUTO)
         if not isinstance(name, str):
             raise ConfigError(f"{key} must be a name, not {name!r}")
@@ -388,6 +398,7 @@ def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
     registries = {
         "terminals": TERMINALS,
         "assistants": ASSISTANTS,
+        "agents": AGENTS,
         "profile_sources": PROFILE_SOURCES,
         "forges": FORGES,
     }
@@ -453,7 +464,7 @@ def dump_settings(settings: Settings) -> str:
     if settings.default_repo:
         out.append(f"default_repo = {_value(settings.default_repo)}")
     out += [f"port = {settings.port}", f"refresh_minutes = {settings.refresh_minutes}"]
-    for key in ("terminal", "assistant"):
+    for key in MACHINE_CHOICES:
         if getattr(settings, key) != AUTO:
             out.append(f"{key} = {_value(getattr(settings, key))}")
     out.append("")

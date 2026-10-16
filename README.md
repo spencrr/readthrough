@@ -4,7 +4,7 @@ Busy repos have fifty-plus open pull requests. I wanted two things from a queue 
 
 readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
-From there you can go two ways. A button on each PR starts a GitHub Copilot deep-review session in a terminal, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. With the Copilot SDK installed the assistant reads the code and grades your answers; without it, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
+From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. With the Copilot SDK installed the assistant reads the code and grades your answers; without it, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
 ![Architecture map](docs/img/map.png)
 
@@ -14,7 +14,7 @@ The map is only as good as readthrough's idea of the architecture, so before it 
 
 ## Quick start
 
-You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For the Copilot parts, also the [Copilot CLI](https://github.com/github/copilot-cli) signed in.
+You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For deep reviews, the [Copilot CLI](https://github.com/github/copilot-cli) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) signed in; for the Study tab's Copilot assistant, the `[study]` extra.
 
 ```sh
 uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"   # drop [study] to skip Copilot
@@ -58,7 +58,8 @@ build.py          one build: fetch, analyze, write data.json, the dashboard, and
 analyze.py        lanes, signals, line heuristics, overlaps, and the burn-down plan
 ci.py             which checks are required, failing, or also failing on main
 brief.py          the Markdown brief a reviewer reads before the diff
-review.py         deep-review sessions, worktrees, and the index linking Copilot sessions to PRs
+review.py         deep-review sessions, worktrees, and the index linking agent sessions to PRs
+agents.py         a registry of review agents: copilot (the Copilot CLI) and claude (Claude Code)
 study.py          the append-only study log and its rendering into the brief
 engine.py         the Study tab's loop: records the learner's side, runs the assistant
 assistants.py     a registry of study assistants: copilot (reads code, grades) and rules (no model)
@@ -72,7 +73,7 @@ assets/web/       the pages as separate HTML, CSS, and JS, inlined into one serv
 assets/vendor/    Cytoscape, marked, DOMPurify, and Lucide icons, with their licenses
 ```
 
-To extend it: a new forge, a new place profiles can come from, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](docs/profiles.md).
+To extend it: a new forge, a new place profiles can come from, a new review agent, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](docs/profiles.md).
 
 ## Development
 

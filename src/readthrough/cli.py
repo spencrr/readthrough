@@ -15,7 +15,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, forges, ledger, logs, review, system
+from readthrough import __version__, agents, forges, ledger, logs, review, system
 from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
 from readthrough.faults import ForgeError
@@ -24,8 +24,7 @@ from readthrough.process import run
 from readthrough.profile import ProfileError
 
 log = logging.getLogger("readthrough")
-SKILL_NAME = "readthrough"
-DEFAULT_SKILL_DIR = Path.home() / ".agents" / "skills" / SKILL_NAME
+SKILL_NAME = agents.SKILL_NAME
 
 
 def _setup_logging(settings: Settings, *, verbose: bool, command: str) -> None:
@@ -231,15 +230,11 @@ def cmd_review(settings: Settings, args: argparse.Namespace) -> int:
         ledger.record(cfg.ledger_path, args.pr, session=launch.session_id)
     if args.vscode:
         prompt = review.review_prompt(cfg, args.pr, cfg.briefs_dir / f"pr-{args.pr}.md")
-        url = (
-            review.vscode_session_url(launch.session_id)
-            if launch.resuming
-            else review.vscode_new_session_url(prompt, cfg.clone)
-        )
-        _open(url)
+        existing = review.agent_for(cfg, launch.session_id).editor_url(launch.session_id) if launch.resuming else None
+        _open(existing or review.vscode_new_session_url(prompt, cfg.clone))
         return 0
     verb = "Resuming" if launch.resuming else "Starting"
-    log.info("%s Copilot session %s for %s#%d in %s", verb, launch.session_id, cfg.repo, args.pr, launch.cwd)
+    log.info("%s %s session %s for %s#%d in %s", verb, launch.agent, launch.session_id, cfg.repo, args.pr, launch.cwd)
     if args.print:
         _say(subprocess.list2cmdline(launch.argv) if sys.platform == "win32" else " ".join(launch.argv))
         return 0
@@ -510,10 +505,10 @@ def cmd_profile(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_install(settings: Settings, args: argparse.Namespace) -> int:
     home = settings.home if args.home_set else None
     if args.what == "skill":
-        dest = Path(args.dest) if args.dest else DEFAULT_SKILL_DIR
-        dest.mkdir(parents=True, exist_ok=True)
-        (dest / "SKILL.md").write_text(_bundled_skill(), encoding="utf-8")
-        _say(f"Installed the {SKILL_NAME} skill to {dest}")
+        for dest in _skill_dirs(settings, args):
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text(_bundled_skill(), encoding="utf-8")
+            _say(f"Installed the {SKILL_NAME} skill to {dest}")
     elif args.what == "protocol":
         _say(f"Registered {review.URL_SCHEME}:// -> {system.install_protocol()}")
         _say("Rebuild the dashboards (`readthrough build --all`) so their buttons switch to one-click launch.")
@@ -530,11 +525,22 @@ def cmd_install(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _skill_dirs(settings: Settings, args: argparse.Namespace) -> list[Path]:
+    """Where to put the skill: an explicit directory, one agent's, or every installed agent's (else the default's)."""
+    if args.dest:
+        return [Path(args.dest)]
+    if args.agent:
+        return [agents.make(args.agent, settings.agent_options).skill_dir]
+    available = [a for a in agents.all_agents(settings.agent_options) if a.available()]
+    return [a.skill_dir for a in available or [agents.resolve(settings.agent, settings.agent_options)]]
+
+
 def cmd_uninstall(settings: Settings, args: argparse.Namespace) -> int:
     if args.what == "skill":
-        dest = Path(args.dest) if args.dest else DEFAULT_SKILL_DIR
-        removed = dest.exists()
-        shutil.rmtree(dest, ignore_errors=True)
+        removed = False
+        for dest in _skill_dirs(settings, args):
+            removed = dest.exists() or removed
+            shutil.rmtree(dest, ignore_errors=True)
     elif args.what == "protocol":
         removed = system.uninstall_protocol()
     elif args.what == "server":
@@ -571,7 +577,7 @@ def cmd_config(settings: Settings, args: argparse.Namespace) -> int:
     for cfg in configs:
         _say(f"\n[{cfg.repo}]")
         for key in ("clone", "remote", "account", "profile", "onboarded", "session_minutes", "limit",
-                    "internal_authors", "external_authors", "study_model", "copilot_args"):  # fmt: skip
+                    "internal_authors", "external_authors", "study_model", "agent_args"):  # fmt: skip
             _say(f"  {key:16} {getattr(cfg, key)}")
         repo_changed = {k: v for k, v in changed_from_defaults(cfg.tuning).items() if changed.get(k) != v}
         if repo_changed:
@@ -601,11 +607,14 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
     _say("This machine")
     accounts = signed_in_accounts()
     check(bool(accounts), "gh", f"signed in as {', '.join(accounts)}" if accounts else "not signed in", "gh auth login")
-    copilot = shutil.which("copilot")
-    check(bool(copilot), "copilot", copilot or "not found", "winget install GitHub.Copilot")
-    skill = DEFAULT_SKILL_DIR / "SKILL.md"
-    current = skill.exists() and skill.read_text(encoding="utf-8") == _bundled_skill()
-    check(current, "skill", str(skill) if skill.exists() else "not installed", "readthrough install skill")
+    agent = agents.resolve(settings.agent, settings.agent_options)
+    check(agent.available(), "agent", agents.describe(settings.agent, settings.agent_options), agent.install_hint)
+    for other in agents.all_agents(settings.agent_options):
+        if other.available() or other.name == agent.name:
+            skill = other.skill_dir / "SKILL.md"
+            current = skill.exists() and skill.read_text(encoding="utf-8") == _bundled_skill()
+            check(current if other.available() else None, f"skill ({other.name})",
+                  str(skill) if skill.exists() else "not installed", f"readthrough install skill --agent {other.name}")  # fmt: skip
     registered = system.registered_protocol_command()
     check(
         registered == system.handler_command(),
@@ -735,7 +744,7 @@ def _doctor_bundle(settings: Settings, args: argparse.Namespace) -> int:
     sha = version(["git", "-C", str(Path(__file__).resolve().parents[2]), "rev-parse", "--short", "HEAD"])
     info = {
         "readthrough": __version__, "git_commit": sha, "python": sys.version, "platform": platform.platform(),
-        "gh": version(["gh", "--version"]), "copilot": version(["copilot", "--version"]),
+        "gh": version(["gh", "--version"]), "copilot": version(["copilot", "--version"]), "claude": version(["claude", "--version"]),
         "gh_accounts": signed_in_accounts(), "home": str(settings.home), "config": str(settings.path),
         "repos": [{"name": c.slug, "onboarded": c.onboarded, "built": cfg_built(c)} for c in settings.all()],
     }  # fmt: skip
@@ -868,10 +877,12 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     for name, func in (("install", cmd_install), ("uninstall", cmd_uninstall)):
         p = sub.add_parser(
             name,
-            help=f"{name} the Copilot skill, the readthrough:// link handler, the daily refresh, or the live server",
+            help=f"{name} the review skill, the readthrough:// link handler, the daily refresh, or the live server",
         )
         p.add_argument("what", choices=("skill", "protocol", "schedule", "server"))
-        p.add_argument("--dest", help=f"skill directory (default {DEFAULT_SKILL_DIR})")
+        p.add_argument("--agent", choices=agents.AGENTS.names(),
+                       help="skill: only this agent's skill directory (default: every installed agent's)")  # fmt: skip
+        p.add_argument("--dest", help="skill: an explicit directory instead")
         if name == "install":
             p.add_argument("--at", default="08:30", help="schedule: time of day, HH:MM (default 08:30)")
             p.add_argument("--days", choices=("daily", "weekdays"), default="weekdays")

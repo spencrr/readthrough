@@ -390,11 +390,11 @@ def _build(
         cfg.briefs_dir.mkdir(parents=True, exist_ok=True)
         for old in cfg.briefs_dir.glob("pr-*.md"):
             old.unlink()
-    review.session_index(cfg.home).scan(force=True)
+    review.session_index(cfg).scan(force=True)
     for it in items:
         entry = entries.get(str(it["number"]))
         primary = review.session_id_for(cfg, it["number"], entry)
-        it["session"] = review.session_info(primary)
+        it["session"] = review.session_info(cfg, primary)
         it["sessions"] = review.pr_sessions(cfg, it["number"], primary)
         log_entries = study.load(cfg, it["number"])
         it["study"] = study.summarize(log_entries)
@@ -538,12 +538,12 @@ def render_html(payload: dict[str, Any], *, live: dict[str, Any] | None = None, 
 
 def refresh_sessions(payload: dict[str, Any], cfg: Config) -> dict[int, dict[str, Any]]:
     """Recompute Copilot session status for every PR. Returns only the PRs whose sessions changed."""
-    review.session_index(cfg.home).scan()
+    review.session_index(cfg).scan()
     changed = {}
     for it in payload["prs"]:
         entry = payload["ledger"].get(str(it["number"]))
         primary = review.session_id_for(cfg, it["number"], entry)
-        info, sessions = review.session_info(primary), review.pr_sessions(cfg, it["number"], primary)
+        info, sessions = review.session_info(cfg, primary), review.pr_sessions(cfg, it["number"], primary)
         if info != it.get("session") or sessions != it.get("sessions"):
             it["session"], it["sessions"] = info, sessions
             changed[it["number"]] = {"session": info, "sessions": sessions}

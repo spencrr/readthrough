@@ -35,7 +35,6 @@ def isolated(monkeypatch, tmp_path: Path, make_pr, fake_forge):
     monkeypatch.setattr("readthrough.cli.webbrowser.open", opened.append)
     monkeypatch.setattr(system, "registered_protocol_command", lambda: None)
     monkeypatch.setattr(system, "schedule_status", lambda name=system.TASK_NAME: system.ScheduleStatus(False))
-    monkeypatch.setattr(cli, "DEFAULT_SKILL_DIR", tmp_path / "skills" / "readthrough")
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.toml").write_text(CONFIG, encoding="utf-8")
@@ -211,13 +210,16 @@ def test_onboarding_an_unreadable_repo_lists_your_accounts(isolated, capsys):
 
 
 def test_doctor_reports_problems_and_writes_a_bundle(isolated, capsys, monkeypatch):
+    monkeypatch.delenv("READTHROUGH_COPILOT")
+    monkeypatch.delenv("READTHROUGH_CLAUDE")
+    monkeypatch.setattr("readthrough.process.shutil.which", lambda name: None)
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     assert dashboard(isolated, "build", "--no-diffs") == 0
     capsys.readouterr()
     assert dashboard(isolated, "doctor") == 1
     out = capsys.readouterr().out
-    assert "XX  copilot" in out and "ok  access" in out and "ok  onboarded" in out
-    assert "fix: readthrough install skill" in out
+    assert "XX  agent" in out and "copilot isn't installed" in out and "ok  access" in out and "ok  onboarded" in out
+    assert "readthrough install skill --agent copilot" in out
 
     assert dashboard(isolated, "doctor", "--bundle") == 0
     bundle = next((isolated.home / "bundles").glob("readthrough-debug-*.zip"))
@@ -238,13 +240,24 @@ def test_doctor_shows_the_servers_last_failure(isolated, capsys, monkeypatch):
     assert "3 failed refresh(es) in a row" in out and "error abc123" in out
 
 
-def test_skill_install_and_uninstall(isolated, capsys):
+def test_skill_install_and_uninstall(isolated, capsys, monkeypatch):
     dest = isolated.tmp / "skill"
     assert dashboard(isolated, "install", "skill", "--dest", str(dest)) == 0
     assert (dest / "SKILL.md").read_text(encoding="utf-8") == cli._bundled_skill()
     assert dashboard(isolated, "uninstall", "skill", "--dest", str(dest)) == 0
     assert capsys.readouterr().out.strip().endswith("removed")
     assert not dest.exists()
+
+    # Without --dest the skill goes to every installed agent: Copilot's ~/.agents/skills and Claude Code's skills.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated.tmp / "homedir"))
+    assert dashboard(isolated, "install", "skill") == 0
+    out = capsys.readouterr().out
+    assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
+    assert (isolated.tmp / "claude" / "skills" / "readthrough" / "SKILL.md").exists()
+    assert out.count("Installed") == 2
+    assert dashboard(isolated, "uninstall", "skill", "--agent", "claude") == 0
+    assert not (isolated.tmp / "claude" / "skills" / "readthrough").exists()
+    assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
 
 
 def test_system_installs_are_delegated(isolated, capsys, monkeypatch):
@@ -290,10 +303,6 @@ def test_open_without_a_dashboard_says_how_to_make_one(isolated, capsys):
 
 
 def test_review_prints_or_opens_the_session(isolated, capsys, monkeypatch):
-    monkeypatch.setattr(review.shutil, "which", lambda name: None)
-    assert dashboard(isolated, "review", "1", "--print") == 1
-    assert "not on PATH" in capsys.readouterr().err
-    monkeypatch.setattr(review.shutil, "which", lambda name: f"C:/bin/{name}.exe")
     assert dashboard(isolated, "review", "1", "--print") == 1
     assert "No local clone" in capsys.readouterr().err
     clone = isolated.tmp / "clone"

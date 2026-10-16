@@ -21,13 +21,17 @@ SLUG = f"github/{REPO}"
 
 
 @pytest.fixture(autouse=True)
-def no_real_programs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point `gh` and `git` at a program that doesn't exist, so a test that forgets to fake them fails the same way
-    everywhere instead of passing on a machine that happens to be signed in."""
-    monkeypatch.setenv("READTHROUGH_GH", "readthrough-tests-must-not-run-gh")
-    monkeypatch.setenv("READTHROUGH_GIT", "readthrough-tests-must-not-run-git")
-    monkeypatch.setenv("READTHROUGH_GLAB", "readthrough-tests-must-not-run-glab")
-    monkeypatch.setenv("READTHROUGH_AZ", "readthrough-tests-must-not-run-az")
+def no_real_programs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point `gh`, `git`, and the other CLIs at programs that don't exist, so a test that forgets to fake them fails
+    the same way everywhere instead of passing on a machine that happens to be signed in.
+
+    The review agents count as installed (their executables are named, if nonexistent) and their session stores
+    are empty temporary directories, so the tests see the same machine wherever they run.
+    """
+    for program in ("gh", "git", "glab", "az", "copilot", "claude"):
+        monkeypatch.setenv(f"READTHROUGH_{program.upper()}", f"readthrough-tests-must-not-run-{program}")
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ Everything here mirrors a CLI command (``readthrough onboard``, ``remove``, ``de
 the page shows the CLI equivalent for each action. The server only calls this for requests that carry its
 token and come from its own pages; on top of that, every input is validated here.
 
-Kept out of the browser on purpose: ``copilot_args`` (flags passed straight to a program the server
+Kept out of the browser on purpose: ``agent_args`` (flags passed straight to a program the server
 launches), the ``profile`` path override (makes the server read an arbitrary file), and ``port`` (changing
 it from the page you're on breaks that page). The page shows them read-only with the CLI command.
 """
@@ -605,7 +605,7 @@ def _repo_view(cfg: Config) -> dict[str, Any]:
         "study_model": cfg.study_model,
         "internal_authors": cfg.internal_authors,
         "external_authors": cfg.external_authors,
-        "copilot_args": cfg.copilot_args,
+        "agent_args": cfg.agent_args,
         "profile_override": str(cfg.profile) if cfg.profile else None,
         "built": built,
         "data_dir": str(cfg.repo_dir),

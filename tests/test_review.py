@@ -69,14 +69,12 @@ def test_parse_readthrough_url_rejects(url):
         review.parse_readthrough_url(url, allowed_repos=ALLOWED)
 
 
-def test_plan_review_new_then_resume(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
-    monkeypatch.setattr(review.shutil, "which", lambda name: f"/bin/{name}")
-    cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path / "clone", copilot_args=["--model", "m"])
+def test_plan_review_new_then_resume(tmp_path: Path):
+    cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path / "clone", agent_args=["--model", "m"])
 
     first = review.plan_review(cfg, 7, ledger_entry=None)
-    assert not first.resuming
-    assert f"--session-id={first.session_id}" in first.argv
+    assert not first.resuming and first.agent == "copilot"
+    assert first.argv[0].endswith("copilot") and f"--session-id={first.session_id}" in first.argv
     assert "-i" in first.argv and "#7" in first.argv[first.argv.index("-i") + 1]
     assert first.argv[-2:] == ["--model", "m"]
 
@@ -87,8 +85,41 @@ def test_plan_review_new_then_resume(tmp_path: Path, monkeypatch):
     assert "-i" not in second.argv
 
 
+def test_plan_review_in_claude_code(tmp_path: Path):
+    """With agent = "claude", a new session starts in Claude Code and an existing one is found in its project store."""
+    cfg = Config(
+        home=tmp_path / "home", repo="o/r", clone=tmp_path / "clone", agent="claude", agent_args=["--model", "m"]
+    )
+    first = review.plan_review(cfg, 7, ledger_entry=None)
+    assert first.agent == "claude" and first.argv[0].endswith("claude")
+    assert first.argv[1:3] == ["--session-id", first.session_id] and first.argv[-3:-1] == ["--model", "m"]
+    assert first.argv[-1].startswith("[readthrough:github/o/r#7]"), "Claude Code takes the prompt as its last argument"
+    project = tmp_path / "claude" / "projects" / "C--Users-me-src-r"
+    project.mkdir(parents=True)
+    (project / f"{first.session_id}.jsonl").write_text(
+        '{"type":"user","message":{"role":"user","content":"x"}}\n', encoding="utf-8"
+    )
+    second = review.plan_review(cfg, 7, ledger_entry=None)
+    assert second.resuming and second.argv[1:3] == ["--resume", first.session_id]
+    info = review.session_info(cfg, first.session_id)
+    assert info["exists"] and info["active"] is None, (
+        "Claude Code leaves no mark of an open session, so none is claimed"
+    )
+
+
+def test_an_uninstalled_agent_is_named_with_its_install_hint(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("READTHROUGH_CLAUDE")
+    monkeypatch.setattr("readthrough.process.shutil.which", lambda name: None)
+    cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path / "clone", agent="claude")
+    with pytest.raises(RuntimeError, match=r"Claude Code \(`claude`\) is not on PATH.*npm install"):
+        review.plan_review(cfg, 7, ledger_entry=None)
+
+
 def test_vscode_urls():
-    assert review.vscode_session_url("abc") == "vscode://agents/agent-host-session/copilotcli/abc"
+    from readthrough.agents import Claude, Copilot
+
+    assert Copilot().editor_url("abc") == "vscode://agents/agent-host-session/copilotcli/abc"
+    assert Claude().editor_url("abc") is None
     url = review.vscode_new_session_url("review #1 & more", None)
     assert url.startswith("vscode://agents/new?prompt=review%20%231%20%26%20more")
 
@@ -105,8 +136,18 @@ def _session(root: Path, sid: str, first: str | None, client: str = "github/cli"
     )
 
 
-def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
+def _claude_session(root: Path, sid: str, first: str) -> None:
+    project = root / "projects" / "c--Users-me-src-r"
+    project.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "queue-operation", "sessionId": sid},
+        {"type": "user", "isSidechain": True, "message": {"role": "user", "content": "a subagent's prompt"}},
+        {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": first}]}, "sessionId": sid},
+    ]
+    (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+
+
+def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path):
     root = tmp_path / "copilot"
     cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path)
     primary = review.default_session_id(cfg, 7)
@@ -123,22 +164,31 @@ def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path, monkeyp
     _session(root, "33333333-3333-3333-3333-333333333333", None)
     _session(root, "44444444-4444-4444-4444-444444444444", "unrelated")
     _session(root, "55555555-5555-5555-5555-555555555555", "[readthrough:gitlab/o/r#7] same path, other forge")
+    # A Claude Code session started from a pasted prompt is linked the same way, by its first (non-subagent) message.
+    claude = "66666666-6666-6666-6666-666666666666"
+    _claude_session(tmp_path / "claude", claude, review.pr_marker("github/o/r", 7) + " in Claude Code")
 
-    index = review.session_index(cfg.home)
+    index = review.session_index(cfg)
     assert index.scan(force=True)
     found = index.sessions_for(cfg.slug, 7)
-    assert set(found) == {primary, vs}
+    assert set(found) == {primary, vs, claude}
+    assert found[claude]["agent"] == "claude" and found[vs]["agent"] == "copilot"
     assert "33333333-3333-3333-3333-333333333333" not in json.loads((cfg.home / "session-index.json").read_text())
-    assert set(review.session_index(cfg.home).sessions_for(cfg.slug, 8)) == {"22222222-2222-2222-2222-222222222222"}
+    assert set(review.session_index(cfg).sessions_for(cfg.slug, 8)) == {"22222222-2222-2222-2222-222222222222"}
     assert set(index.sessions_for("gitlab/o/r", 7)) == {"55555555-5555-5555-5555-555555555555"}
 
     sessions = review.pr_sessions(cfg, 7, primary)
-    assert [s["id"] for s in sessions] == [primary, vs]
-    assert [s["where"] for s in sessions] == ["terminal", "VS Code"]
+    assert sessions[0]["id"] == primary and {s["id"] for s in sessions[1:]} == {vs, claude}
+    by_id = {s["id"]: s for s in sessions}
+    assert (by_id[primary]["where"], by_id[vs]["where"], by_id[claude]["where"]) == ("terminal", "VS Code", "terminal")
+    assert (by_id[vs]["agent_label"], by_id[claude]["agent_label"]) == ("Copilot", "Claude Code")
+    assert by_id[primary]["editor_url"] and by_id[claude]["editor_url"] is None
 
-    monkeypatch.setattr(review.shutil, "which", lambda name: f"/bin/{name}")
     launch = review.plan_review(cfg, 7, ledger_entry=None, session_id=vs)
     assert launch.resuming and launch.argv[1] == f"--resume={vs}"
+    # Resuming the Claude Code session resumes it in Claude Code, although Copilot is this machine's default.
+    launch = review.plan_review(cfg, 7, ledger_entry=None, session_id=claude)
+    assert launch.agent == "claude" and launch.argv[1:3] == ["--resume", claude]
     with pytest.raises(ValueError, match="isn't linked"):
         review.plan_review(cfg, 7, ledger_entry=None, session_id="44444444-4444-4444-4444-444444444444")
 

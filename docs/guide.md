@@ -23,7 +23,7 @@ If the live server is running, stop it before reinstalling (`readthrough uninsta
 
 Then run the installers. Each one is optional and can be undone with `readthrough uninstall <same thing>`.
 
-- `readthrough install skill` copies the deep-review instructions into `~/.agents/skills/readthrough`, where both the Copilot CLI and VS Code's agent sessions pick them up. Re-run it after pulling changes; `doctor` warns you when the installed copy is out of date.
+- `readthrough install skill` copies the deep-review instructions into each installed agent's skill directory: `~/.agents/skills/readthrough` for the Copilot CLI and VS Code's agent sessions, `~/.claude/skills/readthrough` for Claude Code (`--agent claude` for just one). Re-run it after pulling changes; `doctor` warns you when an installed copy is out of date.
 - `readthrough install server` starts the live dashboard now and again every time you log in. Open it with `readthrough open`, or bookmark <http://127.0.0.1:8765/>.
 - `readthrough install schedule` creates a Task Scheduler entry that refreshes every repo in the morning and opens the dashboard when something needs you. More on this below.
 - `readthrough install protocol` registers a `readthrough://` link handler for your Windows user, so the buttons in the snapshot version can start a review. The live dashboard doesn't need it. No admin rights are needed; it writes a single key under `HKCU\Software\Classes`.
@@ -127,7 +127,7 @@ I considered signing in through the browser instead, but that would need readthr
 readthrough doctor
 ```
 
-The first half checks the machine: `gh` and which accounts are signed in, the Copilot CLI, the skill, the link handler, the scheduled task, the live server, which study assistant is in use, and which terminal reviews will open in. Then it checks each repo: whether the account can read it, the clone and its remote, where the profile comes from, whether it's onboarded, how old the last build is, what the last build had to do without, whether the map is drifting, and whether the live server's last refresh failed. Anything that's off comes with the command that fixes it.
+The first half checks the machine: `gh` and which accounts are signed in, the review agent and each installed agent's copy of the skill, the link handler, the scheduled task, the live server, which study assistant is in use, and which terminal reviews will open in. Then it checks each repo: whether the account can read it, the clone and its remote, where the profile comes from, whether it's onboarded, how old the last build is, what the last build had to do without, whether the map is drifting, and whether the live server's last refresh failed. Anything that's off comes with the command that fixes it.
 
 `readthrough doctor --bundle` writes a zip to `~/.readthrough/bundles/` with what someone else needs to debug a problem: your config, the recent logs, the versions of readthrough, Python, `gh`, and Copilot, the live server's health, and a summary of each repo's last build. It holds no tokens (those stay in `gh`'s own store), but it does name your repos, accounts, and paths, so look before you share it.
 
@@ -224,7 +224,7 @@ Each row has a status menu: to do, understood, reviewed, commented, approved, ch
 
 This is the part that's meant to slow you down a little.
 
-Press **Start deep review** on a PR (or run `readthrough review 2897`). A new terminal opens with a Copilot CLI session in your clone, already working on that PR. Which terminal is up to you: by default it's the first one found for your platform (Windows Terminal, then a plain console; Terminal.app; `x-terminal-emulator`, then GNOME Terminal), and `terminal = "wt"` in `config.toml` names one, with its options under `[terminals.wt]` (see [Configuration](#configuration)). `readthrough review 2897 --here` runs the session in the terminal you're already in.
+Press **Start deep review** on a PR (or run `readthrough review 2897`). A new terminal opens with an agent session in your clone, already working on that PR. Which agent is up to you: by default the Copilot CLI if it's installed, else Claude Code, and `agent = "claude"` in `config.toml` picks one, with its options under `[agents.claude]`. Which terminal is up to you too: by default it's the first one found for your platform (Windows Terminal, then a plain console; Terminal.app; `x-terminal-emulator`, then GNOME Terminal), and `terminal = "wt"` in `config.toml` names one, with its options under `[terminals.wt]` (see [Configuration](#configuration)). `readthrough review 2897 --here` runs the session in the terminal you're already in.
 
 ![A PR's detail panel with the review buttons](img/review.png)
 
@@ -237,13 +237,13 @@ The session follows a fixed routine:
 5. You list your concerns. Only then does it show its own, side by side, with file and line evidence so you can argue. If something is in dispute, it can run the tests in the worktree, with the test command from the profile, to settle it.
 6. It drafts review comments from the points you agreed on, in your voice, following the profile's review guidance. It posts nothing until you approve the exact text, and then it records the outcome in the ledger.
 
-Each PR gets its own session, and the session ID comes from the PR, so pressing the button again later resumes the same conversation instead of starting over. A small dot next to a PR means a session already exists. On the live dashboard, the dot turns green and pulses while a session is open in a terminal or in VS Code. If you want a clean slate, run `readthrough review 2897 --fresh`.
+Each PR gets its own session, and the session ID comes from the PR, so pressing the button again later resumes the same conversation instead of starting over, in whichever agent it was started in. A small dot next to a PR means a session already exists. On the live dashboard, the dot turns green and pulses while a Copilot session is open in a terminal or in VS Code; Claude Code leaves no trace of an open session, so for its sessions the panel shows when they were last written instead of claiming they're closed. If you want a clean slate, run `readthrough review 2897 --fresh`.
 
-**Open in VS Code** uses VS Code's agent links (VS Code 1.138 or newer). For a PR that already has a session, it opens the latest one in the Agents window. These are the same Copilot sessions, so you can start in the terminal and continue in the editor. For a new PR, it opens a fresh agent session with the prompt filled in, and you press send. VS Code deliberately never sends a message from a link.
+**Open in VS Code** uses VS Code's agent links (VS Code 1.138 or newer). For a PR that already has a Copilot session, it opens the latest one in the Agents window. These are the same Copilot sessions, so you can start in the terminal and continue in the editor. For a new PR, it opens a fresh agent session with the prompt filled in, and you press send. VS Code deliberately never sends a message from a link.
 
-Sessions are linked to their PR wherever they started. Every prompt readthrough writes, including the one behind **Copy prompt**, begins with a marker like `[readthrough:pallets/click#2897]`, and the server links any Copilot session whose first message carries one to that PR. So a review you start from VS Code, or by pasting the prompt somewhere, shows up in the PR panel next to the terminal one. The panel lists every linked session, where it ran, and when it was last active, and can resume any of them in a terminal or open it in VS Code. The index of linked sessions is kept in `~/.readthrough/session-index.json`; the first scan reads every session you have, and later scans only read new ones.
+Sessions are linked to their PR wherever they started. Every prompt readthrough writes, including the one behind **Copy prompt**, begins with a marker like `[readthrough:github/pallets/click#2897]`, and the server links any session of any installed agent whose first message carries one to that PR. So a review you start from VS Code, or by pasting the prompt into Claude Code, shows up in the PR panel next to the terminal one. The panel lists every linked session, which agent and where it ran, and when it was last active, and can resume any of them in a terminal (in its own agent) or open a Copilot one in VS Code. The index of linked sessions is kept in `~/.readthrough/session-index.json`; the first scan reads every session you have, and later scans only read new ones.
 
-**Copy prompt** is the fallback for anywhere else you run Copilot.
+**Copy prompt** is the fallback for anywhere else you run an agent.
 
 To burn down a whole session, ask Copilot for "burn down session 2 of OWNER/NAME". It gives you a quick overview of how the PRs in that session relate, then runs the routine for each one.
 
@@ -318,7 +318,7 @@ On macOS or Linux, the install commands print a crontab line, or tell you to run
 
 Onboarding writes the config for you. To change it, use the repo's settings page (the gear button in the dashboard's header, or <http://127.0.0.1:8765/setup>), or `readthrough config --edit` to open the file; `readthrough config` shows the effective values.
 
-The settings page covers the gh account, clone, and remote; session length, PR limit, and study model; per-author overrides (pick from the table of recent authors); the profile (edit your local copy, **Customize** a shared or in-repo profile into a local copy, or **Propose upstream**, which opens the forge's new-file page for `readthrough.toml` in its dot-directory with your profile filled in, or copies the profile for you where the forge has no such page); the default repo and refresh interval; and removing a repo. A few things stay command-line only and are shown read-only there: `copilot_args` (passed straight to a program the server launches), the `profile` path override (makes the server read an arbitrary file), the terminal and assistant choices, and the port (changing it from the page you're on would break that page). If the file changed since the page loaded it, saving asks you to reload rather than overwrite.
+The settings page covers the gh account, clone, and remote; session length, PR limit, and study model; per-author overrides (pick from the table of recent authors); the profile (edit your local copy, **Customize** a shared or in-repo profile into a local copy, or **Propose upstream**, which opens the forge's new-file page for `readthrough.toml` in its dot-directory with your profile filled in, or copies the profile for you where the forge has no such page); the default repo and refresh interval; and removing a repo. A few things stay command-line only and are shown read-only there: `agent_args` (passed straight to a program the server launches), the `profile` path override (makes the server read an arbitrary file), the terminal, agent, and assistant choices, and the port (changing it from the page you're on would break that page). If the file changed since the page loaded it, saving asks you to reload rather than overwrite.
 
 The file lives at `~/.readthrough/config.toml`:
 
@@ -328,6 +328,10 @@ port = 8765                        # live server
 refresh_minutes = 10               # live server refresh interval
 terminal = "auto"                  # where deep reviews open: auto, wt, console, terminal-app, x-terminal-emulator, gnome-terminal
 assistant = "auto"                 # who answers in the Study tab: auto, copilot, rules
+agent = "auto"                     # which agent runs deep reviews: auto, copilot, claude
+
+[agents.claude]                    # options for one review agent
+extra_args = ["--model", "opus"]
 
 [terminals.wt]                     # options for one terminal launcher
 profile = "PowerShell"
@@ -348,7 +352,7 @@ onboarded = "2026-10-03T03:10:46+00:00"
 name = "my-org/internal-service"
 account = "me_corp"
 internal_authors = ["contractor-login"]
-copilot_args = ["--model", "claude-opus-4.8"]
+agent_args = ["--model", "claude-opus-4.8"]
 ```
 
 `terminal` and `assistant` are choices for the whole machine, and so are the `[terminals.*]`, `[assistants.*]`, and `[profile_sources.*]` option tables. Each name and each option is checked when the file is read: a typo fails with a suggestion rather than being ignored, and relative paths in options are taken from the config file's directory.
@@ -366,7 +370,7 @@ Per-repo keys, which can also go under `[defaults]`:
 | `limit` | The most open PRs to fetch (default 100). |
 | `internal_authors`, `external_authors` | Logins to force into a kind, on top of the profile's lists. |
 | `study_model` | The model for the study assistant and Copilot onboarding. |
-| `copilot_args` | Extra arguments for `copilot` in deep reviews. For example, `["--model", "claude-opus-4.8", "--remote"]` picks a model and lets you continue the session from GitHub on your phone. |
+| `agent_args` | Extra arguments for the review agent, for this repo. For example, `["--model", "claude-opus-4.8", "--remote"]` makes Copilot pick a model and lets you continue the session from GitHub on your phone. |
 
 Paths under your home directory are written as `~/...`, so the file works on another machine or account. To keep it somewhere else, in a dotfiles repo for instance, point `READTHROUGH_CONFIG` at it; the data still goes to `~/.readthrough` (or `READTHROUGH_HOME`). The `schema = 2` line at the top lets a future version recognize the file's layout. Leave it as is.
 

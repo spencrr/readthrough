@@ -86,7 +86,7 @@ def test_settings_are_validated_and_version_checked(service):
 
     with pytest.raises(Conflict):
         svc.save_settings({"repo": "o/app", "version": version, "values": {"limit": 5}})
-    for bad in ({"copilot_args": ["--allow-all-tools"]}, {"profile": "C:/Windows/win.ini"}, {"session_minutes": 0},
+    for bad in ({"agent_args": ["--allow-all-tools"]}, {"profile": "C:/Windows/win.ini"}, {"session_minutes": 0},
                 {"internal_authors": ["not a login!"]}, {"account": "stranger"}, {"study_model": "x; rm -rf"}):  # fmt: skip
         with pytest.raises(SetupError):
             svc.save_settings({"repo": "o/app", "version": out["version"], "values": bad})
