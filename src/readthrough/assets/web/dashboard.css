@@ -156,6 +156,7 @@ body.drawer-open #drawer{transform:none}
 .step{display:inline-flex;align-items:center;gap:5px;color:var(--mut)}.step.done{color:var(--good)}.step.done .muted{color:var(--mut)}
 .tag{font-size:11px;padding:0 7px;border-radius:999px;background:var(--subtle);border:1px solid var(--line);color:var(--mut);margin-left:4px}
 .event{font-size:13px;color:var(--mut);padding:2px 4px}.event .md{display:inline}.event .md p{display:inline}
+.event.warn{color:var(--warn)}.event.warn code{font-size:12px;color:var(--mut)}
 .qcard.open{border-left-color:var(--waiting);box-shadow:0 0 0 1px color-mix(in srgb,var(--waiting) 35%,transparent)}
 .pin{font:inherit;font-size:11.5px;color:var(--mut);background:none;border:0;cursor:pointer;padding:0 4px;margin-left:6px}.pin:hover{color:var(--acc)}.pin.on{color:var(--acc);cursor:default}
 .watch{background:var(--inset);border-radius:8px;padding:6px 10px;margin:4px 0 10px;font-size:13px}.watch summary{cursor:pointer;font-weight:500}.watch ul{margin:6px 0 2px;padding-left:18px}.watch li{margin:3px 0}

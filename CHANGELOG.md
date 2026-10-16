@@ -30,6 +30,13 @@
   panel says which agent each one ran in. `readthrough install skill` installs the skill for every agent
   found (`--agent` for one). Claude Code leaves no trace of an open session, so for its sessions the panel
   shows when they were last written rather than claiming they're closed.
+- A study turn that ends in an error is written to the study log as a `failure` entry (by `readthrough`, naming
+  the assistant and the error), so a "Quiz me" with no reply is never read as one you abandoned. The Study tab
+  shows it as a line in the transcript.
+- The Study tab shows your "what I missed" reflections and offers a **What I missed** button after a verdict
+  that wasn't *correct*; before, reflections could be written only through the API and appeared only in the
+  brief. The transcript opens at its end, where the latest exchange and the composer are, and follows new
+  entries while you're there.
 
 ### Changed
 

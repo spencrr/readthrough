@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import PROFILE_PATH, REPO, SLUG
 
+from readthrough import study
 from readthrough.build import build
 from readthrough.config import Config
 from readthrough.serve import Dashboard, DashboardServer
@@ -53,6 +54,7 @@ def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
     cfg.local_profile_path.parent.mkdir(parents=True)
     cfg.local_profile_path.write_text(PROFILE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     build(cfg, with_diffs=False)
+    _seed_study_log(cfg)
     dashboard = Dashboard(cfg, with_diffs=False)
     assert dashboard.load()
     httpd = DashboardServer([dashboard], 0)
@@ -61,6 +63,17 @@ def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
     httpd.server_close()
+
+
+def _seed_study_log(cfg: Config) -> None:
+    """#2 has been studied a little: a prediction, a turn that failed, and a question answered only partly."""
+    study.append(cfg, 2, "prediction", by="you", text="Touches the transport only.")
+    study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
+    study.append(cfg, 2, "failure", by=study.TOOL, assistant="copilot", text="git merge-base failed: shallow clone")
+    study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
+    study.append(cfg, 2, "question", by="copilot", question="Why does the retry **stop** at 3?", focus="intent")
+    study.append(cfg, 2, "answer", by="you", qid="Q1", text="Because the limit says so.")
+    study.append(cfg, 2, "assessment", by="copilot", qid="Q1", verdict="partial", feedback="Name the limit.")
 
 
 @pytest.fixture
@@ -152,3 +165,26 @@ def test_pages_have_no_unfilled_placeholders(page):
     for path in (f"/r/{SLUG}/", "/setup"):
         page.goto(page.base + path)
         assert "/*__READTHROUGH_" not in page.content()
+
+
+def test_study_tab_shows_failed_turns_and_takes_a_reflection(page):
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    page.click('#v-table [data-open="2"]')
+    page.wait_for_selector("body.drawer-open")
+    page.click('[data-dtab="study"]')
+    page.wait_for_selector(".transcript")
+    text = page.inner_text(".transcript")
+    assert "Copilot didn't answer: git merge-base failed: shallow clone" in text, "a failed turn is in the record"
+    assert "partial" in text
+    # The transcript opens at its end, where the latest exchange and the composer are.
+    assert page.evaluate(
+        "(() => { const b = document.querySelector('#drawer .dbody'); return b.scrollHeight - b.scrollTop - b.clientHeight < 80; })()"
+    )
+    page.fill("#drawer textarea", "I never looked up the limit.")
+    page.click('[data-study-add="reflection"]')
+    page.wait_for_selector(".bubble.you .tag:has-text('what I missed on Q1')")
+    assert "I never looked up the limit." in page.inner_text(".transcript")
+    assert page.evaluate("document.querySelector('#drawer textarea').value") == ""
+    assert page.query_selector('[data-study-add="reflection"]') is not None, "another note is still possible"
+    assert page.errors == []

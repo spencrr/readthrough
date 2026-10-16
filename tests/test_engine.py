@@ -140,11 +140,17 @@ def test_turn_reports_errors_and_clears_busy(cfg):
     events = []
     engine = _engine(cfg, events, RecordingAssistant(fail=RuntimeError("no session")))
     engine._busy.add(7)
+    engine._record_and_prompt(7, "quiz", "", None)  # the request is logged before the turn runs...
 
     asyncio.run(engine._turn(assistants.Turn(7, "quiz", "", None, "quiz")))
 
     assert events[-1] == ("study", {"pr": 7, "type": "error", "message": "no session"})
     assert 7 not in engine._busy
+    request, failure = study.load(cfg, 7)[-2:]
+    assert request["text"] == "Quiz me."
+    assert failure["kind"] == "failure", "...so the log must also say it went unanswered, and by whom"
+    assert failure["by"] == "readthrough"
+    assert (failure["assistant"], failure["text"]) == ("rules", "no session")
 
 
 def test_stop_stops_the_assistant_and_the_loop(cfg):

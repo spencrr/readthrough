@@ -55,8 +55,9 @@ would fail there except for the browser tests, which skip when no Chromium-famil
   operational numbers are `[tuning.*]` with defaults and documentation in `assets/defaults.toml` (a test keeps
   the two in step); safety limits are constants in `limits.py` and change only by a deliberate commit.
 - **The study log is append-only and truthful about authorship.** Every entry's `by` is who wrote it (`you`,
-  `copilot`, `rules`). Only Copilot writes verdicts; the rules assistant never grades. Answers are tagged with
-  the aids that preceded them (`hint`, `brief`) from the log itself, never asserted.
+  `copilot`, `rules`; `readthrough` only for a `failure`, the record that a turn ended in an error). Only
+  Copilot writes verdicts; the rules assistant never grades. Answers are tagged with the aids that preceded
+  them (`hint`, `brief`) from the log itself, never asserted.
 - **The pages are one served file.** `assets/web/` holds separate `.html`, `.css`, `.js` for editing;
   `build.page_source` inlines them, every script carries a per-render nonce, and the CSP runs nothing else.
   No inline `onclick=`; third-party HTML goes through DOMPurify. Vendored JS lives in `assets/vendor/` with

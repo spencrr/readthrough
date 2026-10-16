@@ -28,6 +28,7 @@ SEVERITIES = ("blocker", "major", "minor", "question")
 
 ASSISTANTS = ("copilot", "rules")
 AIDS = ("hint", "brief")  # what can come before an answer and inform it
+TOOL = "readthrough"  # the engine itself, which only ever records that an assistant failed to answer
 
 # kind -> (who may write it, required fields)
 KINDS: dict[str, tuple[set[str], tuple[str, ...]]] = {
@@ -41,6 +42,8 @@ KINDS: dict[str, tuple[set[str], tuple[str, ...]]] = {
     "question": (set(ASSISTANTS), ("question",)),
     "assessment": ({"copilot"}, ("qid", "verdict", "feedback")),
     "teachback_assessment": ({"copilot"}, ("verdict", "feedback")),
+    # A turn that ended in an error, so a request with no reply is never read as one you abandoned.
+    "failure": ({TOOL}, ("assistant", "text")),
 }
 
 _lock = threading.Lock()

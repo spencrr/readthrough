@@ -500,11 +500,14 @@ function closeDrawer(){
   sessionStorage.removeItem(STORE + ":panel");
   if (cy) setTimeout(() => cy.resize(), 0);
 }
-function renderDrawer({resetScroll = false} = {}){
+// Whether the drawer body is scrolled to (or near) its end, so new study entries keep it there, like any chat.
+const nearEnd = el => !!el && el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+function renderDrawer({resetScroll = false, follow = false} = {}){
   const n = state.sel, p = byNum[n];
   if (!p) return closeDrawer();
   sessionStorage.setItem(STORE + ":panel", JSON.stringify({sel: n, dtab: state.dtab}));
   const body = drawerBody();
+  const toEnd = state.dtab === "study" && (resetScroll || follow || nearEnd(body));
   const scroll = resetScroll || !body ? 0 : body.scrollTop;
   const active = document.activeElement?.dataset?.draft;
   const caret = active ? document.activeElement.selectionStart : null;
@@ -518,7 +521,8 @@ function renderDrawer({resetScroll = false} = {}){
     </div><div class="dbody">${state.dtab === "study" ? studyTab(n) : state.dtab === "brief" ? briefTab(n) : overviewTab(n)}</div>`;
   document.querySelectorAll("#drawer [data-draft]").forEach(el => { el.value = state.drafts[`${n}:${el.dataset.draft}`] || ""; });
   if (active) { const el = document.querySelector(`#drawer [data-draft="${CSS.escape(active)}"]`); if (el) { el.focus(); if (caret != null) el.setSelectionRange(caret, caret); } }
-  drawerBody().scrollTop = scroll;
+  const fresh = drawerBody();
+  fresh.scrollTop = toEnd ? fresh.scrollHeight : scroll;
 }
 function ciSection(p){
   const c = p.ci_checks; if (!c) return "";
@@ -655,8 +659,10 @@ function studyTab(n){
         return `<div class="bubble ${e.by}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${md(e.text)}</div></div>`;
       case "question": return qcard(e);
       case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${md(e.text)}</div></div>`;
+      case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${md(e.text)}</div></div>`;
       case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${e.verdict}">${e.verdict}</span></div><div class="md">${md(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
       case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "copilot" ? "Copilot added to the brief" : "Note"}: <span class="md">${md(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
+      case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${e.assistant === "copilot" ? "Copilot" : "The assistant"} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
       case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${e.line ?? "?"}</code> ` : ""}${esc(e.summary)} <span class="muted">(${e.by})</span></div>`;
       default: return "";
     }
@@ -669,10 +675,13 @@ function studyTab(n){
   const draft = mode === "answer" ? `answer:${openQ.qid}` : mode === "predict" ? "prediction" : "chat";
   const placeholder = {predict: "Before reading the diff: which components will it touch, what's the riskiest part, and what test would you want to see?",
     answer: `Your answer to ${openQ?.qid}. Think it through; it's fine to be wrong.`, chat: "Ask about the change, argue a point, or write your teach-back…"}[mode];
+  // The last verdict that wasn't "correct" is what a "what I missed" note is about; a teach-back's has no qid.
+  const missed = [...entries].reverse().find(e => (e.kind === "assessment" || e.kind === "teachback_assessment") && e.verdict !== "correct");
+  const reflect = missed ? `<button class="btn" data-study-add="reflection" data-qid="${esc(missed.qid || "")}" title="Save what's in the box as what you missed${missed.qid ? ` on ${esc(missed.qid)}` : ""}, in your own words. It goes in the brief.">What I missed</button>` : "";
   const buttons = {
     predict: `<button class="btn primary" data-study-add="prediction">Save prediction</button><button class="btn" data-skip-predict title="Go straight to the quiz or a briefing. The log notes that you skipped.">Skip</button>`,
     answer: `<button class="btn primary" data-ask="answer" data-qid="${esc(openQ?.qid)}" ${dis}>Submit answer</button><button class="btn" data-ask="hint" data-qid="${esc(openQ?.qid)}" ${dis}>${icon("lightbulb", "ico sm")}Hint</button>`,
-    chat: `<button class="btn primary" data-ask="chat" ${dis} title="Send what's in the box">Send</button><button class="btn" data-ask="quiz" ${dis} title="Copilot asks one question; you answer here">${icon("graduation-cap", "ico sm")}${entries.some(e => e.kind === "question") ? "Next question" : "Quiz me"}</button><button class="btn" data-ask="brief" ${dis} title="A short summary and what to watch for. The log notes that you asked.">${icon("lightbulb", "ico sm")}Brief me</button><button class="btn" data-ask="teachback" ${dis} title="Copilot assesses what's in the box as your summary of the whole PR">Teach back</button>`,
+    chat: `<button class="btn primary" data-ask="chat" ${dis} title="Send what's in the box">Send</button><button class="btn" data-ask="quiz" ${dis} title="Copilot asks one question; you answer here">${icon("graduation-cap", "ico sm")}${entries.some(e => e.kind === "question") ? "Next question" : "Quiz me"}</button><button class="btn" data-ask="brief" ${dis} title="A short summary and what to watch for. The log notes that you asked.">${icon("lightbulb", "ico sm")}Brief me</button><button class="btn" data-ask="teachback" ${dis} title="Copilot assesses what's in the box as your summary of the whole PR">Teach back</button>${reflect}`,
   }[mode];
   return `${stepper}
     ${ai ? "" : `<div class="banner warn">${esc(st.engine.reason)}</div>`}
@@ -688,10 +697,11 @@ const pendingTools = pend => pend.tools.length ? "used " + [...new Set(pend.tool
 async function studyPost(n, body){
   try { await api(`/api/study/${n}`, body); loadStudy(n); } catch (err) { toast(err.message); }
 }
-async function studyAdd(n, kind){
-  const key = `${n}:${kind}`, text = (state.drafts[key] || "").trim();
+async function studyAdd(n, kind, qid){
+  // A reflection is written in the chat box; the other kinds each have a box of their own.
+  const key = `${n}:${kind === "reflection" ? "chat" : kind}`, text = (state.drafts[key] || "").trim();
   if (!text) return toast("Write something first");
-  try { await api(`/api/study/${n}`, {kind, text}); state.drafts[key] = ""; saveDrafts(); renderDrawer(); }
+  try { await api(`/api/study/${n}`, {kind, text, ...(qid ? {qid} : {})}); state.drafts[key] = ""; saveDrafts(); renderDrawer({follow: true}); }
   catch (err) { toast(err.message); }
 }
 async function studyAsk(n, action, qid){
@@ -702,7 +712,7 @@ async function studyAsk(n, action, qid){
     await api(`/api/study/${n}/ask`, {action, text, qid});
     if (text) { state.drafts[key] = ""; saveDrafts(); }
     study[n].pending = {text: "", tools: []};
-    renderDrawer();
+    renderDrawer({follow: true});
   } catch (err) { toast(err.message); }
 }
 function onStudyEvent(ev){
@@ -714,7 +724,12 @@ function onStudyEvent(ev){
   else if (ev.type === "delta") {
     st.pending ||= {text: "", tools: []}; st.pending.text += ev.text;
     const el = $("pending-text");
-    if (here && el) { el.innerHTML = md(st.pending.text); $("pending-tools").innerHTML = pendingTools(st.pending); return; }
+    if (here && el) {
+      const body = drawerBody(), pinned = nearEnd(body);
+      el.innerHTML = md(st.pending.text); $("pending-tools").innerHTML = pendingTools(st.pending);
+      if (pinned) body.scrollTop = body.scrollHeight;
+      return;
+    }
   } else if (ev.type === "tool") {
     st.pending ||= {text: "", tools: []}; st.pending.tools.push(ev.name);
     if (here && $("pending-tools")) { $("pending-tools").innerHTML = pendingTools(st.pending); return; }
@@ -747,7 +762,7 @@ document.addEventListener("click", e => {
   if (t.hasAttribute("data-refresh")) return api("/api/refresh").then(() => toast("Refreshing…")).catch(err => toast(err.message));
   if (t.dataset.dtab) { state.dtab = t.dataset.dtab; return renderDrawer({resetScroll: true}); }
   if (t.dataset.ask) return studyAsk(state.sel, t.dataset.ask, t.dataset.qid);
-  if (t.dataset.studyAdd) return studyAdd(state.sel, t.dataset.studyAdd);
+  if (t.dataset.studyAdd) return studyAdd(state.sel, t.dataset.studyAdd, t.dataset.qid || null);
   if (t.hasAttribute("data-skip-predict")) return studyPost(state.sel, {kind: "prediction", skipped: true});
   if (t.dataset.pin) { const e = study[state.sel]?.entries.find(x => x.id === +t.dataset.pin); if (e) return studyPost(state.sel, {kind: "note", text: e.text || e.feedback, pinned: e.id}); return; }
   if (t.dataset.tab) { state.tab = t.dataset.tab; return render(); }

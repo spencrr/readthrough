@@ -3,7 +3,7 @@
 The engine records what the learner did (an answer, a teach-back, a request for a hint), marks the PR
 busy, and hands the turn to the configured assistant (``assistants.py``). Whatever the assistant appends
 is broadcast to open pages as it happens. The engine itself never writes on the assistant's behalf, so
-``by`` in the log is always truthful.
+``by`` in the log is always truthful; the one entry it writes in its own name records a turn that failed.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from readthrough import assistants, study
+from readthrough import assistants, process, study
 from readthrough.config import Config
 
 log = logging.getLogger(__name__)
@@ -150,7 +150,10 @@ class StudyEngine:
             self.broadcast("study", {"pr": turn.number, "type": "done"})
         except Exception as exc:
             log.exception("Study turn for #%d failed", turn.number)
-            self.broadcast("study", {"pr": turn.number, "type": "error", "message": str(exc)[:500]})
+            message = process.redact(str(exc))[:500]
+            # Logged as well as broadcast: the request above it would otherwise read as one that was ignored.
+            self.append(turn.number, "failure", by=study.TOOL, assistant=self.resolved.name, text=message)
+            self.broadcast("study", {"pr": turn.number, "type": "error", "message": message})
         finally:
             self._busy.discard(turn.number)
 
