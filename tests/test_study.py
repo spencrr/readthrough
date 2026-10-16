@@ -141,32 +141,33 @@ def test_copilot_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
             CopilotAssistant._safe_rel(tmp_path, bad)
 
 
-def test_study_session_id_is_stable_and_distinct_from_review():
+def test_study_session_id_is_stable_and_distinct_from_review(tmp_path: Path):
     from readthrough.review import default_session_id
 
-    assert study_session_id("o/r", 1) == study_session_id("o/r", 1)
-    assert study_session_id("o/r", 1) != default_session_id("o/r", 1)
+    cfg = Config(home=tmp_path, repo="o/r")
+    assert study_session_id(cfg, 1) == study_session_id(cfg, 1)
+    assert study_session_id(cfg, 1) != default_session_id(cfg, 1)
 
 
 @pytest.mark.parametrize(
-    ("login", "association", "typename", "expected"),
+    ("login", "association", "bot", "expected"),
     [
-        ("romanlutz", "MEMBER", "User", "internal"),
-        ("someone", "COLLABORATOR", "User", "internal"),
-        ("u7k4rs6", "CONTRIBUTOR", "User", "external"),
-        ("newbie", "FIRST_TIME_CONTRIBUTOR", "User", "first-time"),
-        ("dependabot", "CONTRIBUTOR", "Bot", "bot"),
-        ("renovate[bot]", "NONE", "User", "bot"),
+        ("romanlutz", "MEMBER", False, "internal"),
+        ("someone", "COLLABORATOR", False, "internal"),
+        ("u7k4rs6", "CONTRIBUTOR", False, "external"),
+        ("newbie", "FIRST_TIME_CONTRIBUTOR", False, "first-time"),
+        ("dependabot", "CONTRIBUTOR", True, "bot"),
+        ("renovate[bot]", "NONE", False, "bot"),
     ],
 )
-def test_author_kind(login, association, typename, expected):
-    assert author_kind(login, association, typename, Authors(kinds=dict(DEFAULT_KINDS))) == expected
+def test_author_kind(login, association, bot, expected):
+    assert author_kind(login, association, Authors(kinds=dict(DEFAULT_KINDS)), bot=bot) == expected
 
 
 def test_author_kind_overrides():
     authors = Authors(internal=["contractor"], external=["alum"], kinds=dict(DEFAULT_KINDS))
-    assert author_kind("Contractor", "CONTRIBUTOR", "User", authors) == "internal"
-    assert author_kind("alum", "MEMBER", "User", authors) == "external"
+    assert author_kind("Contractor", "CONTRIBUTOR", authors) == "internal"
+    assert author_kind("alum", "MEMBER", authors) == "external"
 
 
 def test_handoff_line_says_where_understanding_is_solid(cfg):

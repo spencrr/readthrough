@@ -201,14 +201,21 @@ def test_a_missing_explicit_profile_fails_loudly(tmp_path: Path):
         profile_sources(cfg)
 
 
-def test_repo_source_uses_github_only_when_given(tmp_path: Path):
-    class GitHub:
-        def raw_or_none(self, path):
-            return 'schema = 1\nrepo = "octo/courier"\n[[layers]]\nid = "a"\nlabel = "A"\n[[components]]\nid = "c"\nlabel = "C"\nlayer = "a"\npaths = ["**"]\n'
+def test_repo_source_uses_the_forge_only_when_given(tmp_path: Path):
+    class Forge:
+        config_dir = ".github"
+
+        def read_files(self, paths):
+            assert paths == [".github/readthrough.toml", ".readthrough.toml", "readthrough.toml"]
+            return {
+                paths[
+                    0
+                ]: 'schema = 1\nrepo = "octo/courier"\n[[layers]]\nid = "a"\nlabel = "A"\n[[components]]\nid = "c"\nlabel = "C"\nlayer = "a"\npaths = ["**"]\n'
+            }
 
     cfg = _cfg(tmp_path)
     assert profile_sources(cfg) == []
-    sources = profile_sources(cfg, GitHub())
+    sources = profile_sources(cfg, Forge())
     assert [s.kind for s in sources] == ["repo"] and sources[0].path is None
     assert sources[0].load().repo == "octo/courier"
 
@@ -217,11 +224,16 @@ def test_shared_profile_path_matches_case_insensitively(tmp_path: Path):
     (tmp_path / "Octo").mkdir()
     written = tmp_path / "Octo" / "Courier.toml"
     written.write_text("", encoding="utf-8")
-    found = shared_profile_path(tmp_path, "octo/courier")
+    found = shared_profile_path(tmp_path, "github/octo/courier")
     # On a case-insensitive filesystem (macOS, Windows) the exact-name probe may answer first; either way it's that file.
     assert found is not None and found.samefile(written)
-    assert shared_profile_path(tmp_path, "octo/other") is None
-    assert shared_profile_path(tmp_path / "missing", "octo/courier") is None
+    assert shared_profile_path(tmp_path, "github/octo/other") is None
+    assert shared_profile_path(tmp_path / "missing", "github/octo/courier") is None
+    (tmp_path / "gitlab" / "grp").mkdir(parents=True)
+    nested = tmp_path / "gitlab" / "grp" / "proj.toml"
+    nested.write_text("", encoding="utf-8")
+    assert shared_profile_path(tmp_path, "gitlab/grp/proj") == nested
+    assert shared_profile_path(tmp_path, "gitlab/octo/courier") is None, "the GitHub layout is only for GitHub repos"
 
 
 # ---------------------------------------------------------------- config keys

@@ -87,8 +87,8 @@ def _components():
 
 
 @pytest.fixture
-def harness(cfg, make_pr) -> Harness:
-    item = analyze(make_pr(number=7), profile=PROFILE, viewer="me", instructions=[], diff_text=DIFF, now=NOW)
+def harness(cfg, make_pull) -> Harness:
+    item = analyze(make_pull(number=7), profile=PROFILE, viewer="me", instructions=[], diff_text=DIFF, now=NOW)
     return Harness(cfg, [item], _components())
 
 

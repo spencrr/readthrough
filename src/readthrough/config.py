@@ -4,7 +4,7 @@ Layout (``READTHROUGH_HOME``, default ``~/.readthrough``)::
 
     config.toml                    global settings and one [[repos]] entry per onboarded repo
     readthrough.log
-    repos/<owner>/<name>/          everything for one repo
+    repos/<forge>/<owner>/<name>/  everything for one repo (GitLab groups and ADO projects add segments)
         profile.toml               local architecture profile (from onboarding), if any
         data.json  index.html  seen.json  ledger.json
         briefs/  cache/  study/  worktrees/
@@ -28,8 +28,7 @@ from readthrough.registry import RegistryError
 from readthrough.tuning import Tuning, TuningError, default_tuning, load_tuning
 
 DEFAULT_HOME = Path(os.environ.get("READTHROUGH_HOME", Path.home() / ".readthrough"))
-CONFIG_SCHEMA = 1
-REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
+CONFIG_SCHEMA = 2  # 2: repos name their forge, and data lives under repos/<forge>/...
 AUTO = "auto"
 
 
@@ -43,6 +42,7 @@ class Config:
 
     home: Path
     repo: str
+    forge: str = "github"
     clone: Path | None = None
     remote: str | None = None
     account: str | None = None
@@ -64,11 +64,16 @@ class Config:
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
+    forge_options: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def slug(self) -> str:
+        """``<forge>/<repo path>``: the key for URLs and the data directory."""
+        return f"{self.forge}/{self.repo}"
 
     @property
     def repo_dir(self) -> Path:
-        owner, name = self.repo.split("/")
-        return self.home / "repos" / owner / name
+        return self.home.joinpath("repos", *self.slug.split("/"))
 
     @property
     def briefs_dir(self) -> Path:
@@ -115,13 +120,27 @@ class Config:
         return self.home / "config.toml"
 
 
-MACHINE_KEYS = {"terminal", "assistant", "terminal_options", "assistant_options", "profile_source_options"}
+MACHINE_KEYS = {
+    "terminal",
+    "assistant",
+    "terminal_options",
+    "assistant_options",
+    "profile_source_options",
+    "forge_options",
+}
 REPO_KEYS = ({f.name for f in fields(Config)} - {"home", "repo", "port", "refresh_minutes"} - MACHINE_KEYS) | {"name"}
 GLOBAL_KEYS = {
     "schema", "default_repo", "port", "refresh_minutes", "defaults", "tuning", "repos",
-    "terminal", "assistant", "terminals", "assistants", "profile_sources",
+    "terminal", "assistant", "terminals", "assistants", "profile_sources", "forges",
 }  # fmt: skip
 PATH_KEYS = {"clone", "profile"}
+# config.toml table -> the Settings attribute holding its validated per-plugin options.
+PLUGIN_TABLES = {
+    "terminals": "terminal_options",
+    "assistants": "assistant_options",
+    "profile_sources": "profile_source_options",
+    "forges": "forge_options",
+}
 
 
 @dataclass
@@ -139,6 +158,8 @@ class Settings:
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
+    forge_options: dict[str, Any] = field(default_factory=dict)
+    plugin_raw: dict[str, dict[str, Any]] = field(default_factory=dict)  # the option tables as written, for saving
 
     @property
     def path(self) -> Path:
@@ -154,24 +175,51 @@ class Settings:
         return self.home / "readthrough.log"
 
     def names(self) -> list[str]:
-        return [r["name"] for r in self.repos]
+        """Each repo as the user refers to it: the plain name when that's unambiguous, else ``forge/name``."""
+        counts: dict[str, int] = {}
+        for r in self.repos:
+            counts[r["name"].lower()] = counts.get(r["name"].lower(), 0) + 1
+        return [r["name"] if counts[r["name"].lower()] == 1 else _slug(r) for r in self.repos]
 
-    def entry(self, repo: str) -> dict[str, Any] | None:
-        return next((r for r in self.repos if r["name"].lower() == repo.lower()), None)
+    def display_name(self, repo: str) -> str:
+        """How to refer to a configured repo in messages and ``default_repo``: see ``names()``."""
+        entry = self.entry(repo)
+        if entry is None:
+            raise ConfigError(f"{repo} isn't configured")
+        return self.names()[self.repos.index(entry)]
 
-    def config_for(self, repo: str | None = None) -> Config:
-        """The per-repo view. With no repo given, the default repo, or the only one."""
+    def entry(self, repo: str, forge: str | None = None) -> dict[str, Any] | None:
+        """The entry ``repo`` names: a ``forge/owner/name`` slug, or a plain name (with ``forge`` to disambiguate)."""
+        want = repo.lower()
+        by_slug = [r for r in self.repos if _slug(r).lower() == want]
+        if by_slug:
+            return by_slug[0]
+        by_name = [r for r in self.repos if r["name"].lower() == want and (forge is None or _forge_of(r) == forge)]
+        if len(by_name) > 1:
+            raise ConfigError(
+                f"{repo} is onboarded on several forges ({', '.join(_slug(r) for r in by_name)}); name one"
+            )
+        return by_name[0] if by_name else None
+
+    def config_for(self, repo: str | None = None, *, forge: str | None = None) -> Config:
+        """The per-repo view. With no repo given, the default repo, or the only one.
+
+        A repo that isn't configured yet gets a config too (onboarding starts that way); ``forge`` says
+        which platform it's on, and the name is checked against that platform's shape.
+        """
         if repo is None:
             repo = self.default_repo or (self.repos[0]["name"] if len(self.repos) == 1 else None)
             if repo is None:
                 if not self.repos:
                     raise ConfigError("No repos yet. Onboard one with `readthrough onboard owner/name`.")
                 raise ConfigError(f"Several repos are configured ({', '.join(self.names())}); pick one with --repo.")
-        entry = self.entry(repo)
+        entry = self.entry(repo, forge)
         if entry is None:
-            if not REPO_RE.match(repo):
-                raise ConfigError(f"{repo!r} isn't owner/name")
-            entry = {"name": repo}
+            forge_name, name = _split_slug(repo, forge)
+            problem = _validate_repo(forge_name, name)
+            if problem:
+                raise ConfigError(problem)
+            entry = {"name": name, "forge": forge_name}
         merged = {**self.defaults, **{k: v for k, v in entry.items() if k not in ("name", "tuning")}}
         try:
             tuning = load_tuning(
@@ -183,18 +231,20 @@ class Settings:
             home=self.home, repo=entry["name"], port=self.port, refresh_minutes=self.refresh_minutes, tuning=tuning,
             terminal=self.terminal, assistant=self.assistant, terminal_options=self.terminal_options,
             assistant_options=self.assistant_options, profile_source_options=self.profile_source_options,
+            forge_options=self.forge_options,
         )  # fmt: skip
         for key, value in merged.items():
             setattr(cfg, key, Path(value).expanduser() if key in PATH_KEYS and value else value)
         return cfg
 
     def all(self) -> list[Config]:
-        return [self.config_for(name) for name in self.names()]
+        return [self.config_for(_slug(r)) for r in self.repos]
 
-    def upsert(self, repo: str, **values: Any) -> dict[str, Any]:
-        entry = self.entry(repo)
+    def upsert(self, repo: str, *, forge: str | None = None, **values: Any) -> dict[str, Any]:
+        entry = self.entry(repo, forge)
         if entry is None:
-            entry = {"name": repo}
+            forge_name, name = _split_slug(repo, forge)
+            entry = {"name": name, "forge": forge_name}
             self.repos.append(entry)
         for key, value in values.items():
             if key not in REPO_KEYS:
@@ -210,7 +260,11 @@ class Settings:
         if entry is None:
             return False
         self.repos.remove(entry)
-        if self.default_repo and self.default_repo.lower() == repo.lower():
+        if self.default_repo and self.default_repo.lower() in (
+            repo.lower(),
+            entry["name"].lower(),
+            _slug(entry).lower(),
+        ):
             self.default_repo = None
         return True
 
@@ -235,9 +289,16 @@ def load_settings(home: Path | None = None) -> Settings:
     if unknown:
         hints = "".join(_did_you_mean(k, GLOBAL_KEYS) for k in sorted(unknown))
         raise ConfigError(f"Unknown key(s) {', '.join(sorted(unknown))} in {settings.path}{hints}")
-    if raw.get("schema", CONFIG_SCHEMA) != CONFIG_SCHEMA:
+    found = raw.get("schema", CONFIG_SCHEMA)
+    if found > CONFIG_SCHEMA:
         raise ConfigError(
-            f"{settings.path} is schema {raw['schema']}; this readthrough reads schema {CONFIG_SCHEMA}. Upgrade readthrough."
+            f"{settings.path} is schema {found}; this readthrough reads schema {CONFIG_SCHEMA}. Upgrade readthrough."
+        )
+    if found < CONFIG_SCHEMA:
+        raise ConfigError(
+            f"{settings.path} is schema {found}; this readthrough reads schema {CONFIG_SCHEMA}. "
+            f"Schema 2 files each repo's data under repos/<forge>/..., so move repos/<owner>/<name> to "
+            f"repos/github/<owner>/<name>, rename [tuning.github] to [tuning.forge], and set schema = {CONFIG_SCHEMA}."
         )
     settings.default_repo = raw.get("default_repo")
     settings.port = int(raw.get("port", settings.port))
@@ -254,15 +315,55 @@ def load_settings(home: Path | None = None) -> Settings:
         if bad:
             hints = "".join(_did_you_mean(k, REPO_KEYS) for k in sorted(bad))
             raise ConfigError(f"Unknown key(s) {', '.join(sorted(bad))} in repos[{i}] of {settings.path}{hints}")
-        if not REPO_RE.match(str(entry.get("name", ""))):
-            raise ConfigError(f"repos[{i}] in {settings.path} needs name = 'owner/name'")
+        forge_name = str(entry.get("forge", "github"))
+        from readthrough.forges import FORGES
+
+        try:
+            FORGES.get(forge_name)
+        except RegistryError as exc:
+            raise ConfigError(f"repos[{i}] in {settings.path}: {exc}") from exc
+        problem = _validate_repo(forge_name, str(entry.get("name", "")))
+        if problem:
+            raise ConfigError(f"repos[{i}] in {settings.path}: {problem}")
         settings.repos.append(dict(entry))
-    bad = set(settings.defaults) - (REPO_KEYS - {"tuning"})
+    bad = set(settings.defaults) - (REPO_KEYS - {"tuning", "forge"})
     if bad:
         raise ConfigError(f"Unknown key(s) {', '.join(sorted(bad))} in [defaults] of {settings.path}")
     for entry in settings.repos:
-        settings.config_for(entry["name"])  # validates the repo's own tuning
+        settings.config_for(_slug(entry))  # validates the repo's own tuning
     return settings
+
+
+def _forge_of(entry: dict[str, Any]) -> str:
+    return str(entry.get("forge") or "github")
+
+
+def _slug(entry: dict[str, Any]) -> str:
+    return f"{_forge_of(entry)}/{entry['name']}"
+
+
+def _split_slug(repo: str, forge: str | None) -> tuple[str, str]:
+    """``forge/owner/name`` -> (forge, owner/name); a plain name takes ``forge`` or the default.
+
+    The first segment only counts as a forge when what follows is a valid locator there, so a GitHub owner
+    that happens to be called ``gitlab`` still reads as ``gitlab/<name>`` on GitHub.
+    """
+    from readthrough.forges import FORGES, validate_repo
+
+    head, _, rest = repo.partition("/")
+    if forge is None and head in FORGES and rest and validate_repo(head, rest) is None:
+        return head, rest
+    return forge or "github", repo
+
+
+def _validate_repo(forge: str, repo: str) -> str | None:
+    from readthrough.forges import FORGES, validate_repo
+
+    try:
+        FORGES.get(forge)
+    except RegistryError as exc:
+        return str(exc)
+    return validate_repo(forge, repo)
 
 
 def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
@@ -272,6 +373,7 @@ def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
     fails here, where the message can say what was meant, rather than when a review is launched.
     """
     from readthrough.assistants import ASSISTANTS
+    from readthrough.forges import FORGES
     from readthrough.profile import PROFILE_SOURCES
     from readthrough.terminals import TERMINALS
 
@@ -283,19 +385,22 @@ def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
         if name != AUTO:
             registry.get(name)
         setattr(settings, key, name)
-    for key, registry, attr in (
-        ("terminals", TERMINALS, "terminal_options"),
-        ("assistants", ASSISTANTS, "assistant_options"),
-        ("profile_sources", PROFILE_SOURCES, "profile_source_options"),
-    ):
+    registries = {
+        "terminals": TERMINALS,
+        "assistants": ASSISTANTS,
+        "profile_sources": PROFILE_SOURCES,
+        "forges": FORGES,
+    }
+    for key, attr in PLUGIN_TABLES.items():
         tables = raw.get(key) or {}
         if not isinstance(tables, dict) or not all(isinstance(t, dict) for t in tables.values()):
             raise ConfigError(f"[{key}] must hold one [{key}.<name>] table per plugin")
         validated = {
-            name: registry.options_for(name, table, where=f"[{key}.{name}]", base=base)
+            name: registries[key].options_for(name, table, where=f"[{key}.{name}]", base=base)
             for name, table in tables.items()
         }
         setattr(settings, attr, validated)
+        settings.plugin_raw[key] = {name: dict(table) for name, table in tables.items()}
 
 
 def _did_you_mean(key: str, options: Any) -> str:
@@ -347,11 +452,17 @@ def dump_settings(settings: Settings) -> str:
     ]
     if settings.default_repo:
         out.append(f"default_repo = {_value(settings.default_repo)}")
-    out += [f"port = {settings.port}", f"refresh_minutes = {settings.refresh_minutes}", ""]
+    out += [f"port = {settings.port}", f"refresh_minutes = {settings.refresh_minutes}"]
+    for key in ("terminal", "assistant"):
+        if getattr(settings, key) != AUTO:
+            out.append(f"{key} = {_value(getattr(settings, key))}")
+    out.append("")
     if settings.defaults:
         out.append("[defaults]   # apply to every repo unless the repo sets its own")
         out += [f"{k} = {_value(portable_path(v) if k in PATH_KEYS else v)}" for k, v in settings.defaults.items()]
         out.append("")
+    for key in PLUGIN_TABLES:
+        out += _tables(key, settings.plugin_raw.get(key) or {})
     out += _tables("tuning", settings.tuning_raw)
     for entry in settings.repos:
         out.append("[[repos]]")
@@ -359,7 +470,7 @@ def dump_settings(settings: Settings) -> str:
         out += [
             f"{k} = {_value(portable_path(v) if k in PATH_KEYS else v)}"
             for k, v in entry.items()
-            if k not in ("name", "tuning")
+            if k not in ("name", "tuning") and not (k == "forge" and v == "github")
         ]
         out.append("")
         out += _tables("repos.tuning", entry.get("tuning") or {})
@@ -370,11 +481,12 @@ def dump_settings(settings: Settings) -> str:
 
 
 def _git(args: list[str]) -> str:
-    from readthrough.github import GhError, run
+    from readthrough.faults import ForgeError
+    from readthrough.process import run
 
     try:
         return run(["git", *args])
-    except GhError:
+    except ForgeError:
         return ""
 
 

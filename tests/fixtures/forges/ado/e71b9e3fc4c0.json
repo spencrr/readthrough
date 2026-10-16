@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/commits?searchCriteria.itemVersion.version=main&%24top=1&api-version=7.1",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json; charset=utf-8; api-version=7.1",
+  "link": "<86c4fcab74a286f87d47901b6ec0f8c2d64a3def>;rel=\"startingCommitId\""
+ },
+ "text": "{\"count\":1,\"value\":[{\"commitId\":\"86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"author\":{\"name\":\"Aditya Patwardhan\",\"email\":null,\"date\":\"2026-05-07T23:34:09Z\"},\"committer\":{\"name\":\"Aditya Patwardhan\",\"email\":null,\"date\":\"2026-05-07T23:34:09Z\"},\"comment\":\"Initial commit: adding scaffold files to the repository.\",\"changeCounts\":{\"Add\":1,\"Edit\":0,\"Delete\":0},\"url\":\"https://dev.azure.com/powershell/2972bb5c-f20c-4a60-8bd9-00ffe9987edc/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/commits/86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"remoteUrl\":\"https://dev.azure.com/powershell/PowerShell/_git/PSGallery-Cache-Repo/commit/86c4fcab74a286f87d47901b6ec0f8c2d64a3def\"}]}"
+}

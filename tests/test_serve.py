@@ -17,7 +17,7 @@ from readthrough.limits import MAX_REQUEST_BYTES
 from readthrough.serve import Dashboard, DashboardServer
 
 HEAD = "a" * 40
-R = "/r/o/r"
+R = "/r/github/o/r"
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def test_ledger_round_trip_broadcasts(live):
 def test_external_changes_are_picked_up(live):
     dashboard, _ = live
     events = dashboard.subscribe()
-    folder = review.copilot_home() / "session-state" / review.default_session_id("o/r", 7)
+    folder = review.copilot_home() / "session-state" / review.default_session_id(dashboard.cfg, 7)
     folder.mkdir(parents=True)
     (folder / f"inuse.{os.getpid()}.lock").write_text("x")
     dashboard._watch_once()
@@ -175,13 +175,13 @@ def test_stale_lock_is_not_active(tmp_path: Path, monkeypatch):
 def test_routes_are_per_repo(live):
     _, port = live
     health = json.loads(_request(port, "/api/health")[1])
-    assert health["repos"] == ["o/r"]
+    assert health["repos"] == ["github/o/r"]
     assert _request(port, "/r/other/repo/api/data")[0] == 404
     assert _request(port, "/api/data")[0] == 404
     assert json.loads(_request(port, R + "/api/data")[1])["repo"] == "o/r"
     req = urllib.request.Request(f"http://127.0.0.1:{port}/")
     with urllib.request.urlopen(req, timeout=5) as resp:
-        assert resp.url.endswith("/r/o/r/")
+        assert resp.url.endswith("/r/github/o/r/")
 
 
 def test_skip_and_pin_through_the_api(live):
@@ -219,10 +219,10 @@ def test_setup_page_and_api_are_protected(live):
 def test_failed_refreshes_are_recorded_and_retried_sooner(live, monkeypatch):
     from readthrough import serve as serve_mod
     from readthrough.build import BuildFailed
-    from readthrough.github import GhNetworkError
+    from readthrough.faults import NetworkError
 
     dashboard, port = live
-    cause = GhNetworkError("graphql PullRequests failed: connection reset", stderr="wsarecv")
+    cause = NetworkError("graphql PullRequests failed: connection reset", stderr="wsarecv")
 
     def fail(cfg, **kwargs):
         raise BuildFailed(cfg.repo, "fetching PRs", cause, "e123", 1.5)
@@ -237,7 +237,7 @@ def test_failed_refreshes_are_recorded_and_retried_sooner(live, monkeypatch):
     retry = dashboard.cfg.tuning.server.retry_after_failure_minutes
     assert dashboard.next_wait() == pytest.approx(retry[1] * 60)
     health = json.loads(_request(port, "/api/health")[1])
-    assert health["status"]["o/r"]["error"]["id"] == "e123"
+    assert health["status"]["github/o/r"]["error"]["id"] == "e123"
 
     dashboard.status["consecutive_failures"] = 0
     interval = dashboard.cfg.refresh_minutes * 60
@@ -365,14 +365,17 @@ def test_config_sync_adds_removes_and_reload_watch(monkeypatch, tmp_path: Path):
     httpd = DashboardServer([], 0, settings_loader=lambda: current_settings[0], with_diffs=False)
     try:
         httpd.sync(first)
-        assert httpd.repo_names() == ["o/a"]
-        assert httpd.default_repo() == "o/a"
-        assert "o/a" in httpd.repo_status()
+        assert httpd.repo_names() == [{"slug": "github/o/a", "name": "o/a"}]
+        assert httpd.default_repo() == "github/o/a"
+        assert "github/o/a" in httpd.repo_status()
         assert started == [("o/a", {"build_now": True})]
+        assert httpd.route("/r/github/o/a/api/data") == (httpd.dashboard_for("github/o/a"), "/api/data")
+        assert httpd.route("/r/GitHub/o/a") == (httpd.dashboard_for("github/o/a"), "/")
+        assert httpd.route("/r/o/a/api/data") == (None, "/r/o/a/api/data"), "routes need the full slug"
 
         second = Settings(home=tmp_path, default_repo="o/b", repos=[{"name": "o/b", "onboarded": "now"}])
         httpd.sync(second)
-        assert httpd.repo_names() == ["o/b"]
+        assert httpd.repo_names() == [{"slug": "github/o/b", "name": "o/b"}]
         assert stopped == ["o/a"]
         assert started[-1] == ("o/b", {"build_now": True})
 

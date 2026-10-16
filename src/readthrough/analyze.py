@@ -1,6 +1,7 @@
-"""Turn raw GitHub PR data into lanes, signals, overlaps, and a burn-down plan.
+"""Turn pull requests into lanes, signals, overlaps, and a burn-down plan.
 
-Everything repo-specific (components, signals, heuristics, author kinds) comes from the profile.
+The input is the neutral :mod:`readthrough.model` record every forge adapter produces. Everything
+repo-specific (components, signals, heuristics, author kinds) comes from the profile.
 """
 
 from __future__ import annotations
@@ -10,30 +11,42 @@ import re
 from collections.abc import Set as AbstractSet
 from typing import Any
 
-from readthrough.ci import classify
+from readthrough import ci
+from readthrough.model import Capability, Check, PullRequest
 from readthrough.profile import Authors, Profile
 from readthrough.rules import Instruction
 from readthrough.tuning import PayloadTuning, PlanningTuning, default_tuning
 
 PR = dict[str, Any]
 
+# What a gap in the forge's answer means for the PR, by field. Shown as a signal so nobody reads the
+# resulting default as a fact.
+GAP_MESSAGES = {
+    "association": "The author's relationship to the repo",
+    "decision": "The review decision",
+    "mergeable": "Whether the change merges cleanly",
+    "threads": "Review threads",
+    "checks": "CI checks",
+    "line_counts": "Lines changed per file (so size, effort, and the no-tests check go by file counts)",
+}
+
 
 def author_kind(
     login: str,
     association: str | None,
-    typename: str | None,
     authors: Authors,
     *,
+    bot: bool = False,
     members: AbstractSet[str] = frozenset(),
 ) -> str:
     """Classify a PR author into one of the profile's author kinds.
 
     Order: bots, the profile's explicit lists, membership of the profile's internal teams and orgs
-    (looked up at build time and passed in as ``members``), then GitHub's author association, then
+    (looked up at build time and passed in as ``members``), then the forge's author association, then
     the profile's fallback for anything else.
     """
     lower = login.lower()
-    if typename == "Bot" or lower.endswith("[bot]") or lower in {b.lower() for b in authors.bots}:
+    if bot or lower.endswith("[bot]") or lower in {b.lower() for b in authors.bots}:
         return "bot"
     if lower in {x.lower() for x in authors.internal}:
         return "internal"
@@ -106,8 +119,9 @@ def find_smells(
 def rule_descriptions(profile: Profile) -> dict[str, dict[str, str]]:
     """How each signal and line heuristic is worked out, keyed by id, for the dashboard's "how was this decided" notes.
 
-    ``source`` is ``github`` (a fact from GitHub), ``profile`` (a rule in the repo's profile), or ``built-in``
-    (readthrough's own check, with thresholds from the profile). None of these involve a language model.
+    ``source`` is ``forge`` (a fact from the forge the PRs live on), ``profile`` (a rule in the repo's profile),
+    or ``built-in`` (readthrough's own check, with thresholds from the profile). None of these involve a
+    language model.
     """
     out: dict[str, dict[str, str]] = {
         "no-tests": {
@@ -117,31 +131,39 @@ def rule_descriptions(profile: Profile) -> dict[str, dict[str, str]]:
         "cross-cutting": {"source": "built-in", "how": f"Touches {profile.cross_cutting_layers} or more source layers"},
         "large": {"source": "built-in", "how": f"More than {profile.large_lines} lines changed"},
         "stale": {"source": "built-in", "how": f"No activity for more than {profile.stale_days} days"},
-        "conflicts": {"source": "github", "how": "GitHub reports merge conflicts with the base branch"},
+        "conflicts": {"source": "forge", "how": "The forge reports merge conflicts with the base branch"},
         "ci": {
-            "source": "github",
+            "source": "forge",
             "how": "A required check fails on the PR's latest commit and not on the base branch",
         },
-        "ci-optional": {"source": "github", "how": "Only checks that aren't required are failing"},
+        "ci-optional": {"source": "forge", "how": "Only checks that aren't required are failing"},
         "ci-not-run": {
-            "source": "github",
+            "source": "forge",
             "how": "None of the base branch's required checks reported on the latest commit",
         },
-        "threads": {"source": "github", "how": "Unresolved review threads on GitHub"},
-        "requested": {"source": "github", "how": "You're a requested reviewer on GitHub"},
-        "re-review": {"source": "github", "how": "The author pushed commits after a changes-requested review"},
-        "ci-main": {"source": "github", "how": "The same checks fail on the base branch's latest commit"},
+        "threads": {"source": "forge", "how": "Unresolved review threads"},
+        "requested": {"source": "forge", "how": "You're a requested reviewer"},
+        "re-review": {"source": "forge", "how": "The author pushed commits after a changes-requested review"},
+        "ci-main": {"source": "forge", "how": "The same checks fail on the base branch's latest commit"},
         "diff-too-large": {
-            "source": "github",
-            "how": "GitHub won't serve diffs of more than 300 files, so line heuristics can't run",
+            "source": "forge",
+            "how": "The forge won't serve a diff this big, so line heuristics can't run",
         },
         "diff-unavailable": {
-            "source": "github",
+            "source": "forge",
             "how": "Fetching the diff failed this time; it's retried on the next refresh",
         },
+        "diff-unsupported": {
+            "source": "forge",
+            "how": "This forge has no API for a whole-change diff, so line heuristics never run",
+        },
         "partial": {
-            "source": "github",
-            "how": "More files, checks, or review threads than the [tuning.github] limits fetch",
+            "source": "forge",
+            "how": "More files, checks, or review threads than the [tuning.forge] limits fetch",
+        },
+        "gap": {
+            "source": "forge",
+            "how": "The forge couldn't supply this, so the dependent signals and lane use a neutral default",
         },
     }
     for s in profile.signals:
@@ -187,14 +209,14 @@ def _paired_mismatch(paths: list[str], under: str, exts: list[str]) -> bool:
 
 
 def analyze(
-    pr: PR,
+    pr: PullRequest,
     *,
     profile: Profile,
     viewer: str,
     instructions: list[Instruction],
     diff_text: str | None,
     now: dt.datetime,
-    required_checks: dict[str, set[str] | None] | None = None,
+    required_checks: dict[str, Capability[set[str]]] | None = None,
     main_failing: AbstractSet[str] = frozenset(),
     members: AbstractSet[str] = frozenset(),
     planning: PlanningTuning | None = None,
@@ -202,120 +224,111 @@ def analyze(
 ) -> PR:
     planning = planning or default_tuning().planning
     payload = payload or default_tuning().payload
-    files = pr["files"]["nodes"]
     by_comp: dict[str, int] = {}
     file_rows = []
-    for f in files:
-        comp = profile.component_of(f["path"])
-        churn = f["additions"] + f["deletions"]
-        if profile.is_capped(f["path"]):
+    counted = pr.line_counts.known  # else every file weighs one line: the forge gave no counts
+    for f in pr.files:
+        comp = profile.component_of(f.path)
+        churn = f.additions + f.deletions if counted else 1
+        if profile.is_capped(f.path):
             churn = min(churn, profile.capped_lines)
         by_comp[comp] = by_comp.get(comp, 0) + churn
-        file_rows.append({"path": f["path"], "add": f["additions"], "del": f["deletions"], "type": f["changeType"], "comp": comp})  # fmt: skip
+        file_rows.append({"path": f.path, "add": f.additions, "del": f.deletions, "type": f.change, "comp": comp})
     code_comps = {c for c in by_comp if profile.is_source(c)}
     layers = {profile.component_by_id[c].layer for c in code_comps}
     primary = max(code_comps or set(by_comp) or {"other"}, key=lambda c: by_comp.get(c, 0))
-    paths = [f["path"] for f in files]
-
-    commit = (pr["commits"]["nodes"] or [{}])[0].get("commit", {})
-    ci = (commit.get("statusCheckRollup") or {}).get("state") or "NONE"
-    reviews = [r for r in pr["latestReviews"]["nodes"] if r.get("author")]
-    requested = [
-        (r["requestedReviewer"] or {}).get("login") or (r["requestedReviewer"] or {}).get("name")
-        for r in pr["reviewRequests"]["nodes"]
-    ]
-    requested = [r for r in requested if r]
-    unresolved = _unresolved_threads(pr, payload)
+    paths = [f.path for f in pr.files]
 
     flags: list[dict[str, str]] = []
 
     def flag(fid: str, kind: str, msg: str) -> None:
         flags.append({"id": fid, "kind": kind, "msg": msg})
 
+    for name, cap in pr.gaps():
+        how = "not something this forge can tell us" if cap.kind == "unsupported" else f"couldn't be read: {cap.reason}"
+        flag("gap", "info", f"{GAP_MESSAGES[name]}: {how}")
+
+    unresolved = _unresolved_threads(pr, payload)
     for signal in profile.signals:
-        if signal.fires(files):
+        if signal.fires(pr.files):
             flag(signal.id, signal.kind, signal.message)
     src_churn = sum(by_comp[c] for c in code_comps)
-    if profile.tests_component and src_churn > profile.no_tests_min_lines and profile.tests_component not in by_comp:
+    if (
+        counted
+        and profile.tests_component
+        and src_churn > profile.no_tests_min_lines
+        and profile.tests_component not in by_comp
+    ):
         flag("no-tests", "risk", f"{src_churn} lines of source changed with no test changes")
     for pair in profile.paired_files:
         if _paired_mismatch(paths, pair.under, pair.extensions):
             flag(pair.id, pair.kind, pair.message)
     if len(layers) >= profile.cross_cutting_layers:
         flag("cross-cutting", "risk", f"Touches {len(layers)} architecture layers: check for responsibility bleed")
-    size = pr["additions"] + pr["deletions"]
-    if size > profile.large_lines:
+    size = pr.additions + pr.deletions
+    if counted and size > profile.large_lines:
         flag("large", "risk", f"Large change ({size} lines): consider asking to split it")
-    if pr["mergeable"] == "CONFLICTING":
+    if pr.mergeable.get("UNKNOWN") == "CONFLICTING":
         flag("conflicts", "blocker", "Merge conflicts with base")
-    ci_info = classify(
-        ((commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes") or [],
-        required=(required_checks or {}).get(pr["baseRefName"]),
-        main_failing=main_failing,
-    )
+    ci_info = _ci_summary(pr, required_checks or {}, main_failing)
     _ci_flags(ci_info, flag)
-    idle = days_between(pr["updatedAt"], now)
+    idle = days_between(pr.updated, now)
     if idle > profile.stale_days:
         flag("stale", "info", f"No activity for {int(idle)} days")
     if unresolved:
         flag("threads", "info", f"{len(unresolved)} unresolved review thread(s)")
-    if viewer in requested:
+    if viewer in pr.requested:
         flag("requested", "you", "Your review is requested")
 
-    cr_times = [
-        parse_ts(r["submittedAt"]) for r in reviews if r["state"] == "CHANGES_REQUESTED" and r.get("submittedAt")
-    ]
-    last_commit = parse_ts(commit.get("committedDate"))
+    cr_times = [parse_ts(r.submitted) for r in pr.reviews if r.state == "CHANGES_REQUESTED" and r.submitted]
+    last_commit = parse_ts(pr.last_commit)
     pushed_since_cr = bool(cr_times and last_commit and last_commit > max(t for t in cr_times if t))
 
-    author = (pr["author"] or {}).get("login", "ghost")
-    kind = author_kind(
-        author, pr.get("authorAssociation"), (pr["author"] or {}).get("__typename"), profile.authors, members=members
-    )
+    author = pr.author.login
+    kind = author_kind(author, pr.association.get("NONE"), profile.authors, bot=pr.author.bot, members=members)
     kind_spec = profile.authors.kinds[kind]
     if kind_spec.signal:
         flag(kind_spec.signal["id"], kind_spec.signal["kind"], kind_spec.signal["message"])
-    lane = _lane(pr, author=author, viewer=viewer, flags=flags, pushed_since_cr=pushed_since_cr)
+    decision = pr.decision.get("NONE")
+    lane = _lane(pr, decision=decision, viewer=viewer, flags=flags, pushed_since_cr=pushed_since_cr)
     if pushed_since_cr and lane == "ready":
         flag("re-review", "you", "Author pushed after changes were requested: re-review")
 
     minutes = estimate_minutes(by_comp, len(layers), profile, planning)
-    age = days_between(pr["createdAt"], now)
-    priority = _priority(lane, age=age, minutes=minutes, ci_state=ci_info["state"], requested=viewer in requested,
-                         pushed_since_cr=pushed_since_cr, closes_issue=bool(pr["closingIssuesReferences"]["nodes"]),
-                         planning=planning)  # fmt: skip
+    age = days_between(pr.created, now)
+    priority = _priority(lane, age=age, minutes=minutes, ci_state=ci_info["state"], requested=viewer in pr.requested,
+                         pushed_since_cr=pushed_since_cr, closes_issue=bool(pr.issues), planning=planning)  # fmt: skip
     if lane == "ready" and kind_spec.priority:
         priority = round(priority + kind_spec.priority, 1)
     return {
-        "number": pr["number"],
-        "title": pr["title"],
-        "url": pr["url"],
+        "number": pr.number,
+        "title": pr.title,
+        "url": pr.url,
         "author": author,
         "author_kind": kind,
         "author_group": kind_spec.group,
-        "author_association": pr.get("authorAssociation") or "NONE",
-        "body": (pr["body"] or "")[: payload.description_chars],
-        "body_html": (pr.get("bodyHTML") or "")[: payload.description_html_chars],
-        "draft": pr["isDraft"],
-        "created": pr["createdAt"],
-        "updated": pr["updatedAt"],
+        "author_association": pr.association.get("NONE"),
+        "body": pr.body[: payload.description_chars],
+        "body_html": pr.body_html[: payload.description_html_chars],
+        "draft": pr.draft,
+        "created": pr.created,
+        "updated": pr.updated,
         "age_days": age,
         "idle_days": idle,
-        "additions": pr["additions"],
-        "deletions": pr["deletions"],
-        "changed_files": pr["changedFiles"],
-        "head": pr["headRefOid"],
-        "base": pr["baseRefName"],
-        "review_decision": pr["reviewDecision"] or "NONE",
-        "mergeable": pr["mergeable"],
-        "ci": ci,
+        "additions": pr.additions,
+        "deletions": pr.deletions,
+        "changed_files": pr.changed_files,
+        "head": pr.head,
+        "base": pr.base,
+        "review_decision": decision,
+        "mergeable": pr.mergeable.get("UNKNOWN"),
         "ci_state": ci_info["state"],
         "ci_checks": ci_info,
-        "labels": [label["name"] for label in pr["labels"]["nodes"]],
-        "requested": requested,
-        "reviews": [{"author": r["author"]["login"], "state": r["state"]} for r in reviews],
-        "comments": pr["comments"]["totalCount"],
-        "issues": pr["closingIssuesReferences"]["nodes"],
+        "labels": list(pr.labels),
+        "requested": list(pr.requested),
+        "reviews": [{"author": r.author, "state": r.state} for r in pr.reviews],
+        "comments": pr.comments,
+        "issues": [{"number": i.number, "title": i.title, "url": i.url} for i in pr.issues],
         "files": file_rows,
         "by_comp": by_comp,
         "primary": primary,
@@ -330,6 +343,18 @@ def analyze(
         "minutes": minutes,
         "priority": priority,
     }
+
+
+def _ci_summary(
+    pr: PullRequest, required_checks: dict[str, Capability[set[str]]], main_failing: AbstractSet[str]
+) -> dict[str, Any]:
+    if not pr.checks.known:
+        return ci.unknown(pr.checks.reason)
+    checks: list[Check] = pr.checks.get([])
+    required = required_checks.get(pr.base)
+    # Required checks the forge couldn't name are treated as "none known": the state then says "failing"
+    # for any own failure rather than "optional", which errs towards attention.
+    return ci.classify(checks, required=required.get(set()) if required else None, main_failing=main_failing)
 
 
 def _check_names(rows: list[dict[str, Any]]) -> str:
@@ -358,33 +383,31 @@ def _ci_flags(ci_info: dict[str, Any], flag: Any) -> None:
         )
 
 
-def _unresolved_threads(pr: PR, payload: PayloadTuning) -> list[dict[str, Any]]:
-    threads = []
-    for t in pr["reviewThreads"]["nodes"]:
-        if t["isResolved"]:
-            continue
-        first = t["comments"]["nodes"][0] if t["comments"]["nodes"] else {}
-        threads.append({
-            "path": t["path"],
-            "line": t["line"],
-            "outdated": t["isOutdated"],
-            "author": (first.get("author") or {}).get("login", "?"),
-            "body": (first.get("body") or "")[: payload.thread_comment_chars],
-            "body_html": (first.get("bodyHTML") or "")[: payload.thread_comment_html_chars],
-        })  # fmt: skip
-    return threads
+def _unresolved_threads(pr: PullRequest, payload: PayloadTuning) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": t.path,
+            "line": t.line,
+            "outdated": t.outdated,
+            "author": t.author,
+            "body": t.body[: payload.thread_comment_chars],
+            "body_html": t.body_html[: payload.thread_comment_html_chars],
+        }
+        for t in pr.threads.get([])
+        if not t.resolved
+    ]
 
 
-def _lane(pr: PR, *, author: str, viewer: str, flags: list[dict[str, str]], pushed_since_cr: bool) -> str:
-    if author == viewer:
+def _lane(pr: PullRequest, *, decision: str, viewer: str, flags: list[dict[str, str]], pushed_since_cr: bool) -> str:
+    if pr.author.login == viewer:
         return "mine"
-    if pr["isDraft"]:
+    if pr.draft:
         return "draft"
     if any(f["kind"] == "blocker" for f in flags):
         return "blocked"
-    if pr["reviewDecision"] == "CHANGES_REQUESTED" and not pushed_since_cr:
+    if decision == "CHANGES_REQUESTED" and not pushed_since_cr:
         return "waiting"
-    if pr["reviewDecision"] == "APPROVED":
+    if decision == "APPROVED":
         return "approved"
     return "ready"
 

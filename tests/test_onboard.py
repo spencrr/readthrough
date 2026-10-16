@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from readthrough import membership, onboard
-from readthrough.github import GhNetworkError, GhNotFound
+from readthrough.faults import NetworkError
 from readthrough.profile import ProfileError, parse_profile
 from readthrough.tuning import default_tuning
 
@@ -34,10 +34,10 @@ CHURN = Counter(
     }
 )
 AUTHORS = [
-    {"login": "alice", "typename": "User", "association": "MEMBER"},
-    {"login": "bob", "typename": "User", "association": "CONTRIBUTOR"},
-    {"login": "newbie", "typename": "User", "association": "NONE"},
-    {"login": "dependabot", "typename": "Bot", "association": "NONE"},
+    {"login": "alice", "bot": False, "association": "MEMBER"},
+    {"login": "bob", "bot": False, "association": "CONTRIBUTOR"},
+    {"login": "newbie", "bot": False, "association": "NONE"},
+    {"login": "dependabot", "bot": True, "association": "NONE"},
 ]
 
 
@@ -135,24 +135,18 @@ def test_author_table_groups_kinds(facts):
 
 
 class FakeGh:
+    """The membership half of a forge: one lookup per (group, login), some of which fail."""
+
     def __init__(self, members: set[str], down: frozenset[str] = frozenset()):
         self.members, self.down = members, down
         self.calls: list[str] = []
-        self.tuning = default_tuning().github
+        self.tuning = default_tuning().forge
 
-    def run(self, cmd: list[str]) -> str:
-        path = cmd[-1]
-        self.calls.append(path)
-        login = path.rsplit("/", 1)[1].lower()  # GitHub logins are case-insensitive
-        if login in self.down:
-            raise GhNetworkError("connection reset", stderr="wsarecv: connection reset")
-        if "/teams/" in path:
-            if login in self.members:
-                return json.dumps({"state": "active"})
-            raise GhNotFound("HTTP 404")
-        if login in self.members:
-            return ""
-        raise GhNotFound("HTTP 404")
+    def is_member(self, group: str, login: str) -> bool:
+        self.calls.append(f"{group}/{login}")
+        if login.lower() in self.down:
+            raise NetworkError("connection reset", stderr="wsarecv: connection reset")
+        return login.lower() in self.members  # logins are case-insensitive
 
 
 def test_membership_is_checked_per_author_and_cached(tmp_path: Path):
@@ -180,7 +174,7 @@ def test_membership_failures_are_reported_not_cached(tmp_path: Path):
     found, failed = membership.internal_members(
         healthy, teams=[], orgs=["o"], logins={"alice", "dave"}, cache_path=cache
     )
-    assert found == {"alice", "dave"} and failed == [] and healthy.calls == ["orgs/o/members/dave"]
+    assert found == {"alice", "dave"} and failed == [] and healthy.calls == ["o/dave"]
 
 
 def test_copilot_drafter_keeps_the_best_proposal(facts, tmp_path: Path):
@@ -188,7 +182,7 @@ def test_copilot_drafter_keeps_the_best_proposal(facts, tmp_path: Path):
     from readthrough.onboard_copilot import _Drafter
 
     said: list[str] = []
-    drafter = _Drafter(Config(home=tmp_path, repo="o/app"), gh=None, facts=facts, on_progress=said.append)
+    drafter = _Drafter(Config(home=tmp_path, repo="o/app"), forge=None, facts=facts, on_progress=said.append)
     assert drafter._propose("schema = 1\nrepo = ").startswith("Invalid profile")
     good = onboard.draft_profile(facts)
     assert "No problems" in drafter._propose(good)
@@ -210,7 +204,7 @@ def test_copilot_drafter_reads_only_repo_files(facts, tmp_path: Path):
     (clone / "src/app/api/routes.py").write_text("a\nb\nc\n", encoding="utf-8")
     (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
     drafter = _Drafter(
-        Config(home=tmp_path, repo="o/app", clone=clone), gh=None, facts=facts, on_progress=lambda _: None
+        Config(home=tmp_path, repo="o/app", clone=clone), forge=None, facts=facts, on_progress=lambda _: None
     )
     assert "    2  b" in drafter._read("src/app/api/routes.py", 1, 10)
     assert "isn't a file in the repo" in drafter._read("../secret.txt", 1, 10)

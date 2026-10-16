@@ -1,0 +1,9 @@
+{
+ "method": "GET",
+ "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/contents/.devcontainer?ref=forgejo",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json;charset=utf-8"
+ },
+ "text": "[{\"name\":\"devcontainer.json\",\"path\":\".devcontainer/devcontainer.json\",\"sha\":\"663c8557ca86090125a1d0724afbb6c4c97b37e6\",\"last_commit_sha\":\"cb7b3bacd473302856f44db440f334e5bc4ff3c2\",\"last_commit_when\":\"2026-09-27T19:10:21+02:00\",\"type\":\"file\",\"size\":1020,\"encoding\":null,\"content\":null,\"target\":null,\"url\":\"https://codeberg.org/api/v1/repos/forgejo/forgejo/contents/.devcontainer/devcontainer.json?ref=forgejo\",\"html_url\":\"https://codeberg.org/forgejo/forgejo/src/branch/forgejo/.devcontainer/devcontainer.json\",\"git_url\":\"https://codeberg.org/api/v1/repos/forgejo/forgejo/git/blobs/663c8557ca86090125a1d0724afbb6c4c97b37e6\",\"download_url\":\"https://codeberg.org/forgejo/forgejo/raw/branch/forgejo/.devcontainer/devcontainer.json\",\"submodule_git_url\":null,\"_links\":{\"self\":\"https://codeberg.org/api/v1/repos/forgejo/forgejo/contents/.devcontainer/devcontainer.json?ref=forgejo\",\"git\":\"https://codeberg.org/api/v1/repos/forgejo/forgejo/git/blobs/663c8557ca86090125a1d0724afbb6c4c97b37e6\",\"html\":\"https://codeberg.org/forgejo/forgejo/src/branch/forgejo/.devcontainer/devcontainer.json\"}}]\n"
+}

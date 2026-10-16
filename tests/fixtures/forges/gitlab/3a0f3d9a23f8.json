@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/files/docs%2FREADME.md/raw?ref=main",
+ "status": 200,
+ "headers": {
+  "content-type": "text/plain; charset=utf-8",
+  "ratelimit-remaining": "496"
+ },
+ "text": "# \ud83d\udeab DO NOT EDIT\n\nThe docs for all commands including new commands are automatically generated. Do not change any file in this folder.\n\nJust add the commands and the docs will be generated\n\n## Generating the Docs\n\nIf you add a new command or update the existing information for a command you need to generate the doc updates in your merge request. To generate the docs run the following command from the project directory:\n\n```shell\nmake gen-docs\n```\n"
+}

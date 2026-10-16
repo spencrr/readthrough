@@ -1,6 +1,6 @@
 # Maintaining readthrough
 
-How the code handles failure, where settings live, and how to check a change before it goes in. Read this before adding a GitHub call, a setting, or a page.
+How the code handles failure, where settings live, and how to check a change before it goes in. Read this before adding a forge call, a setting, or a page.
 
 ## Checking a change
 
@@ -33,35 +33,43 @@ The browser tests (`tests/test_browser.py`, marked `browser`) drive the real das
 
 The end-to-end tests (`tests/test_e2e.py`, marked `e2e`) run the real `readthrough` executable as a subprocess, with `tests/fake_gh.py` standing in for `gh` through `READTHROUGH_GH`. That's the one place the whole program is exercised the way a user runs it: onboarding, a build, studying from the terminal, a second build that must hit the diff cache, `doctor`. The first time it ran, it found that a legitimately empty diff was never cached, so docs-only PRs were re-fetched on every refresh.
 
-Tests never touch the network, `gh`, git, Copilot, the registry, or the scheduler. The fakes to reuse: `FakeGitHub` in `test_cli.py` (a whole build), `Script` and `StubGh` in `test_github_faults.py` (scripted `gh` failures), `fake_gh.py` (the executable), `RecordingAssistant` in `test_engine.py`, the fake Copilot SDK and sessions in `test_assistants.py` and `test_onboard_copilot.py`, and the `live` server fixture in `test_serve.py`. The two stochastic steps, retry backoff and refresh jitter, have their own seeded generators and are tested as distributions in `test_jitter.py`.
+Tests never touch the network, `gh`, git, Copilot, the registry, or the scheduler. The fakes to reuse: `FakeForge` in `tests/fakes.py`, which the `fake_forge` fixture installs in place of `forges.make` (a whole build runs on it), `Script` in `test_github_faults.py` (scripted `gh` failures against the real GitHub adapter), the recorded forge responses under `tests/fixtures/forges/` that `test_forges.py` replays through `Rest.call`, `fake_gh.py` (the executable), `RecordingAssistant` in `test_engine.py`, the fake Copilot SDK and sessions in `test_assistants.py` and `test_onboard_copilot.py`, and the `live` server fixture in `test_serve.py`. The two stochastic steps, retry backoff and refresh jitter, have their own seeded generators and are tested as distributions in `test_jitter.py`.
+
+The recordings come from `scripts/probe_forge.py --record`, which runs an adapter against a real public repo (codeberg.org/forgejo/forgejo, gitlab.com/gitlab-org/cli, dev.azure.com/powershell) and writes every response, including the refusals, keyed by request. Re-record when an adapter asks for something new; the tests then need their expectations refreshed, since the data is whatever the forge said that day. Only a few response headers are kept and known identity fields are scrubbed, so a recording holds nothing about whoever made it.
 
 ## Failures
 
 The rule underneath everything: **a failure is never mistaken for an answer.** "Couldn't check" must not become "no", "absent", or "nothing to see".
 
-### GitHub calls
+### Forge calls
 
-All `gh` access goes through `github.py`. `run()` puts a timeout on every call, so a hung call can't stall a repo. `classify()` turns `gh`'s stderr into one of these errors:
+Every platform is an adapter in `forges/` (`github.py`, `gitlab.py`, `forgejo.py`, `azure_devops.py`), registered in `forges.FORGES` and chosen per repo by `forge = "..."`. An adapter turns its API into the records in `model.py`: `PullRequest`, with `ChangedFile`s, `Review`s, `Thread`s, and `Check`s. Nothing outside `forges/` reads a platform's API, and the analysis reads nothing but those records.
+
+A value an adapter may not be able to supply is a `Capability`: `known` (including a known empty value), `unsupported` (this forge has no such concept or endpoint), or `unavailable` (it has one, but the call failed this time), each with a reason. `PullRequest.gaps()` lists the ones that aren't known; the build turns them into a warning and a per-PR `gap` signal, and the analysis uses a neutral default (`ci.classify` has an `unknown` state for unreadable checks; a forge without line counts weighs files by count). What an adapter can do beyond the essentials is its `capabilities` set (`diffs`, `required_checks`, `default_branch_ci`, `rate_limit`, `memberships`, `accounts`); the build checks it before trying, and never guesses.
+
+Two transports. GitHub goes through the `gh` CLI (`process.run`), which carries the user's sign-in, SSO, and proxies. The others speak REST through `forges.Rest`, a thin layer over `urllib`: UTF-8, a timeout on every call, errors classified by status, `Authorization` sent only to its own host, and a `Retry-After` honored when a rate limit names one. Credentials come from the platform's CLI (`glab auth status --show-token`, `az account get-access-token`) or an environment variable, else calls are anonymous; `Credential.source` says which, for `doctor`, and the token itself is a `process.Secret`. An `az` identity that the organization refuses is set aside for anonymous access once, with a log line, because public Azure DevOps projects answer anonymous calls they refuse to an outsider.
+
+`faults.py` holds one error hierarchy for both transports, classified from a CLI's stderr (`classify_stderr`) or an HTTP status (`classify_http`):
 
 | Error | Meaning | Retried? |
 | --- | --- | --- |
-| `GhNetworkError` | Connection reset or refused, DNS failure, proxy failure, GitHub 5xx | yes, with backoff and jitter |
-| `GhTimeout` | Hit `[tuning.github] timeout_seconds` | yes |
-| `GhRateLimited` | 429, or 403 with a rate-limit message | yes, after `rate_limit_wait_seconds` |
-| `GhAuthError` | 401, 403, SSO not authorized | no |
-| `GhNotFound` | 404, or GraphQL can't resolve the name | no |
-| `GhTooLarge` | 406, a diff over GitHub's size limit | no |
-| `GhError` | anything else | no |
+| `NetworkError` | Connection reset or refused, DNS failure, proxy failure, a 5xx | yes, with backoff and jitter |
+| `Timeout` | Hit `[tuning.forge] timeout_seconds` | yes |
+| `RateLimited` | 429, or 403 with a rate-limit message | yes, after `Retry-After` or `rate_limit_wait_seconds`, whichever is shorter |
+| `AuthError` | 401, 403, SSO not authorized, or Azure DevOps's sign-in page (a 203) | no |
+| `NotFound` | 404, or GraphQL can't resolve the name | no |
+| `TooLarge` | 406, a diff over the forge's size limit | no |
+| `ForgeError` | anything else | no |
 
-`GitHub.run` does the retrying, and `_gh_slots` caps how many calls run at once across every repo. Each error has a one-line `.reason` for logs and banners, and `describe()` names the call readably (`graphql PullRequests #12`, `GET repos/o/r/contents/a.md`, `pr diff #42`).
+`Forge.retrying` does the retrying, and one process-wide semaphore caps how many calls run at once across every repo (`[tuning.forge] concurrency`). Each error has a one-line `.reason` for logs and banners, and `process.describe` names a CLI call readably (`graphql PullRequests #12`, `GET repos/o/r/contents/a.md`, `pr diff #42`).
 
-When something may legitimately not exist, use `api_or_none` or `raw_or_none`. They return `None` only for a 404 and raise everything else. Membership checks follow the same rule: only a 404 means "not a member", and a failed check isn't cached.
+When something may legitimately not exist, use `read_file`, `api_or_none`, or `Rest.call(absent=(NotFound,))`. They return `None` only for a 404 and raise everything else. Membership checks (`is_member`, a GitHub capability) follow the same rule: only a 404 means "not a member", and a failed check isn't cached.
 
-Paginated data (a PR's files, checks, and review threads) is fetched page by page up to the caps in `[tuning.github]`. Anything cut short is recorded in `pr["truncated"]`, never dropped silently.
+Paginated data (a PR's files, checks, and review threads; a repo's tree) is fetched page by page up to the caps in `[tuning.forge]`. Anything cut short is recorded (`PullRequest.truncated`, the second value `tree()` returns), never dropped silently: onboarding stops judging path patterns "dead" against a partial tree and says why.
 
 ### Builds
 
-Only the PR list is essential. `fetch_snapshot` lets everything else degrade: CI context, rule files, diffs, and membership checks each add a `Warnings` entry (logged once, shown as a banner) when they fail, and `_partial_flags` puts a signal on each affected PR. Diffs are cached only when they were fetched successfully; a diff too large to serve gets a marker file, so it isn't asked for again until the PR's head changes.
+Only the PR list is essential. `fetch_snapshot` lets everything else degrade: CI context, rule files, diffs, and membership checks each add a `Warnings` entry (logged once, shown as a banner) when they fail or when the forge can't do them, and `_partial_flags` puts a signal on each affected PR. Diffs are cached only when they were fetched successfully; a diff too large to serve gets a marker file, so it isn't asked for again until the PR's head changes.
 
 `build()` is the boundary. It tags every log line inside with the repo and a build id, times each step, and turns any failure into `BuildFailed`, which carries the step, the cause, an error id, and how long the build ran. The failure is logged there exactly once: one line for an expected GitHub error, a traceback for anything else. Callers show the error id and don't log it again.
 
@@ -115,12 +123,14 @@ The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`,
 
 ## Plugins
 
-Three things are chosen by name in `config.toml` and go through `registry.Registry`: where profiles come from (`profile.PROFILE_SOURCES`), how a review session gets a window (`terminals.TERMINALS`), and who answers in the Study tab (`assistants.ASSISTANTS`). To add one:
+Four things are chosen by name in `config.toml` and go through `registry.Registry`: where PRs come from (`forges.FORGES`), where profiles come from (`profile.PROFILE_SOURCES`), how a review session gets a window (`terminals.TERMINALS`), and who answers in the Study tab (`assistants.ASSISTANTS`). To add one:
 
 1. Write a dataclass of options with defaults, or use `registry.NoOptions`. Field types can be `str`, `int`, `float`, `bool`, `Path`, `list[...]` of those, or `X | None`; the loader checks them and resolves relative paths against the config file.
 2. Register the implementation with `REGISTRY.add("name", "one-line summary", options=Options)`. The name is what users write; the summary is what `doctor` and errors show.
 3. Keep the precedence or `auto` policy where it is (`profile.PRECEDENCE`, `terminals.AUTO_ORDER`, `assistants.AUTO_ORDER`); a plugin never decides its own priority.
 4. Add a test in `test_registry.py` that builds its command or result without running anything, and one in `test_e2e.py` or the module's tests if it changes what a user sees.
+
+A forge subclasses `forges.Forge`: class attributes for its name, label, dot-directory, repo shape, and `capabilities`, then the fetching methods (`repo_info`, `fetch_prs`, `merged_prs`, `tree`, `read_file`, `list_dir`, `ci_context`, `fetch_diff`, and `is_member` when `memberships` is claimed), each producing the records in `model.py`. Use `forges.Rest` for HTTP and `credential()` for the token so timeouts, redaction, and retries come for free; mark what the platform can't say `unsupported` and what failed `unavailable`, with the reason. Before it ships, run `scripts/probe_forge.py` against a real public repo and record the responses for `test_forges.py`.
 
 A terminal launcher is a pure function from a `Command` to a `Spawn`; only the Windows ones run on the author's machine, so the others carry the invocation their terminal documents and a note to that effect. A study assistant implements `assistants.Assistant` (`turn` and `stop`) and writes to the log only through the `Harness` it's given, with its own name in `by`; it must never write a verdict unless it read the code to reach it.
 

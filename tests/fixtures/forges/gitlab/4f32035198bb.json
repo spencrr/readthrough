@@ -1,0 +1,12 @@
+{
+ "method": "GET",
+ "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/pipelines?ref=main&per_page=1&order_by=updated_at&sort=desc",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "link": "<https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/pipelines?id=gitlab-org%2Fcli&order_by=updated_at&page=2&per_page=1&ref=main&sort=desc>; rel=\"next\", <https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/pipelines?id=gitlab-org%2Fcli&order_by=updated_at&page=1&per_page=1&ref=main&sort=desc>; rel=\"first\", <https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/pipelines?id=gitlab-org%2Fcli&order_by=updated_at&page=3101&per_page=1&ref=main&sort=desc>; rel=\"last\"",
+  "ratelimit-remaining": "493",
+  "x-total-pages": "3101"
+ },
+ "text": "[{\"id\":2953383574,\"iid\":15482,\"project_id\":34675721,\"sha\":\"053aef577bcf5731730db76b2c5227464670bc40\",\"ref\":\"main\",\"status\":\"canceled\",\"source\":\"push\",\"created_at\":\"2026-10-16T02:02:13.714Z\",\"updated_at\":\"2026-10-16T02:03:42.543Z\",\"web_url\":\"https://gitlab.com/gitlab-org/cli/-/pipelines/2953383574\",\"name\":null}]"
+}

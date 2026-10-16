@@ -1,0 +1,12 @@
+{
+ "method": "GET",
+ "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?path=.claude&ref=main&per_page=100",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "link": "<https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=1&pagination=legacy&path=.claude&per_page=100&recursive=false&ref=main&with_last_commit=false>; rel=\"first\", <https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=1&pagination=legacy&path=.claude&per_page=100&recursive=false&ref=main&with_last_commit=false>; rel=\"last\"",
+  "ratelimit-remaining": "494",
+  "x-total-pages": "1"
+ },
+ "text": "[{\"id\":\"f9777e39e1ede4fb4ed1f3db7172c8ae6cc6afc8\",\"name\":\"skills\",\"type\":\"tree\",\"path\":\".claude/skills\",\"mode\":\"040000\"},{\"id\":\"a8d9e64ec185283432aaa5c7ad41e0bd62edfefb\",\"name\":\"settings.json\",\"type\":\"blob\",\"path\":\".claude/settings.json\",\"mode\":\"100644\"}]"
+}

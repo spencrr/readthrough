@@ -40,9 +40,9 @@ You can onboard from the browser or from a terminal; they do the same thing and 
 
 With the live server running, open <http://127.0.0.1:8765/setup>, or pick **+ Onboard a repo…** from the repo switcher in the dashboard's header. (With nothing onboarded yet, the front page takes you there.) The page walks through it in order:
 
-1. **Which repo?** Type `owner/name`, pick the gh account that can see it if you have more than one, and check access.
+1. **Which repo?** Pick where it lives (GitHub unless you say otherwise), type its name (`owner/name`; `organization/project/repository` on Azure DevOps), pick the gh account that can see it if you have more than one, and check access.
 2. **Your local clone.** It guesses from `~/src` and `~/repos`; check it, and pick the remote PRs should be fetched through.
-3. **Its architecture profile.** Use one that already exists (the repo's own `.github/readthrough.toml`, or one from a shared profile directory), draft one from the file tree, or have Copilot draft one. Progress shows as it runs.
+3. **Its architecture profile.** Use one that already exists (the repo's own `readthrough.toml`, or one from a shared profile directory), draft one from the file tree, or have Copilot draft one. Progress shows as it runs.
 4. **Check it, edit it, accept it.** The profile's TOML is on the left, and the report on the right re-checks as you type: coverage against recent PRs, anything blocking acceptance, the paths that aren't mapped yet (each with a **+ component** button that adds a stub for it), the busiest components, and how recent authors classify, with an override for anyone who's wrong. **Preview the map** opens the dashboard as it would look, without touching anything live. **Accept and start** finishes, and the server starts serving the repo straight away.
 
 Each step shows the matching terminal command.
@@ -58,7 +58,7 @@ readthrough onboard pallets/click
 This does four things:
 
 1. It records the repo in `~/.readthrough/config.toml`, finds your local clone (it looks in `~/src` and `~/repos`; pass `--clone` otherwise), and works out which git remote points at the repo.
-2. It looks for a profile someone already wrote: a `.github/readthrough.toml` in the repo itself, or a file in one of your shared profile directories (see [Where profiles come from](#where-profiles-come-from)). If there isn't one, it drafts one from the file tree, CODEOWNERS, any architecture or contributing docs, and where the last hundred merged PRs actually changed code. The draft goes to `~/.readthrough/repos/pallets/click/profile.toml`.
+2. It looks for a profile someone already wrote: a `readthrough.toml` in the repo itself (in `.github/` or at the root), or a file in one of your shared profile directories (see [Where profiles come from](#where-profiles-come-from)). If there isn't one, it drafts one from the file tree, CODEOWNERS, any architecture or contributing docs, and where the last hundred merged PRs actually changed code. The draft goes to `~/.readthrough/repos/github/pallets/click/profile.toml`.
 3. It measures the profile against those hundred PRs and prints a report: how much of the changed code maps to a real component instead of "other", the busiest components, the biggest unmapped paths, and how recent authors would be classified.
 4. It lists anything that blocks acceptance.
 
@@ -133,7 +133,7 @@ The first half checks the machine: `gh` and which accounts are signed in, the Co
 
 ## The dashboard
 
-`readthrough open` opens the live dashboard if the server is running, otherwise the repo's latest snapshot. Without the server, `readthrough build --open` fetches everything and opens `~/.readthrough/repos/OWNER/NAME/index.html`. The first build takes about a minute for a busy repo because it downloads every diff. After that, diffs are cached by commit, so only PRs that changed get fetched again.
+`readthrough open` opens the live dashboard if the server is running, otherwise the repo's latest snapshot. Without the server, `readthrough build --open` fetches everything and opens `~/.readthrough/repos/FORGE/OWNER/NAME/index.html`. The first build takes about a minute for a busy repo because it downloads every diff. After that, diffs are cached by commit, so only PRs that changed get fetched again.
 
 The theme button in the corner (sun, moon, or both) cycles through auto (follows your OS), light, and dark. The panel that opens when you click a PR can be resized by dragging its left edge; double-click the edge to reset it. Both settings stick. The browser tab's icon shows how many PRs are waiting on you (your review requested, or a re-review), so you can see it from another tab.
 
@@ -230,7 +230,7 @@ Press **Start deep review** on a PR (or run `readthrough review 2897`). A new te
 
 The session follows a fixed routine:
 
-1. It reads the repo's profile and the PR's brief, checks out the PR in a separate worktree under `~/.readthrough/repos/OWNER/NAME/worktrees`, reads the diff and the rules that apply, and quietly writes up its own findings. Your own checkout and branches aren't touched.
+1. It reads the repo's profile and the PR's brief, checks out the PR in a separate worktree under `~/.readthrough/repos/FORGE/OWNER/NAME/worktrees`, reads the diff and the rules that apply, and quietly writes up its own findings. Your own checkout and branches aren't touched.
 2. It shows you only the title and summary, and asks what you think the riskiest part is and what test you'd want to see.
 3. It walks the change in reading order, the order the profile lists components in. After each chunk it asks you one question tied to a component's contract or one of the repo's rules. Get it wrong and you get a hint, not the answer.
 4. You explain the whole PR back in a few sentences, and it tells you what you missed.
@@ -318,7 +318,7 @@ On macOS or Linux, the install commands print a crontab line, or tell you to run
 
 Onboarding writes the config for you. To change it, use the repo's settings page (the gear button in the dashboard's header, or <http://127.0.0.1:8765/setup>), or `readthrough config --edit` to open the file; `readthrough config` shows the effective values.
 
-The settings page covers the gh account, clone, and remote; session length, PR limit, and study model; per-author overrides (pick from the table of recent authors); the profile (edit your local copy, **Customize** a shared or in-repo profile into a local copy, or **Propose upstream**, which opens GitHub's new-file page for `.github/readthrough.toml` with your profile filled in); the default repo and refresh interval; and removing a repo. A few things stay command-line only and are shown read-only there: `copilot_args` (passed straight to a program the server launches), the `profile` path override (makes the server read an arbitrary file), the terminal and assistant choices, and the port (changing it from the page you're on would break that page). If the file changed since the page loaded it, saving asks you to reload rather than overwrite.
+The settings page covers the gh account, clone, and remote; session length, PR limit, and study model; per-author overrides (pick from the table of recent authors); the profile (edit your local copy, **Customize** a shared or in-repo profile into a local copy, or **Propose upstream**, which opens the forge's new-file page for `readthrough.toml` in its dot-directory with your profile filled in, or copies the profile for you where the forge has no such page); the default repo and refresh interval; and removing a repo. A few things stay command-line only and are shown read-only there: `copilot_args` (passed straight to a program the server launches), the `profile` path override (makes the server read an arbitrary file), the terminal and assistant choices, and the port (changing it from the page you're on would break that page). If the file changed since the page loaded it, saving asks you to reload rather than overwrite.
 
 The file lives at `~/.readthrough/config.toml`:
 
@@ -368,18 +368,37 @@ Per-repo keys, which can also go under `[defaults]`:
 | `study_model` | The model for the study assistant and Copilot onboarding. |
 | `copilot_args` | Extra arguments for `copilot` in deep reviews. For example, `["--model", "claude-opus-4.8", "--remote"]` picks a model and lets you continue the session from GitHub on your phone. |
 
-Paths under your home directory are written as `~/...`, so the file works on another machine or account. To keep it somewhere else, in a dotfiles repo for instance, point `READTHROUGH_CONFIG` at it; the data still goes to `~/.readthrough` (or `READTHROUGH_HOME`). The `schema = 1` line at the top lets a future version recognize the file's layout. Leave it as is.
+Paths under your home directory are written as `~/...`, so the file works on another machine or account. To keep it somewhere else, in a dotfiles repo for instance, point `READTHROUGH_CONFIG` at it; the data still goes to `~/.readthrough` (or `READTHROUGH_HOME`). The `schema = 2` line at the top lets a future version recognize the file's layout. Leave it as is.
 
 The server notices config changes on its own. Port changes need a restart (`readthrough uninstall server`, then `install server`).
 
-Everything the tool writes lives in `~/.readthrough` (or wherever `READTHROUGH_HOME` or `--home` points): `config.toml` and `readthrough.log` at the top, and one folder per repo under `repos/OWNER/NAME/` with its profile draft, the dashboard, `data.json`, the briefs, the ledger, the study logs, the diff cache, and the worktrees. Deleting a repo's folder resets that repo; deleting `~/.readthrough` resets everything except the installers. Remove those with `readthrough uninstall`.
+Everything the tool writes lives in `~/.readthrough` (or wherever `READTHROUGH_HOME` or `--home` points): `config.toml` and `readthrough.log` at the top, and one folder per repo under `repos/FORGE/OWNER/NAME/` (`repos/github/microsoft/vscode/`) with its profile draft, the dashboard, `data.json`, the briefs, the ledger, the study logs, the diff cache, and the worktrees. Deleting a repo's folder resets that repo; deleting `~/.readthrough` resets everything except the installers. Remove those with `readthrough uninstall`.
+
+### Repos on other forges
+
+A repo's entry says where it lives with `forge = "gitlab"`, `"forgejo"` (Codeberg and other Forgejo or Gitea servers), or `"ado"` (Azure DevOps, named `organization/project/repository`); GitHub is the default and needs no key. `readthrough onboard --forge gitlab gitlab-org/cli` writes the entry; everywhere else a repo is named by `--repo`, a plain name works unless the same name is onboarded on two forges, when the full `gitlab/gitlab-org/cli` form (the repo's *slug*, which is also its path in the dashboard URL and under `repos/`) says which.
+
+GitHub repos are read through `gh`, which carries your sign-in. The other forges are read through their REST API with a token from the platform's own CLI when it's installed and signed in (`glab` for GitLab, `az` for Azure DevOps), else from an environment variable (`GITLAB_TOKEN`, `FORGEJO_TOKEN`, `AZURE_DEVOPS_EXT_PAT`), else anonymously, which is enough for public repos. Hosts and variable names are the `[forges.NAME]` tables; tokens themselves never go in the config:
+
+```toml
+[forges.gitlab]
+host = "gitlab.example.com"          # a self-hosted instance (gitlab.com by default)
+credential_env = "GITLAB_TOKEN"      # the variable to read a personal access token from
+
+[forges.forgejo]
+host = "codeberg.org"
+```
+
+Two things to know. gitlab.com throttles anonymous API use per IP address quite hard, so a token (or `glab auth login`) makes a real difference there. And an `az` sign-in that the Azure DevOps organization doesn't recognize is set aside for anonymous access, with a note in the log, because public projects answer anonymous calls they refuse to an outsider's token.
+
+Not every forge can answer every question. What one can't supply (Azure DevOps has no diffs and no per-file line counts; GitLab has no named required checks; author associations need a token on Forgejo) shows up as a warning on the dashboard and a *gap* signal on each affected PR, and the related signal or lane uses a neutral default. It's never quietly read as "nothing there".
 
 ### Tuning
 
-Everything else that used to be a number in the code is a setting too: timeouts and retries for GitHub, how many `gh` calls run at once, how the server staggers and retries refreshes, the reading-time estimates and burn-down priorities, the onboarding thresholds, when data counts as stale, how much text goes into the dashboard, the study assistant's limits, and logging. `readthrough config --defaults` prints all of them with their defaults and what they do. Set one under a `[tuning.SECTION]` table:
+Everything else that used to be a number in the code is a setting too: timeouts and retries for the forge, how many calls run at once, how the server staggers and retries refreshes, the reading-time estimates and burn-down priorities, the onboarding thresholds, when data counts as stale, how much text goes into the dashboard, the study assistant's limits, and logging. `readthrough config --defaults` prints all of them with their defaults and what they do. Set one under a `[tuning.SECTION]` table:
 
 ```toml
-[tuning.github]
+[tuning.forge]
 timeout_seconds = 120     # a slow network
 concurrency = 3           # fewer parallel calls if you see connection resets
 
@@ -406,13 +425,13 @@ A few limits aren't settings on purpose, because loosening them would open a hol
 readthrough uses the first of these that exists:
 
 1. the `profile` path in the repo's config entry (an error if the file is missing, never a silent fall-through);
-2. your local draft, `~/.readthrough/repos/OWNER/NAME/profile.toml`;
-3. the repo's own `.github/readthrough.toml`, read from the default branch;
-4. a file named `OWNER/NAME.toml` in one of the directories listed under `[profile_sources.shared] dirs`.
+2. your local draft, `~/.readthrough/repos/FORGE/OWNER/NAME/profile.toml`;
+3. the repo's own `readthrough.toml`, read from the default branch: in the forge's dot-directory first (`.github/readthrough.toml` on GitHub, `.gitlab/`, `.forgejo/`, `.azuredevops/` elsewhere), then `.readthrough.toml` or `readthrough.toml` at the root. If a repo carries more than one, the first wins and the dashboard says so;
+4. a file named `FORGE/OWNER/NAME.toml` (or `OWNER/NAME.toml` for GitHub repos) in one of the directories listed under `[profile_sources.shared] dirs`.
 
 `readthrough profile sources` shows the list for a repo, with an arrow at the one in use. A local draft wins over the repo's file so you can experiment; delete it when you're done.
 
-The repo's own file is the shared one: whoever maintains the architecture maintains the map, everyone who onboards the repo gets it, and **Propose upstream** on the settings page turns your draft into exactly that file. The shared directory is for repos that can't carry the file (someone else's project, say): clone your team's profiles repo anywhere, list it under `dirs`, and every machine with that config sees the same maps. Either way, each person's own data (clone, account, overrides) stays in their own config.
+The repo's own file is the shared one: whoever maintains the architecture maintains the map, everyone who onboards the repo gets it, and **Propose upstream** on the settings page turns your draft into exactly that file (in the dot-directory, next to CODEOWNERS and the other review conventions). The shared directory is for repos that can't carry the file (someone else's project, say): clone your team's profiles repo anywhere, list it under `dirs`, and every machine with that config sees the same maps. Either way, each person's own data (clone, account, overrides) stays in their own config.
 
 ## Command reference
 
@@ -420,7 +439,7 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 
 | Command | What it does |
 | --- | --- |
-| `onboard OWNER/NAME [--clone P] [--account A] [--copilot] [--update] [--preview] [--accept] [--force]` | Draft, check, preview, and accept a repo's profile |
+| `onboard OWNER/NAME [--forge F] [--clone P] [--account A] [--copilot] [--update] [--preview] [--accept] [--force]` | Draft, check, preview, and accept a repo's profile |
 | `repos` | List the repos you've onboarded |
 | `default OWNER/NAME` | Set the default repo |
 | `remove OWNER/NAME [--purge]` | Stop tracking a repo |
@@ -448,7 +467,7 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 
 **A yellow banner says something is partial.** The build carried on without something optional, and says what: PRs past the repo's `limit`, PRs too big to fetch completely (GitHub lists at most 3,000 files per PR), diffs GitHub won't serve (over 300 files) or that failed to download, rule files, CI context, or team membership checks that failed. The affected PRs carry a matching signal, so "no signals" never silently means "not checked". Optional pieces that failed are fetched again on the next refresh.
 
-**Connection resets in the log.** GitHub throttles bursts of parallel requests. They're retried automatically. If they're frequent, lower `[tuning.github] concurrency`.
+**Connection resets or rate limits in the log.** Forges throttle bursts of parallel requests. They're retried automatically, waiting what the forge asks for (up to `[tuning.forge] rate_limit_wait_seconds`). If they're frequent, lower `[tuning.forge] concurrency`; on gitlab.com, sign in with `glab` or set `GITLAB_TOKEN`, because anonymous callers share one small allowance per IP address.
 
 **"isn't onboarded yet".** Run `readthrough onboard OWNER/NAME` and follow the report. A repo only builds after `--accept`.
 

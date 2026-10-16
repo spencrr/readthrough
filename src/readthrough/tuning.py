@@ -31,7 +31,7 @@ def _choice(*options: str) -> Any:
 
 
 @dataclass(frozen=True)
-class GitHubTuning:
+class ForgeTuning:
     timeout_seconds: float = _r(5, 3600)
     retries: int = _r(0, 10)
     retry_backoff_seconds: float = _r(0, 300)
@@ -42,6 +42,7 @@ class GitHubTuning:
     max_files_per_pr: int = _r(100, 3000)
     max_checks_per_pr: int = _r(100, 5000)
     max_review_threads_per_pr: int = _r(100, 5000)
+    max_tree_files: int = _r(1000, 1_000_000)
     diff_cache_days: float = _r(0, 3650)
 
 
@@ -137,7 +138,7 @@ class LoggingTuning:
 
 @dataclass(frozen=True)
 class Tuning:
-    github: GitHubTuning
+    forge: ForgeTuning
     git: GitTuning
     server: ServerTuning
     planning: PlanningTuning

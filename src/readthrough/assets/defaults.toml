@@ -2,7 +2,7 @@
 #
 # To change one, put it under a [tuning.<section>] table in your config.toml, for example:
 #
-#   [tuning.github]
+#   [tuning.forge]
 #   timeout_seconds = 120
 #
 # Sections marked "per repo" can also be set for one repo, under that repo's [[repos]] entry:
@@ -15,27 +15,31 @@
 # `readthrough config --defaults` prints this file; `readthrough config --check` validates yours.
 # Values outside the allowed range, wrong types, and unknown keys are rejected with a clear message.
 
-[github]
-# Seconds before a single `gh` call is abandoned. Without a limit, one hung call stalls a repo forever.
+[forge]
+# Seconds before a single call to the forge (a `gh` command, or an API request) is abandoned. Without a limit,
+# one hung call stalls a repo forever.
 timeout_seconds = 60
-# How many times a call that failed for a temporary reason (connection reset, timeout, GitHub 5xx) is retried.
+# How many times a call that failed for a temporary reason (connection reset, timeout, a 5xx) is retried.
 retries = 3
 # Seconds to wait before the first retry. Each later retry waits twice as long, plus up to 25% random jitter.
 retry_backoff_seconds = 2.0
 # The longest wait between two retries.
 retry_max_backoff_seconds = 30.0
-# Seconds to wait when GitHub says you're being rate limited (429, or 403 with a rate-limit message).
+# Seconds to wait when the forge says you're being rate limited (429, or 403 with a rate-limit message).
 rate_limit_wait_seconds = 60.0
-# The most `gh` calls running at once, across every repo the server refreshes.
-# Lower it if you see connection resets; GitHub also throttles bursts of parallel requests.
+# The most forge calls running at once, across every repo the server refreshes.
+# Lower it if you see connection resets; forges throttle bursts of parallel requests.
 concurrency = 6
-# Open PRs fetched per GraphQL page. Smaller pages are slower but less likely to time out.
+# Open PRs fetched per page. Smaller pages are slower but less likely to time out.
 pr_page_size = 20
 # A PR's files, CI checks, and review threads are fetched page by page up to these limits.
 # 3,000 files is the most GitHub will list for one PR.
 max_files_per_pr = 3000
 max_checks_per_pr = 500
 max_review_threads_per_pr = 300
+# The most files onboarding lists from a repo's tree through the API. Forges that page trees 100 files at a
+# time (GitLab, Forgejo) would otherwise take minutes on a big repo; onboarding with a local clone has no limit.
+max_tree_files = 20000
 # Days to keep cached diffs of PRs that are no longer in the fetched list (closed, merged, or past `limit`).
 diff_cache_days = 14
 

@@ -17,8 +17,9 @@ from importlib.resources import files
 from typing import Any
 
 from readthrough.config import Config
-from readthrough.github import FileReader, run
+from readthrough.forges import Forge
 from readthrough.onboard import RepoFacts, author_table, check_profile_text, draft_profile, measure, report
+from readthrough.process import run
 from readthrough.profile import ProfileError, parse_profile
 from readthrough.rules import glob_to_regex
 
@@ -52,14 +53,14 @@ How to work:
 
 
 def copilot_draft(
-    cfg: Config, gh: FileReader | None, facts: RepoFacts, *, on_progress: Callable[[str], None] = log.info
+    cfg: Config, forge: Forge | None, facts: RepoFacts, *, on_progress: Callable[[str], None] = log.info
 ) -> str:
     """Run a Copilot drafting session and return the best profile it proposed (TOML text)."""
     try:
         import copilot  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("--copilot needs the Copilot SDK. Install readthrough with the [study] extra.") from exc
-    drafter = _Drafter(cfg, gh, facts, on_progress)
+    drafter = _Drafter(cfg, forge, facts, on_progress)
     asyncio.run(drafter.run())
     if drafter.best is None:
         raise RuntimeError(
@@ -82,10 +83,8 @@ def mark_drafter(text: str, drafter: str) -> str:
 
 
 class _Drafter:
-    def __init__(
-        self, cfg: Config, gh: FileReader | None, facts: RepoFacts, on_progress: Callable[[str], None]
-    ) -> None:
-        self.cfg, self.gh, self.facts, self.say = cfg, gh, facts, on_progress
+    def __init__(self, cfg: Config, forge: Forge | None, facts: RepoFacts, on_progress: Callable[[str], None]) -> None:
+        self.cfg, self.forge, self.facts, self.say = cfg, forge, facts, on_progress
         self.tree = set(facts.tree)
         self.clone = cfg.clone if cfg.clone and (cfg.clone / ".git").exists() else None
         self.best: tuple[list[str], float, str] | None = None
@@ -208,10 +207,10 @@ class _Drafter:
             return f"{path} isn't a file in the repo. Use list_directory to find paths."
         if self.clone:
             text = (self.clone / path).read_text(encoding="utf-8", errors="replace")
-        elif self.gh is not None:
-            text = self.gh.raw_or_none(path) or ""
+        elif self.forge is not None:
+            text = self.forge.read_file(path) or ""
         else:
-            return "read_file needs a local clone or GitHub access."
+            return "read_file needs a local clone or forge access."
         lines = text.splitlines()
         end = min(end, start + 399, len(lines))
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))

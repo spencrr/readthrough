@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from readthrough.config import Config
-from readthrough.github import JITTER_MAX, GhNetworkError, GhRateLimited, backoff
+from readthrough.faults import NetworkError, RateLimited
+from readthrough.forges import JITTER_MAX, backoff
 from readthrough.serve import Dashboard
 from readthrough.tuning import default_tuning, load_tuning
 
@@ -26,21 +27,21 @@ def _mean_margin(width: float) -> float:
 
 
 def test_backoff_grows_exponentially_with_bounded_jitter():
-    tuning = load_tuning({"github": {"retry_backoff_seconds": 2.0, "retry_max_backoff_seconds": 30.0}}).github
+    tuning = load_tuning({"forge": {"retry_backoff_seconds": 2.0, "retry_max_backoff_seconds": 30.0}}).forge
     rng = random.Random(SEED)
-    exc = GhNetworkError("reset", stderr="connection reset")
+    exc = NetworkError("reset", stderr="connection reset")
     for attempt, base in ((1, 2.0), (2, 4.0), (3, 8.0), (4, 16.0), (5, 30.0), (6, 30.0)):
         waits = [backoff(attempt, tuning, exc, rng) for _ in range(SAMPLES)]
         assert min(waits) >= base and max(waits) <= base * (1 + JITTER_MAX)
         expected = base * (1 + JITTER_MAX / 2)
         assert statistics.fmean(waits) == pytest.approx(expected, abs=_mean_margin(base * JITTER_MAX))
     # Rate limits wait the configured time exactly, with no jitter.
-    assert backoff(1, tuning, GhRateLimited("429", stderr="HTTP 429"), rng) == tuning.rate_limit_wait_seconds
+    assert backoff(1, tuning, RateLimited("429", stderr="HTTP 429"), rng) == tuning.rate_limit_wait_seconds
 
 
 def test_backoff_is_reproducible_from_a_seed():
-    tuning = default_tuning().github
-    exc = GhNetworkError("reset", stderr="connection reset")
+    tuning = default_tuning().forge
+    exc = NetworkError("reset", stderr="connection reset")
     first = [backoff(1, tuning, exc, random.Random(SEED)) for _ in range(3)]
     second = [backoff(1, tuning, exc, random.Random(SEED)) for _ in range(3)]
     assert first == second

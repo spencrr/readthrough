@@ -2,7 +2,7 @@
 
 Busy repos have fifty-plus open pull requests. I wanted two things from a queue like that: a picture of where the work is landing in the architecture, and a way to review PRs that leaves me actually understanding them, instead of skimming a diff and clicking approve.
 
-readthrough does both, for any GitHub repo. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
+readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
 From there you can go two ways. A button on each PR starts a GitHub Copilot deep-review session in a terminal, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. With the Copilot SDK installed the assistant reads the code and grades your answers; without it, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
@@ -10,18 +10,20 @@ From there you can go two ways. A button on each PR starts a GitHub Copilot deep
 
 ## A repo has to be onboarded first
 
-The map is only as good as readthrough's idea of the architecture, so before it lays out a repo you check that idea with it. Onboarding (in the browser at `/setup`, or `readthrough onboard`) drafts an architecture profile from the code, CODEOWNERS, the docs, and where recent PRs actually changed things, measures it against those PRs, and won't accept it until it covers them. Copilot can write the draft for you by reading the repo. Repos can ship their own profile as `.github/readthrough.toml`, and a team can keep a directory of profiles for repos that can't.
+The map is only as good as readthrough's idea of the architecture, so before it lays out a repo you check that idea with it. Onboarding (in the browser at `/setup`, or `readthrough onboard`) drafts an architecture profile from the code, CODEOWNERS, the docs, and where recent PRs actually changed things, measures it against those PRs, and won't accept it until it covers them. Copilot can write the draft for you by reading the repo. Repos can ship their own profile as `readthrough.toml` (in `.github/`, `.gitlab/`, or the root), and a team can keep a directory of profiles for repos that can't.
 
 ## Quick start
 
-You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and the GitHub CLI signed in (`gh auth login`). For the Copilot parts, also the [Copilot CLI](https://github.com/github/copilot-cli) signed in.
+You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For the Copilot parts, also the [Copilot CLI](https://github.com/github/copilot-cli) signed in.
 
 ```sh
 uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"   # drop [study] to skip Copilot
 
-readthrough onboard pallets/click --accept     # map the repo's architecture (edit the draft first if you like)
+readthrough onboard microsoft/vscode --accept  # map the repo's architecture (edit the draft first if you like)
 readthrough build --open                       # fetch the PRs and open the dashboard
 ```
+
+Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/forgejo`, `--forge gitlab gitlab-org/cli`, or `--forge ado organization/project/repository`. Those are read through the platform's REST API, with a token from its own CLI (`glab`, `az`) or an environment variable when there is one, and anonymously otherwise, which is enough for public repos.
 
 That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with Copilot drafting the profile if you like. `readthrough install skill` teaches Copilot the deep-review routine, and `readthrough doctor` tells you what's missing.
 
@@ -38,7 +40,7 @@ That gives you a static dashboard you rebuild when you want. For one that stays 
 
 ## How it's put together
 
-One package, `src/readthrough`, with no runtime dependencies beyond the standard library and the `gh` CLI; the `[study]` extra adds the GitHub Copilot SDK.
+One package, `src/readthrough`, with no runtime dependencies beyond the standard library (and the `gh` CLI for GitHub repos); the `[study]` extra adds the GitHub Copilot SDK.
 
 ```
 cli.py            the commands; every failure ends in one line or an error id
@@ -48,7 +50,10 @@ limits.py         safety limits that only change by a deliberate commit
 profile.py        architecture profiles, and where a repo's comes from (a registry of sources)
 onboard.py        drafting a profile from the repo and measuring it against recent PRs
 onboard_copilot.py  the same, with Copilot reading the repo
-github.py         every gh call: timeouts, retries with jitter, classified failures, the diff cache
+model.py          the pull request as the analysis sees it, whichever forge it came from
+forges/           a registry of forge adapters: github (gh), gitlab, forgejo, azure_devops (REST); the diff cache
+faults.py         how outside calls fail, classified from a CLI's stderr or an HTTP status
+process.py        running programs: UTF-8, timeouts, secrets that never reach a log
 build.py          one build: fetch, analyze, write data.json, the dashboard, and the briefs
 analyze.py        lanes, signals, line heuristics, overlaps, and the burn-down plan
 ci.py             which checks are required, failing, or also failing on main
@@ -67,7 +72,7 @@ assets/web/       the pages as separate HTML, CSS, and JS, inlined into one serv
 assets/vendor/    Cytoscape, marked, DOMPurify, and Lucide icons, with their licenses
 ```
 
-To extend it: a new place profiles can come from, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](docs/profiles.md).
+To extend it: a new forge, a new place profiles can come from, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](docs/profiles.md).
 
 ## Development
 

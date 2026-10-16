@@ -7,28 +7,38 @@ import pytest
 from readthrough import review
 from readthrough.config import Config
 
-ALLOWED = ["Octo/Courier", "o/r"]
+ALLOWED = ["github/Octo/Courier", "github/o/r", "gitlab/g/sub/p"]
 
 
-def test_session_id_is_stable_per_pr():
-    a = review.default_session_id("Octo/Courier", 2897)
-    assert a == review.default_session_id("Octo/Courier", 2897)
-    assert a != review.default_session_id("Octo/Courier", 2898)
+def _cfg(tmp_path: Path, repo: str = "o/r", **kw) -> Config:
+    return Config(home=tmp_path / "home", repo=repo, **kw)
+
+
+def test_session_id_is_stable_per_pr(tmp_path: Path):
+    cfg = _cfg(tmp_path, "Octo/Courier")
+    a = review.default_session_id(cfg, 2897)
+    assert a == review.default_session_id(cfg, 2897)
+    assert a != review.default_session_id(cfg, 2898)
+    # Derived from the PR's URL, so the same path on another forge is another session.
+    assert a != review.default_session_id(_cfg(tmp_path, "Octo/Courier", forge="forgejo"), 2897)
     uuid.UUID(a)
 
 
-def test_ledger_session_overrides_default():
-    assert review.session_id_for("o/r", 1, {"session": "abc"}) == "abc"
-    assert review.session_id_for("o/r", 1, None) == review.default_session_id("o/r", 1)
+def test_ledger_session_overrides_default(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    assert review.session_id_for(cfg, 1, {"session": "abc"}) == "abc"
+    assert review.session_id_for(cfg, 1, None) == review.default_session_id(cfg, 1)
 
 
 @pytest.mark.parametrize(
     ("url", "action", "repo", "number"),
     [
-        ("readthrough://review/Octo/Courier/2897", "review", "Octo/Courier", 2897),
-        ("READTHROUGH://Review/octo/courier/2897/", "review", "Octo/Courier", 2897),
-        ("readthrough://refresh/Octo/Courier", "refresh", "Octo/Courier", None),
-        ("readthrough://open/o/r", "open", "o/r", None),
+        ("readthrough://review/github/Octo/Courier/2897", "review", "github/Octo/Courier", 2897),
+        ("READTHROUGH://Review/github/octo/courier/2897/", "review", "github/Octo/Courier", 2897),
+        ("readthrough://review/Octo/Courier/2897", "review", "github/Octo/Courier", 2897),  # pre-forge form
+        ("readthrough://refresh/github/Octo/Courier", "refresh", "github/Octo/Courier", None),
+        ("readthrough://open/o/r", "open", "github/o/r", None),
+        ("readthrough://review/gitlab/g/sub/p/5", "review", "gitlab/g/sub/p", 5),
         ("readthrough://open", "open", None, None),
     ],
 )
@@ -43,6 +53,7 @@ def test_parse_readthrough_url_accepts(url, action, repo, number):
         "https://evil.example/review/1",
         "readthrough://exec/o/r/1",
         "readthrough://review/evil/repo/1",
+        "readthrough://review/g/sub/p/1",  # a non-GitHub repo must be named with its forge
         "readthrough://review/o/r/1?x=1",
         "readthrough://review/o/r/1;calc",
         "readthrough://review/../../x",
@@ -98,22 +109,28 @@ def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path, monkeyp
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
     root = tmp_path / "copilot"
     cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path)
-    primary = review.default_session_id("o/r", 7)
+    primary = review.default_session_id(cfg, 7)
     vs = "11111111-1111-1111-1111-111111111111"
-    _session(root, primary, review.review_prompt("o/r", 7, Path("b.md")))
+    _session(root, primary, review.review_prompt(cfg, 7, Path("b.md")))
+    # A marker written before there were forges names a GitHub repo by its path alone; it still links.
     _session(root, vs, review.pr_marker("O/R", 7) + " please review", client="vscode-agent-host")
     _session(
-        root, "22222222-2222-2222-2222-222222222222", "talking about [readthrough:o/r#8] later", client="github/cli"
+        root,
+        "22222222-2222-2222-2222-222222222222",
+        "talking about [readthrough:github/o/r#8] later",
+        client="github/cli",
     )
     _session(root, "33333333-3333-3333-3333-333333333333", None)
     _session(root, "44444444-4444-4444-4444-444444444444", "unrelated")
+    _session(root, "55555555-5555-5555-5555-555555555555", "[readthrough:gitlab/o/r#7] same path, other forge")
 
     index = review.session_index(cfg.home)
     assert index.scan(force=True)
-    found = index.sessions_for("o/r", 7)
+    found = index.sessions_for(cfg.slug, 7)
     assert set(found) == {primary, vs}
     assert "33333333-3333-3333-3333-333333333333" not in json.loads((cfg.home / "session-index.json").read_text())
-    assert set(review.session_index(cfg.home).sessions_for("o/r", 8)) == {"22222222-2222-2222-2222-222222222222"}
+    assert set(review.session_index(cfg.home).sessions_for(cfg.slug, 8)) == {"22222222-2222-2222-2222-222222222222"}
+    assert set(index.sessions_for("gitlab/o/r", 7)) == {"55555555-5555-5555-5555-555555555555"}
 
     sessions = review.pr_sessions(cfg, 7, primary)
     assert [s["id"] for s in sessions] == [primary, vs]
@@ -126,8 +143,11 @@ def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path, monkeyp
         review.plan_review(cfg, 7, ledger_entry=None, session_id="44444444-4444-4444-4444-444444444444")
 
 
-def test_review_prompt_starts_with_the_marker():
-    prompt = review.review_prompt("o/r", 7, Path("b.md"))
-    assert prompt.startswith("[readthrough:o/r#7] ")
+def test_review_prompt_starts_with_the_marker(tmp_path: Path):
+    prompt = review.review_prompt(_cfg(tmp_path), 7, Path("b.md"))
+    assert prompt.startswith("[readthrough:github/o/r#7] ")
+    assert "for o/r#7" in prompt
     match = review.MARKER_RE.search(prompt)
-    assert match is not None and match.groups() == ("o/r", "7")
+    assert match is not None and match.groups() == ("github/o/r", "7")
+    ado = review.MARKER_RE.search(review.pr_marker("ado/org/proj/repo", 12))
+    assert ado is not None and ado.groups() == ("ado/org/proj/repo", "12")

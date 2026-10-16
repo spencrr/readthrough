@@ -1,0 +1,9 @@
+{
+ "method": "GET",
+ "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/items?scopePath=%2F&recursionLevel=Full&versionDescriptor.version=main&versionDescriptor.versionType=branch&api-version=7.1",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json; charset=utf-8; api-version=7.1"
+ },
+ "text": "{\"count\":2,\"value\":[{\"objectId\":\"f1da1d552d6293438e44295cf66b9d07bdd32a57\",\"gitObjectType\":\"tree\",\"commitId\":\"86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"path\":\"/\",\"isFolder\":true,\"url\":\"https://dev.azure.com/powershell/2972bb5c-f20c-4a60-8bd9-00ffe9987edc/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/items?path=%2F&versionType=Branch&version=main&versionOptions=None\"},{\"objectId\":\"0426b314df700f2f67522fcdc441a4af920e90d7\",\"gitObjectType\":\"blob\",\"commitId\":\"86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"path\":\"/es-metadata.yml\",\"url\":\"https://dev.azure.com/powershell/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/items//es-metadata.yml?versionType=Branch&version=main&versionOptions=None\"}]}"
+}

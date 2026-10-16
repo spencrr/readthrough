@@ -72,9 +72,9 @@ Each kind can have its own `signal` and `questions` under `[authors.kinds.<kind>
 
 A profile in your `~/.readthrough` only helps you. Two ways to share one:
 
-**In the repo.** Commit it as `.github/readthrough.toml`. Anyone onboarding the repo gets it automatically, and it changes through PRs like everything else. This is the right choice when the maintainers want it.
+**In the repo.** Commit it as `readthrough.toml` in the forge's dot-directory (`.github/readthrough.toml` on GitHub; `.gitlab/`, `.forgejo/`, or `.azuredevops/` elsewhere), next to CODEOWNERS and the other review conventions, or at the root as `.readthrough.toml` or `readthrough.toml`. Anyone onboarding the repo gets it automatically, and it changes through PRs like everything else. This is the right choice when the maintainers want it. If a repo ends up with more than one, the dot-directory's wins and the dashboard points out the others.
 
-**In a shared directory.** When you can't or don't want to put it in the repo (it isn't your project, or the maintainers haven't taken it yet), keep it in a directory of profiles your team shares, one file per repo at `OWNER/NAME.toml`, and list that directory in each person's config:
+**In a shared directory.** When you can't or don't want to put it in the repo (it isn't your project, or the maintainers haven't taken it yet), keep it in a directory of profiles your team shares, one file per repo at `FORGE/OWNER/NAME.toml` (`OWNER/NAME.toml` also works for GitHub repos), and list that directory in each person's config:
 
 ```toml
 # ~/.readthrough/config.toml

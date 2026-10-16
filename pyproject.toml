@@ -145,7 +145,7 @@ omit = ["*/__main__.py"]
 
 [tool.coverage.report]
 # A ratchet: raise it when coverage goes up, never lower it to get a change in. Measured 91% with the browser tests.
-fail_under = 88
+fail_under = 90
 show_missing = true
 skip_covered = true
 

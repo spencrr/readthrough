@@ -10,6 +10,7 @@ const CI = {
   "failing-main": {group: "failing", icon: "✗", label: "failing, but also on main"},
   pending: {group: "pending", icon: "…", label: "pending"},
   passing: {group: "passing", icon: "✓", label: "passing"},
+  unknown: {group: "pending", icon: "?", label: "CI couldn't be read"},
   none: {group: "none", icon: "–", label: "no CI"},
 };
 const CI_GROUPS = {passing: "CI passing", failing: "Failing", pending: "Pending", none: "No CI"};
@@ -19,7 +20,9 @@ const ciRank = p => Object.keys(CI).indexOf(ciState(p));
 
 const UNDERSTOOD = ["understood","reviewed","commented","approved","changes-requested"];
 const REVIEWED = ["reviewed","commented","approved","changes-requested"];
-const STORE = "readthrough:" + DATA.repo;
+const STORE = "readthrough:" + (DATA.slug || DATA.repo);
+const FORGE = DATA.forge || {name: "github", label: "GitHub", pr_noun: "pull request", url: ""};
+const SLUG = DATA.slug || `${FORGE.name}/${DATA.repo}`;
 const GROUPS = {lanes: LANES, authors: AUTHORS, cis: CI_GROUPS};
 const HASH = new URLSearchParams(location.hash.slice(1).split("?")[1] || "");
 const fromHash = (key, all) => { const v = HASH.get(key); const keep = v ? v.split(",").filter(k => k in all) : []; return new Set(keep.length ? keep : Object.keys(all)); };
@@ -114,8 +117,8 @@ const md = text => safeHtml(marked.parse(text || "", {gfm: true, breaks: false})
 
 function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 2200); }
 function copy(text, msg){ navigator.clipboard.writeText(text).then(() => toast(msg || "Copied")); }
-const deepPrompt = n => `[readthrough:${DATA.repo}#${n}] Use the readthrough skill to run a deep review session for ${DATA.repo}#${n}. The study brief is at ${(LINKS.briefs_dir || "").replace(/\\/g, "/")}/pr-${n}.md`;
-const reviewUrl = n => `readthrough://review/${DATA.repo}/${n}`;
+const deepPrompt = n => `[readthrough:${SLUG}#${n}] Use the readthrough skill to run a deep review session for ${DATA.repo}#${n}. The study brief is at ${(LINKS.briefs_dir || "").replace(/\\/g, "/")}/pr-${n}.md`;
+const reviewUrl = n => `readthrough://review/${SLUG}/${n}`;
 const sessionUrl = id => `vscode://agents/agent-host-session/copilotcli/${id}`;
 const vscodeUrl = n => {
   const s = (byNum[n].sessions || [])[0];
@@ -143,7 +146,7 @@ function sessionList(n){
 const whoBadge = p => {
   const k = p.author_kind || "external";
   const cls = isFirst(p) ? "first" : {internal: "int", external: "ext", bot: "bot"}[authorGroup(p)];
-  return `<span class="who ${cls}" title="GitHub association: ${esc(p.author_association || "?")}">${esc(kindBadge(k))}</span>`;
+  return `<span class="who ${cls}" title="${esc(FORGE.label)} association: ${esc(p.author_association || "?")}">${esc(kindBadge(k))}</span>`;
 };
 const scoreBadge = p => {
   const s = p.study;
@@ -188,8 +191,8 @@ function header(){
   document.title = `${PROFILE.title} Readthrough`;
   $("title").textContent = `${PROFILE.title} Readthrough`;
   $("repos").innerHTML = LIVE
-    ? `<select id="repoSwitch" title="Switch repo">${LIVE.repos.map(r => `<option value="${esc(r)}" ${r === DATA.repo ? "selected" : ""}>${esc(r)}</option>`).join("")}<option value="__setup">+ Onboard a repo…</option></select>
-       <a class="btn icon" href="/setup?repo=${encodeURIComponent(DATA.repo)}" title="Settings for ${esc(DATA.repo)}: account, clone, profile, authors" aria-label="Repo settings">${icon("settings")}</a>`
+    ? `<select id="repoSwitch" title="Switch repo">${LIVE.repos.map(r => `<option value="${esc(r.slug)}" ${r.slug === SLUG ? "selected" : ""}>${esc(r.name)}</option>`).join("")}<option value="__setup">+ Onboard a repo…</option></select>
+       <a class="btn icon" href="/setup?repo=${encodeURIComponent(SLUG)}" title="Settings for ${esc(DATA.repo)}: account, clone, profile, authors" aria-label="Repo settings">${icon("settings")}</a>`
     : "";
   $("meta").textContent = `${DATA.repo} · ${DATA.prs.length} open · as of ${new Date(DATA.generated).toLocaleString()} · you: @${DATA.viewer}`;
   $("logo").innerHTML ||= LOGO;
@@ -219,7 +222,7 @@ function header(){
   $("progbar").innerHTML = `<span style="width:${100*r/ready.length}%;background:var(--ready)"></span><span style="width:${100*(u-r)/ready.length}%;background:color-mix(in srgb,var(--ready) 40%,transparent)"></span>`;
   $("refresh").innerHTML = LIVE
     ? `${liveBadge()} <button class="btn icon" data-refresh title="Fetch the latest PRs now" aria-label="Refresh">${icon("refresh-cw")}${LIVE.status?.building ? "refreshing…" : ""}</button>`
-    : LINKS.protocol ? `<a class="btn icon" href="readthrough://refresh/${DATA.repo}" title="Refresh">${icon("refresh-cw")}</a>`
+    : LINKS.protocol ? `<a class="btn icon" href="readthrough://refresh/${SLUG}" title="Refresh">${icon("refresh-cw")}</a>`
     : `<button class="btn icon" data-copy="readthrough build --open" title="Copies the refresh command" aria-label="Copy refresh command">${icon("refresh-cw")}</button>`;
   syncHash();
   banners();
@@ -287,7 +290,7 @@ function chip(p, comp){
   return `<span class="${cls}" data-pr="${p.number}" style="background:${laneColor(p.lane)};padding-left:${pad}px;padding-right:${pad}px" title="#${p.number} ${esc(p.title)}\n@${esc(p.author)} (${who}) · ${LANES[p.lane]} · +${p.additions}/-${p.deletions}${comp ? ` · ${p.by_comp[comp]} lines here` : ""}">${p.number}</span>`;
 }
 // Every signal is worked out by a rule, never by a language model; DATA.rules says which rule.
-const SOURCE = {github: ["git-pull-request", "From GitHub"], profile: ["cog", "Rule in the repo's profile"], "built-in": ["cog", "readthrough check"]};
+const SOURCE = {forge: ["git-pull-request", `From ${FORGE.label}`], github: ["git-pull-request", "From GitHub"], profile: ["cog", "Rule in the repo's profile"], "built-in": ["cog", "readthrough check"]};
 const ruleTip = id => { const r = DATA.rules?.[id]; return r ? `${SOURCE[r.source][1]}: ${r.how}` : ""; };
 const ruleIcon = id => { const r = DATA.rules?.[id]; return r ? icon(SOURCE[r.source][0], "ico sm") : ""; };
 function flagsHtml(p, kinds = ["blocker","you","risk","responsibility"]){
@@ -557,7 +560,7 @@ const profileLine = () => {
   return `The map comes from ${esc(pr.origin || "the repo's profile")}${drafted}${when ? `, accepted on ${when}` : ""}.`;
 };
 function howItWorks(){
-  return `<div class="how"><p>${icon("cog", "ico sm")}<b>Worked out by rules.</b> Lanes, CI, and review state come from GitHub. Components come from the profile's path patterns, signals and line heuristics from its rules (hover one to see which), and the contracts are ${PROFILE.contracts_source ? `quoted from <code>${esc(PROFILE.contracts_source)}</code> in the repo` : "written in the profile"}. The plan, estimates, and related PRs are arithmetic. ${profileLine()}</p>
+  return `<div class="how"><p>${icon("cog", "ico sm")}<b>Worked out by rules.</b> Lanes, CI, and review state come from ${esc(FORGE.label)}. Components come from the profile's path patterns, signals and line heuristics from its rules (hover one to see which), and the contracts are ${PROFILE.contracts_source ? `quoted from <code>${esc(PROFILE.contracts_source)}</code> in the repo` : "written in the profile"}. The plan, estimates, and related PRs are arithmetic. ${profileLine()}</p>
     <p>${icon("sparkles", "ico sm")}<b>Written by Copilot:</b> only what's in the Study tab and in review sessions, and the profile itself if Copilot drafted it.</p></div>`;
 }
 function briefTab(n){

@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from conftest import PROFILE_PATH, REPO
+from conftest import PROFILE_PATH, REPO, SLUG
 
 from readthrough.build import build
 from readthrough.config import Config
@@ -36,22 +36,14 @@ def browser():
 
 
 @pytest.fixture
-def server(tmp_path: Path, monkeypatch, make_pr):
-    from test_cli import FakeGitHub
-
-    class Busy(FakeGitHub):
-        def fetch_prs(self, limit):
-            viewer, prs, _ = super().fetch_prs(limit)
-            return viewer, prs, 40
-
-    FakeGitHub.fail = FakeGitHub.unreadable = None
-    FakeGitHub.prs = [
+def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
+    fake_forge.prs = [
         make_pr(number=1, body=BODY),
         make_pr(number=2, title="FEAT: other", author={"login": "me"}),
         make_pr(number=3, title="DOC: draft", isDraft=True),
     ]
+    fake_forge.total = 40  # more open than fetched, so the "limit" banner shows
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
-    monkeypatch.setattr("readthrough.build.GitHub", Busy)
     monkeypatch.setattr("readthrough.build.registered_protocol_command", lambda: None)
     cfg = Config(home=tmp_path / "home", repo=REPO, onboarded="2026-10-01T00:00:00+00:00")
     cfg.home.mkdir(parents=True)
@@ -85,7 +77,7 @@ def page(browser, server):
 
 
 def open_dashboard(page):
-    page.goto(f"{page.base}/r/{REPO}/")
+    page.goto(f"{page.base}/r/{SLUG}/")
     page.wait_for_selector("#v-map.on")
 
 
@@ -157,6 +149,6 @@ def test_setup_page_loads_and_lists_the_repo(page):
 
 
 def test_pages_have_no_unfilled_placeholders(page):
-    for path in (f"/r/{REPO}/", "/setup"):
+    for path in (f"/r/{SLUG}/", "/setup"):
         page.goto(page.base + path)
         assert "/*__READTHROUGH_" not in page.content()

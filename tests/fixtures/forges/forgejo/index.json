@@ -1,0 +1,162 @@
+[
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo",
+  "file": "a467e70e374c.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls?state=open&sort=recentupdate&limit=2",
+  "file": "abf7a246a063.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls?state=open&limit=1",
+  "file": "6a44ccb778e2.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14856/files?limit=50",
+  "file": "aad3937bc2be.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544/files?limit=50",
+  "file": "59c71da3f041.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14856/reviews?limit=50",
+  "file": "26c499a0bd6b.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544/reviews?limit=50",
+  "file": "4b5a777cdf98.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544/reviews/2009499/comments",
+  "file": "39bdce47eea5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/commits/ba276ede0ad35316f3465472668d9f6cefe29ae4/statuses?limit=50",
+  "file": "4101cf99b3ab.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544/reviews/2099256/comments",
+  "file": "c5f794f6d12a.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/git/commits/ba276ede0ad35316f3465472668d9f6cefe29ae4",
+  "file": "5dd2f033485b.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544/reviews/2110651/comments",
+  "file": "b3bcdf26f5f2.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/collaborators?limit=50",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /api/v1/repos/forgejo/forgejo/collaborators failed: HTTP 401 {\"message\":\"token is required\",\"url\":\"https://codeberg.org/api/swagger\"}",
+   "stderr": "HTTP 401 {\"message\":\"token is required\",\"url\":\"https://codeberg.org/api/swagger\"}\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/commits/a1d3d1c0e2e71f41089835eaa47c2da9f8942db4/statuses?limit=50",
+  "file": "963f7a37840f.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/commits/a1d3d1c0e2e71f41089835eaa47c2da9f8942db4/statuses?limit=50&page=2",
+  "file": "9389f28310ef.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/git/commits/a1d3d1c0e2e71f41089835eaa47c2da9f8942db4",
+  "file": "5a273c90feeb.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls?state=closed&sort=recentupdate&limit=2",
+  "file": "0cebf0b65aa5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14791/files?limit=50",
+  "file": "fcd900fc02ac.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14811/files?limit=50",
+  "file": "649b79bcdb19.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo",
+  "file": "a467e70e374c.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/git/trees/forgejo?recursive=true&page=1&per_page=1000",
+  "file": "5c250e7135fc.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/git/trees/forgejo?recursive=true&page=2&per_page=1000",
+  "file": "2e89d19be1f1.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/raw/README.md?ref=forgejo",
+  "file": "e97f70ce7e2e.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/raw/CODEOWNERS?ref=forgejo",
+  "file": "165113c4eabe.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/raw/definitely/not/here.md?ref=forgejo",
+  "file": null
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/contents/.devcontainer?ref=forgejo",
+  "file": "ae2091aa681b.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/branch_protections",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /api/v1/repos/forgejo/forgejo/branch_protections failed: HTTP 401 {\"message\":\"token is required\",\"url\":\"https://codeberg.org/api/swagger\"}",
+   "stderr": "HTTP 401 {\"message\":\"token is required\",\"url\":\"https://codeberg.org/api/swagger\"}\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/commits/forgejo/statuses?limit=50",
+  "file": "a1dcb3f2df5a.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/commits/forgejo/statuses?limit=50&page=2",
+  "file": "274a37d8bb25.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14544.diff",
+  "file": "ee76ff2b2aa7.json"
+ }
+]

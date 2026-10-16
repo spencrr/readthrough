@@ -13,44 +13,37 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from readthrough.faults import ForgeError
 from readthrough.files import write_atomic
-from readthrough.github import GhError, GhNotFound
 from readthrough.logs import pool_map
-from readthrough.tuning import GitHubTuning
+from readthrough.tuning import ForgeTuning
 
 log = logging.getLogger(__name__)
 DAY = 24 * 3600
 
 
-class Runner(Protocol):
-    """All a membership check needs: run a ``gh`` command, and the concurrency to run them at."""
+class Membership(Protocol):
+    """All a membership check needs from a forge: one lookup, and the concurrency to run them at."""
 
-    tuning: GitHubTuning
+    tuning: ForgeTuning
 
-    def run(self, cmd: list[str]) -> str: ...
+    def is_member(self, group: str, login: str) -> bool: ...
 
 
-def _check(gh: Runner, key: str) -> bool:
-    """Is this login in the org or team? Only a 404 means "no"; other failures raise, so they aren't cached."""
+def _check(forge: Membership, key: str) -> bool:
     kind, org, *rest = key.split(":")
     login = rest[-1]
-    try:
-        if kind == "org":
-            gh.run(["gh", "api", f"orgs/{org}/members/{login}"])  # 204 if a member visible to you, else 404
-            return True
-        out = gh.run(["gh", "api", f"orgs/{org}/teams/{rest[0]}/memberships/{login}"])
-        return json.loads(out or "{}").get("state") == "active"
-    except GhNotFound:
-        return False
+    return forge.is_member(org if kind == "org" else f"{org}/{rest[0]}", login)
 
 
 def internal_members(
-    gh: Runner, *, teams: list[str], orgs: list[str], logins: set[str], cache_path: Path, ttl_days: float = 7.0
+    forge: Membership, *, teams: list[str], orgs: list[str], logins: set[str], cache_path: Path, ttl_days: float = 7.0
 ) -> tuple[set[str], list[str]]:
     """Logins (lower-case) that belong to one of ``teams`` ("org/team-slug") or ``orgs``, and checks that failed.
 
     Answers are cached for ``ttl_days``. A check that fails (network, auth) isn't cached, and its login is
-    classified by the profile's other rules this time.
+    classified by the profile's other rules this time. Only the forge's "no" is a no: the adapter raises
+    for anything but a definite answer.
     """
     if not (teams or orgs) or not logins:
         return set(), []
@@ -66,14 +59,14 @@ def internal_members(
     if stale:
         log.info("Checking %d team/org memberships", len(stale))
 
-        def check(key: str) -> bool | GhError:
+        def check(key: str) -> bool | ForgeError:
             try:
-                return _check(gh, key)
-            except GhError as exc:
+                return _check(forge, key)
+            except ForgeError as exc:
                 return exc
 
-        for key, result in zip(stale, pool_map(check, stale, gh.tuning.concurrency), strict=True):
-            if isinstance(result, GhError):
+        for key, result in zip(stale, pool_map(check, stale, forge.tuning.concurrency), strict=True):
+            if isinstance(result, ForgeError):
                 failed.append(f"{key.split(':', 1)[1]}: {result.reason}")
                 cache.pop(key, None)
             else:

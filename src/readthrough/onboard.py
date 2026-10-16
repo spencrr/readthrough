@@ -23,24 +23,14 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from readthrough.github import Reader, run
+from readthrough.forges import Forge
+from readthrough.model import MergedPullRequest
+from readthrough.process import run
 from readthrough.profile import FALLBACK, Profile, parse_profile
 from readthrough.rules import glob_to_regex
 from readthrough.tuning import default_tuning
 
 log = logging.getLogger(__name__)
-
-
-MERGED_QUERY = """
-query MergedPullRequests($owner:String!,$name:String!,$count:Int!){
-  repository(owner:$owner,name:$name){
-    defaultBranchRef{name}
-    pullRequests(states:MERGED,last:$count,orderBy:{field:UPDATED_AT,direction:ASC}){
-      nodes{number author{login __typename} authorAssociation files(first:100){nodes{path additions deletions}}}
-    }
-  }
-}
-"""
 
 TEST_DIRS = {"tests", "test", "spec", "specs", "__tests__", "testing", "e2e", "integration_tests", "unit_tests"}
 GENERIC_DIRS = {"src", "lib", "app", "core", "pkg", "internal", "common", "main"}  # mean nothing without their parent
@@ -88,58 +78,53 @@ class RepoFacts:
     default_branch: str
     tree: list[str]
     churn: Counter[str]
-    authors: list[dict[str, str]]
+    authors: list[dict[str, Any]]  # login, bot, association per recent PR
     codeowners: list[tuple[str, list[str]]] = field(default_factory=list)
     docs: dict[str, str] = field(default_factory=dict)
     has_instructions: bool = False
+    tree_complete: bool = True  # False when the forge listed only part of a huge tree
 
 
 # ---------------------------------------------------------------- gathering
 
 
 def gather(
-    gh: Reader, *, clone: Path | None = None, open_prs: list[dict[str, Any]] | None = None, sample: int | None = None
+    forge: Forge,
+    *,
+    clone: Path | None = None,
+    open_prs: list[MergedPullRequest] | None = None,
+    sample: int | None = None,
 ) -> RepoFacts:
-    data = gh.graphql(
-        MERGED_QUERY, owner=gh.owner, name=gh.name, count=sample or default_tuning().onboarding.merged_sample
-    )["repository"]
-    branch = (data.get("defaultBranchRef") or {}).get("name") or "main"
+    branch, merged = forge.merged_prs(sample or default_tuning().onboarding.merged_sample)
     churn: Counter[str] = Counter()
-    authors: list[dict[str, str]] = []
-    nodes = data["pullRequests"]["nodes"] + (open_prs or [])
-    for pr in nodes:
-        for f in pr["files"]["nodes"]:
-            churn[f["path"]] += f["additions"] + f["deletions"]
-        author = pr.get("author") or {}
-        authors.append(
-            {
-                "login": author.get("login", "ghost"),
-                "typename": author.get("__typename", ""),
-                "association": pr.get("authorAssociation") or "NONE",
-            }
-        )
-    tree = _tree(gh, branch, clone)
-    facts = RepoFacts(gh.repo, branch, tree, churn, authors)
+    authors: list[dict[str, Any]] = []
+    for pr in merged + (open_prs or []):
+        for f in pr.files:
+            churn[f.path] += f.additions + f.deletions
+        authors.append({"login": pr.author.login, "bot": pr.author.bot, "association": pr.association.get("NONE")})
+    tree, complete = _tree(forge, branch, clone)
+    if not complete:
+        log.warning("Listed only %d files of a bigger tree; onboarding with a local clone sees them all", len(tree))
+    facts = RepoFacts(forge.repo, branch, tree, churn, authors, tree_complete=complete)
+    wanted = [p for p in [*CODEOWNERS, *ARCH_DOCS, *GUIDANCE] if p in tree]
+    texts = forge.read_files(wanted)
     for path in CODEOWNERS:
         if path in tree:
-            facts.codeowners = parse_codeowners(gh.raw_or_none(path) or "")
+            facts.codeowners = parse_codeowners(texts.get(path) or "")
             break
     for path in [*ARCH_DOCS, *GUIDANCE]:
         if path in tree and path not in facts.docs:
-            facts.docs[path] = gh.raw_or_none(path) or ""
+            facts.docs[path] = texts.get(path) or ""
     facts.has_instructions = any(p.startswith(".github/instructions/") for p in tree)
     return facts
 
 
-def _tree(gh: Reader, branch: str, clone: Path | None) -> list[str]:
+def _tree(forge: Forge, branch: str, clone: Path | None) -> tuple[list[str], bool]:
     if clone and (clone / ".git").exists():
         out = run(["git", "-C", str(clone), "ls-files"], check=False)
         if out.strip():
-            return out.splitlines()
-    data = json.loads(gh.api(f"repos/{gh.repo}/git/trees/{branch}?recursive=1"))
-    if data.get("truncated"):
-        log.warning("The repo tree is too big for one API call; onboarding with a local clone is more accurate")
-    return [e["path"] for e in data.get("tree", []) if e.get("type") == "blob"]
+            return out.splitlines(), True
+    return forge.tree(branch)
 
 
 def parse_codeowners(text: str) -> list[tuple[str, list[str]]]:
@@ -487,8 +472,9 @@ def measure(
     for comp in profile.components:
         if comp.id == FALLBACK:
             continue
+        # A pattern that matches nothing is only a finding when the whole tree was seen.
         for pat, rx in zip(comp.paths, comp.regexes, strict=True):
-            if not any(rx.match(p) for p in facts.tree):
+            if facts.tree_complete and not any(rx.match(p) for p in facts.tree):
                 dead.append((comp.id, pat))
         if any(comp.matches(p) for p in facts.tree) and comp.id not in claimed.values():
             shadowed.append(comp.id)
@@ -498,6 +484,8 @@ def measure(
         if any(p in claimed for p in facts.churn)
         else "files in the repo (no merged PRs to learn from yet)"
     )
+    if not facts.tree_complete:
+        basis += f" (only {len(facts.tree)} files of the tree were listed; onboard with --clone to see them all)"
     need = default_tuning().onboarding.min_coverage if min_coverage is None else min_coverage
     return Coverage(total, mapped, by_component, unmapped.most_common(8), dead, shadowed, has_authors, basis, need)
 
@@ -510,7 +498,7 @@ def author_table(
 
     counts: Counter[tuple[str, str, str]] = Counter()
     for a in facts.authors:
-        kind = author_kind(a["login"], a["association"], a["typename"], profile.authors, members=members)
+        kind = author_kind(a["login"], a["association"], profile.authors, bot=a.get("bot", False), members=members)
         counts[(a["login"], a["association"], kind)] += 1
     return sorted(
         ((login, assoc, kind, n) for (login, assoc, kind), n in counts.items()), key=lambda r: (r[2], -r[3], r[0])

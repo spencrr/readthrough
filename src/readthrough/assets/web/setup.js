@@ -27,7 +27,13 @@ const label = s => { const n = s.split("/").pop().replace(/[_-]+/g, " "); return
 const KIND_LABEL = {internal: "internal", external: "external", "first-time": "first-time", bot: "bot", unknown: "unknown"};
 
 // ---- state
+// A repo is referred to by its slug (forge/owner/name) everywhere the server is involved; the sidebar and
+// headings show its plain name, with the forge named only when it isn't GitHub.
 const S = {state: null, sel: new URLSearchParams(location.search).get("repo") || null, w: null};
+const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+const isSel = r => same(S.sel, r.slug) || same(S.sel, r.name);
+const forgeOf = name => (S.state?.forges || []).find(f => f.name === name) || {name, label: name, shape: "owner/name", accounts: false, pr_noun: "pull request"};
+const forgeTag = r => r.forge && r.forge !== "github" ? ` <span class="sub" style="margin:0;font-weight:400">on ${esc(r.forge_label)}</span>` : "";
 async function load(){
   S.state = await api(`/api/setup/state${S.sel ? `?repo=${encodeURIComponent(S.sel)}` : ""}`);
   render();
@@ -35,7 +41,7 @@ async function load(){
 function render(){
   const st = S.state, repos = st.repos;
   $("back").innerHTML = repos.some(r => r.onboarded) ? `<a class="btn" href="/">${icon("map")}Dashboards</a>` : "";
-  $("nav").innerHTML = repos.map(r => `<button class="ritem ${S.sel && S.sel.toLowerCase() === r.name.toLowerCase() ? "on" : ""}" data-repo="${esc(r.name)}"><span class="dot ${r.onboarded ? "ok" : "todo"}" title="${r.onboarded ? "Onboarded" : "Not onboarded yet"}"></span><span class="n">${esc(r.name)}</span>${st.settings.default_repo === r.name ? '<span style="font-size:11px;color:var(--mut)">default</span>' : ""}</button>`).join("")
+  $("nav").innerHTML = repos.map(r => `<button class="ritem ${isSel(r) ? "on" : ""}" data-repo="${esc(r.slug)}"><span class="dot ${r.onboarded ? "ok" : "todo"}" title="${r.onboarded ? "Onboarded" : "Not onboarded yet"}"></span><span class="n">${esc(r.name)}${forgeTag(r)}</span>${same(st.settings.default_repo, r.cli_name) ? '<span style="font-size:11px;color:var(--mut)">default</span>' : ""}</button>`).join("")
     + `<button class="ritem ${S.sel ? "" : "on"}" data-new>${icon("plus")}<span class="n">Onboard a repo</span></button>`
     + `<div style="margin-top:14px">${globalCard()}</div>`;
   const repo = st.repo;
@@ -49,7 +55,7 @@ function render(){
 function globalCard(){
   const st = S.state.settings, onboarded = S.state.repos.filter(r => r.onboarded);
   return `<div class="card" style="padding:10px 12px"><h2 style="font-size:13px">${icon("settings", "ico sm")}Everywhere</h2>
-    <label class="f">Default repo<select id="g-default"><option value="">(none)</option>${onboarded.map(r => `<option ${st.default_repo === r.name ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
+    <label class="f">Default repo<select id="g-default"><option value="">(none)</option>${onboarded.map(r => `<option value="${esc(r.slug)}" ${same(st.default_repo, r.cli_name) ? "selected" : ""}>${esc(r.cli_name)}</option>`).join("")}</select></label>
     <label class="f" style="margin-top:6px">Refresh every (minutes)<input type="number" id="g-refresh" min="1" max="1440" value="${st.refresh_minutes}" style="width:90px"></label>
     <div class="row"><button class="btn" data-act="save-global">Save</button></div>
     <div class="cli" style="margin-top:4px">Port <b>${st.port}</b> (change it in <code>config.toml</code>, then restart the server)</div></div>`;
@@ -57,18 +63,19 @@ function globalCard(){
 
 // ---- onboarding wizard
 function renderWizard(repo){
-  const w = S.w ||= {repo: repo?.name || "", account: repo?.account || "", clone: repo?.clone || "", remote: repo?.remote || "", info: null, cloneInfo: null, toml: repo?.profile_text || "", report: null, log: [], busy: false, editable: true, source: repo?.source || null};
-  const accounts = S.state.accounts;
-  const cli = `readthrough onboard ${w.repo || "owner/name"}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
+  const w = S.w ||= {repo: repo?.name || "", forge: repo?.forge || "github", account: repo?.account || "", clone: repo?.clone || "", remote: repo?.remote || "", info: null, cloneInfo: null, toml: repo?.profile_text || "", report: null, log: [], busy: false, editable: true, source: repo?.source || null};
+  const accounts = S.state.accounts, forges = S.state.forges, forge = forgeOf(w.forge);
+  const cli = `readthrough onboard ${w.repo || forge.shape.split(" ")[0]}${w.forge !== "github" ? ` --forge ${w.forge}` : ""}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
   const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? "✓" : n}</span>`;
   const info = w.info;
   $("main").innerHTML = `
   <div class="card"><h2>${step(1, !!info)}Which repo?</h2>
-    <p class="sub">readthrough reads it through the gh CLI. If you're signed in to more than one GitHub account, pick the one that can see this repo.</p>
-    <div class="row"><label class="f">Repo<input type="text" id="w-repo" placeholder="owner/name" value="${esc(w.repo)}" autocomplete="off" spellcheck="false"></label>
-      <label class="f">Account<select id="w-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${w.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>
+    <p class="sub">GitHub is read through the gh CLI (pick the account that can see the repo if you're signed in to several). Other forges are read through their API with a token from their own CLI or an environment variable, or anonymously for public repos.</p>
+    <div class="row"><label class="f">Where<select id="w-forge">${forges.map(f => `<option value="${esc(f.name)}" ${w.forge === f.name ? "selected" : ""} title="${esc(f.summary)}">${esc(f.label)}</option>`).join("")}</select></label>
+      <label class="f">Repo<input type="text" id="w-repo" placeholder="${esc(forge.shape.split(" ")[0])}" value="${esc(w.repo)}" autocomplete="off" spellcheck="false"></label>
+      ${forge.accounts ? `<label class="f">Account<select id="w-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${w.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : ""}
       <button class="btn primary" data-act="inspect" style="align-self:flex-end">Check access</button></div>
-    ${info ? `<div class="msg ok">${icon("circle-check", "ico sm")}<b>${esc(info.full_name)}</b> · ${info.private ? "private" : "public"} · default branch <code>${esc(info.default_branch)}</code>${info.description ? ` · ${esc(info.description)}` : ""}</div>` : ""}
+    ${info ? `<div class="msg ok">${icon("circle-check", "ico sm")}<b>${esc(info.full_name)}</b> on ${esc(info.forge_label)} · ${info.private ? "private" : "public"} · default branch <code>${esc(info.default_branch)}</code>${info.description ? ` · ${esc(info.description)}` : ""}</div>` : ""}
     ${w.err1 ? `<div class="msg err">${esc(w.err1)}</div>` : ""}</div>
 
   <div class="card ${info ? "" : "dim"}"><h2>${step(2, w.cloneInfo?.ok)}Your local clone</h2>
@@ -110,13 +117,13 @@ function editorCard(e, key, {onboarding = false, editable = true} = {}){
       <button class="btn" data-act="preview" data-key="${key}" ${e.previewing ? "disabled" : ""}>${icon("external-link", "ico sm")}Preview the map</button>
       ${onboarding ? `<button class="btn primary" data-act="accept" data-key="${key}" ${r?.valid ? "" : "disabled"} title="${ok ? "Finish onboarding and start the dashboard" : "Fix the items in the report first, or tick accept anyway"}">Accept and start</button>
         ${r?.valid && r.problems.length ? `<label style="font-size:13px"><input type="checkbox" id="${key}-force"> accept anyway</label>` : ""}` : ""}
-      <button class="btn" data-act="upstream" data-key="${key}" title="Open GitHub's new-file page for .github/readthrough.toml so the maintainers can own this map">${icon("git-pull-request", "ico sm")}Propose upstream</button>
+      <button class="btn" data-act="upstream" data-key="${key}" title="Open the forge's new-file page for readthrough.toml so the maintainers can own this map">${icon("git-pull-request", "ico sm")}Propose upstream</button>
       ${e.previewing ? '<span class="spin"></span>' : ""}</div></div>`;
 }
 function authorsTable(rows, key){
   if (!rows.length) return '<p class="sub">No recent authors.</p>';
   const repo = currentRepoView(), int = new Set(repo?.internal_authors || []), ext = new Set(repo?.external_authors || []);
-  const can = !!repo?.name && S.state.repos.some(x => x.name === repo.name);
+  const can = !!repo?.slug && S.state.repos.some(x => x.slug === repo.slug);
   const sorted = [...rows].sort((a, b) => b[3] - a[3]);
   const row = ([login, assoc, kind, n]) => {
     const forced = int.has(login) ? "internal" : ext.has(login) ? "external" : "";
@@ -127,13 +134,13 @@ function authorsTable(rows, key){
     <table class="authors"><tbody>${sorted.slice(0, 12).map(row).join("")}</tbody></table>
     ${sorted.length > 12 ? `<details><summary class="sub">${sorted.length - 12} more</summary><table class="authors"><tbody>${sorted.slice(12).map(row).join("")}</tbody></table></details>` : ""}`;
 }
-const currentRepoView = () => S.state.repos.find(r => r.name.toLowerCase() === (S.sel || S.w?.info?.full_name || "").toLowerCase());
+const currentRepoView = () => { const want = S.sel || S.w?.info?.slug || ""; return S.state.repos.find(r => same(want, r.slug) || same(want, r.name)); };
 const editorState = key => key === "w" ? S.w : S.e;
 let checkTimer = null;
 function scheduleCheck(key){
   clearTimeout(checkTimer);
   checkTimer = setTimeout(async () => {
-    const e = editorState(key), repo = key === "w" ? e.info?.full_name : S.sel;
+    const e = editorState(key), repo = key === "w" ? e.info?.slug : S.sel;
     if (!repo) return;
     try { e.report = await api("/api/setup/check", {repo, toml: e.toml}); }
     catch (err) { e.report = {valid: false, error: err.message}; }
@@ -150,13 +157,13 @@ function refreshButtons(key, tmp){
 
 // ---- settings for an onboarded repo
 function renderSettings(repo){
-  const e = S.e && S.e.name === repo.name ? S.e : (S.e = {name: repo.name, toml: repo.profile_text, source: repo.source, editable: repo.editable, report: null, branch: null});
-  const accounts = S.state.accounts;
+  const e = S.e && S.e.slug === repo.slug ? S.e : (S.e = {slug: repo.slug, toml: repo.profile_text, source: repo.source, editable: repo.editable, report: null, branch: null});
+  const accounts = S.state.accounts, forge = forgeOf(repo.forge);
   $("main").innerHTML = `
-  <div class="card"><h2>${icon("git-pull-request")}${esc(repo.name)} <span class="sub" style="margin:0;font-weight:400">onboarded ${new Date(repo.onboarded).toLocaleDateString()}</span>
-    <span style="flex:1"></span><a class="btn" href="/r/${esc(repo.name)}/">${icon("map", "ico sm")}Open dashboard</a></h2></div>
+  <div class="card"><h2>${icon("git-pull-request")}${esc(repo.name)}${forgeTag(repo)} <span class="sub" style="margin:0;font-weight:400">onboarded ${new Date(repo.onboarded).toLocaleDateString()}</span>
+    <span style="flex:1"></span><a class="btn" href="/r/${esc(repo.slug)}/">${icon("map", "ico sm")}Open dashboard</a></h2></div>
   <div class="card"><h2>${icon("terminal")}Where it comes from</h2>
-    <div class="row"><label class="f">gh account<select id="s-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${repo.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>
+    <div class="row">${forge.accounts ? `<label class="f">gh account<select id="s-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${repo.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : `<label class="f">Forge<input type="text" value="${esc(forge.label)}" readonly style="min-width:120px"></label>`}
       <label class="f">Local clone<input type="text" class="wide" id="s-clone" value="${esc(repo.clone)}" spellcheck="false"></label>
       <label class="f">Remote<input type="text" id="s-remote" value="${esc(repo.remote || "")}" placeholder="detected" style="min-width:120px"></label></div>
     <div class="row"><button class="btn primary" data-act="save-source">Save</button><span class="sub" style="margin:0">Data lives in <code>${esc(repo.data_dir)}</code></span></div>
@@ -176,7 +183,7 @@ function renderSettings(repo){
   <div class="card"><h2 style="color:var(--bad)">${icon("x")}Stop tracking</h2>
     <p class="sub">Removes it from the config and stops serving it. Its data (ledger, study logs, worktrees) stays unless you also delete it.</p>
     <div class="row"><label style="font-size:13px"><input type="checkbox" id="s-purge"> also delete its data and worktrees</label><button class="btn danger" data-act="remove">Remove ${esc(repo.name)}</button></div>
-    <div class="cli">Same as <code>readthrough remove ${esc(repo.name)}</code> (add <code>--purge</code> to delete the data)</div></div>`;
+    <div class="cli">Same as <code>readthrough remove ${esc(repo.cli_name)}</code> (add <code>--purge</code> to delete the data)</div></div>`;
   if (!e.report) scheduleCheck("e");
 }
 
@@ -184,32 +191,32 @@ function renderSettings(repo){
 const val = id => $(id)?.value.trim() ?? "";
 async function act(t){
   const a = t.dataset.act, key = t.dataset.key, e = key ? editorState(key) : null;
-  const repoOf = () => key === "w" ? S.w.info?.full_name : S.sel;
+  const repoOf = () => key === "w" ? S.w.info?.slug : S.sel;
   try {
     if (a === "inspect") {
-      const w = S.w; w.repo = val("w-repo"); w.account = val("w-account"); w.err1 = null;
+      const w = S.w; w.repo = val("w-repo"); w.forge = val("w-forge") || w.forge; w.account = val("w-account"); w.err1 = null;
       t.disabled = true;
-      w.info = await api("/api/setup/inspect", {repo: w.repo, account: w.account || null});
+      w.info = await api("/api/setup/inspect", {repo: w.repo, forge: w.forge, account: w.account || null});
       w.repo = w.info.full_name; w.clone ||= w.info.clone; w.source = w.info.source; w.toml = w.info.profile_text || ""; w.editable = true;
-      if (w.info.onboarded) { location.search = `?repo=${encodeURIComponent(w.info.full_name)}`; return; }
+      if (w.info.onboarded) { location.search = `?repo=${encodeURIComponent(w.info.slug)}`; return; }
       if (w.clone) await act({dataset: {act: "clone"}});
       if (w.toml) scheduleCheck("w");
       return render();
     }
     if (a === "clone") {
       const w = S.w; w.clone = val("w-clone") || w.clone; w.err2 = null;
-      try { w.cloneInfo = await api("/api/setup/clone", {repo: w.info.full_name, clone: w.clone}); w.remote = w.cloneInfo.detected || ""; }
+      try { w.cloneInfo = await api("/api/setup/clone", {repo: w.info.slug, clone: w.clone}); w.remote = w.cloneInfo.detected || ""; }
       catch (err) { w.cloneInfo = null; w.err2 = err.message; }
       return render();
     }
     if (a === "draft") {
       const w = S.w; w.busy = true; w.err3 = null; w.log = []; w.remote = val("w-remote") || w.remote;
       render();
-      const {job} = await api("/api/setup/draft", {repo: w.info.full_name, account: w.account || null, clone: w.cloneInfo?.ok ? w.clone : null, remote: w.cloneInfo?.ok ? w.remote : null, mode: t.dataset.mode});
+      const {job} = await api("/api/setup/draft", {repo: w.info.slug, account: w.account || null, clone: w.cloneInfo?.ok ? w.clone : null, remote: w.cloneInfo?.ok ? w.remote : null, mode: t.dataset.mode});
       try {
         const res = await poll(job, log => { if (log.length !== w.log.length) { w.log = log; const box = $("w-log"); if (box) { box.innerHTML = log.map(l => `<div>${esc(l)}</div>`).join(""); box.scrollTop = box.scrollHeight; } else render(); } });
         w.toml = res.toml; w.report = res.report; w.editable = true;
-        S.state = await api(`/api/setup/state?repo=${encodeURIComponent(w.info.full_name)}`);
+        S.state = await api(`/api/setup/state?repo=${encodeURIComponent(w.info.slug)}`);
       } catch (err) { w.err3 = err.message; }
       w.busy = false; return render();
     }
@@ -237,12 +244,12 @@ async function act(t){
       toast("Onboarded. Building the dashboard…"); setTimeout(() => location.href = res.url, 900); return;
     }
     if (a === "upstream") {
-      const repo = repoOf();
-      const branch = S.w?.info?.default_branch || (await api("/api/setup/inspect", {repo, account: currentRepoView()?.account || null})).default_branch;
-      const base = `https://github.com/${repo}/new/${encodeURIComponent(branch)}?filename=.github/readthrough.toml`;
+      const info = S.w?.info || await api("/api/setup/inspect", {repo: repoOf(), account: currentRepoView()?.account || null});
+      const base = info.propose_url;
+      if (!base) { await navigator.clipboard.writeText(e.toml); return toast(`Profile copied: add it to the repo as ${info.profile_path}`); }
       const full = `${base}&value=${encodeURIComponent(e.toml)}`;
       if (full.length < 7000) window.open(full, "_blank", "noopener");
-      else { await navigator.clipboard.writeText(e.toml); window.open(base, "_blank", "noopener"); toast("Profile copied: paste it into the new file on GitHub"); }
+      else { await navigator.clipboard.writeText(e.toml); window.open(base, "_blank", "noopener"); toast(`Profile copied: paste it into the new file on ${info.forge_label}`); }
       return;
     }
     if (a === "save-source" || a === "save-review") {
@@ -274,7 +281,7 @@ async function setOverride(login, kind){
   int.delete(login); ext.delete(login);
   if (kind === "internal") int.add(login); if (kind === "external") ext.add(login);
   try {
-    await api("/api/setup/settings", {repo: repo.name, values: {internal_authors: [...int], external_authors: [...ext]}, version: S.state.settings.version});
+    await api("/api/setup/settings", {repo: repo.slug, values: {internal_authors: [...int], external_authors: [...ext]}, version: S.state.settings.version});
     S.state = await api(`/api/setup/state${S.sel ? `?repo=${encodeURIComponent(S.sel)}` : ""}`);
     toast(`@${login} is ${kind || "classified automatically"} now`);
     const key = S.sel && S.state.repo?.onboarded ? "e" : "w"; scheduleCheck(key);
@@ -297,6 +304,7 @@ document.addEventListener("input", ev => {
 document.addEventListener("change", ev => {
   if (ev.target.dataset.override !== undefined) return setOverride(ev.target.dataset.override, ev.target.value);
   if (ev.target.id === "w-account") S.w.account = ev.target.value;
+  if (ev.target.id === "w-forge") { S.w.forge = ev.target.value; S.w.account = ""; S.w.info = null; S.w.err1 = null; render(); }
   if (ev.target.id === "w-remote") S.w.remote = ev.target.value;
 });
 document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.id === "w-repo") act({dataset: {act: "inspect"}, disabled: false}); });

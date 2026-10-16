@@ -1,7 +1,7 @@
 """The live dashboard: a localhost server that keeps every onboarded repo fresh and pushes changes to the page.
 
-Each repo lives under ``/r/<owner>/<name>/`` and gets the same single-file dashboard as a static
-build, plus a small API (paths relative to the repo prefix):
+Each repo lives under ``/r/<forge>/<owner>/<name>/`` (its slug: ``/r/github/microsoft/vscode/``) and gets the
+same single-file dashboard as a static build, plus a small API (paths relative to the repo prefix):
 
     GET  /                    the dashboard
     GET  /api/data            the current payload
@@ -71,13 +71,13 @@ def base_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/"
 
 
-def repo_url(port: int, repo: str) -> str:
-    return f"{base_url(port)}r/{repo}/"
+def repo_url(port: int, slug: str) -> str:
+    return f"{base_url(port)}r/{slug}/"
 
 
 def server_url(cfg: Config) -> str:
     """The live page for this repo."""
-    return repo_url(cfg.port, cfg.repo)
+    return repo_url(cfg.port, cfg.slug)
 
 
 def server_alive(port: int, *, timeout: float = 0.5) -> dict[str, Any] | None:
@@ -401,12 +401,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}")
 
     def _route(self) -> tuple[Dashboard | None, str]:
-        """Split ``/r/<owner>/<name>/<rest>`` into the repo's Dashboard and ``/<rest>``."""
-        path = self.path.split("?", 1)[0]
-        m = re.fullmatch(r"/r/([\w.-]+)/([\w.-]+)(/.*)?", path)
-        if not m:
-            return None, path
-        return self.app.dashboard_for(f"{m.group(1)}/{m.group(2)}"), m.group(3) or "/"
+        return self.app.route(self.path.split("?", 1)[0])
 
     def _send(self, status: int, body: bytes, content_type: str, headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
@@ -431,7 +426,8 @@ class Handler(BaseHTTPRequestHandler):
         dashboard, path = self._route()
         if dashboard is None:
             if path == "/api/health":
-                return self._json({"app": "readthrough", "version": __version__, "repos": self.app.repo_names(),
+                return self._json({"app": "readthrough", "version": __version__,
+                                   "repos": [r["slug"] for r in self.app.repo_names()],
                                    "status": self.app.repo_status()})  # fmt: skip
             if path in ("/", "/index.html"):
                 return self._front_page()
@@ -468,7 +464,7 @@ class Handler(BaseHTTPRequestHandler):
     def _front_page(self) -> None:
         names = self.app.repo_names()
         if names:
-            target = self.app.default_repo() or names[0]
+            target = self.app.default_repo() or names[0]["slug"]
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", f"/r/{target}/")
             self.send_header("Content-Length", "0")
@@ -503,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
         live = {
             "token": self.app.token,
             "instance": self.app.instance,
-            "base": f"/r/{dashboard.cfg.repo}",
+            "base": f"/r/{dashboard.cfg.slug}",
             "repos": self.app.repo_names(),
             "refresh_minutes": dashboard.cfg.refresh_minutes,
             "status": dashboard.status,
@@ -648,28 +644,59 @@ class DashboardServer(ThreadingHTTPServer):
         dashboard.token = self.token
         dashboard.instance = self.instance
         with self._lock:
-            self.dashboards[dashboard.cfg.repo.lower()] = dashboard
+            self.dashboards[dashboard.cfg.slug.lower()] = dashboard
 
-    def dashboard_for(self, repo: str) -> Dashboard | None:
+    def dashboard_for(self, slug: str) -> Dashboard | None:
         with self._lock:
-            return self.dashboards.get(repo.lower())
+            return self.dashboards.get(slug.lower())
 
-    def repo_names(self) -> list[str]:
+    def route(self, path: str) -> tuple[Dashboard | None, str]:
+        """Split ``/r/<forge>/<owner>/<name>/<rest>`` into the repo's Dashboard and ``/<rest>``.
+
+        Slugs have as many segments as the forge needs, so the longest known slug that prefixes the path wins.
+        """
+        if not path.startswith("/r/"):
+            return None, path
+        lower = path.lower()
         with self._lock:
-            return [r.cfg.repo for r in self.dashboards.values()]
+            slugs = sorted(self.dashboards, key=len, reverse=True)
+            for slug in slugs:
+                prefix = f"/r/{slug}"
+                if lower == prefix or lower.startswith(prefix + "/"):
+                    return self.dashboards[slug], path[len(prefix) :] or "/"
+        return None, path
+
+    def repo_names(self) -> list[dict[str, str]]:
+        """Each served repo's slug (for URLs) and the name the user knows it by."""
+        with self._lock:
+            dashboards = list(self.dashboards.values())
+        counts: dict[str, int] = {}
+        for d in dashboards:
+            counts[d.cfg.repo.lower()] = counts.get(d.cfg.repo.lower(), 0) + 1
+        return [
+            {"slug": d.cfg.slug, "name": d.cfg.repo if counts[d.cfg.repo.lower()] == 1 else d.cfg.slug}
+            for d in dashboards
+        ]
 
     def default_repo(self) -> str | None:
-        return self._default
+        """The default repo's slug, when it's served."""
+        if not self._default:
+            return None
+        with self._lock:
+            dashboards = list(self.dashboards.values())
+        want = self._default.lower()
+        match = next((d for d in dashboards if want in (d.cfg.slug.lower(), d.cfg.repo.lower())), None)
+        return match.cfg.slug if match else None
 
     def repo_status(self) -> dict[str, dict[str, Any]]:
         keys = ("building", "error", "last_success", "consecutive_failures", "warnings", "next_build")
         with self._lock:
-            return {r.cfg.repo: {k: r.status.get(k) for k in keys} for r in self.dashboards.values()}
+            return {r.cfg.slug: {k: r.status.get(k) for k in keys} for r in self.dashboards.values()}
 
     def sync(self, settings: Any) -> None:
         """Add dashboards for newly onboarded repos and stop those that were removed."""
         self._default = settings.default_repo
-        wanted = {c.repo.lower(): c for c in settings.all() if c.onboarded}
+        wanted = {c.slug.lower(): c for c in settings.all() if c.onboarded}
         with self._lock:
             current = dict(self.dashboards)
         for key, dashboard in current.items():

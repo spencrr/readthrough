@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from readthrough import logs
-from readthrough.config import ConfigError, load_settings
+from readthrough.config import ConfigError, Settings, load_settings
 from readthrough.tuning import REPO_SECTIONS, Tuning, TuningError, changed_from_defaults, defaults_text, load_tuning
 
 
@@ -35,23 +35,23 @@ def test_defaults_file_and_code_agree_and_every_setting_is_explained():
 
 def test_overrides_are_validated_with_helpful_messages():
     with pytest.raises(TuningError, match="did you mean 'timeout_seconds'"):
-        load_tuning({"github": {"timout_seconds": 5}})
+        load_tuning({"forge": {"timout_seconds": 5}})
     with pytest.raises(TuningError, match="between 0 and 10"):
-        load_tuning({"github": {"retries": 99}})
+        load_tuning({"forge": {"retries": 99}})
     with pytest.raises(TuningError, match="whole number"):
-        load_tuning({"github": {"retries": 1.5}})
+        load_tuning({"forge": {"retries": 1.5}})
     with pytest.raises(TuningError, match="can't be set per repo"):
-        load_tuning(repo_overrides={"github": {"retries": 1}})
+        load_tuning(repo_overrides={"forge": {"retries": 1}})
     with pytest.raises(TuningError, match="non-empty list"):
         load_tuning({"server": {"retry_after_failure_minutes": []}})
     assert load_tuning({"logging": {"level": "DEBUG"}}).logging.level == "debug"
 
 
 CONFIG = """
-schema = 1
+schema = 2
 default_repo = "o/r"
 
-[tuning.github]
+[tuning.forge]
 timeout_seconds = 90
 
 [tuning.planning]
@@ -73,24 +73,24 @@ def test_config_tuning_layers_and_round_trips(tmp_path: Path):
     (tmp_path / "config.toml").write_text(CONFIG, encoding="utf-8")
     settings = load_settings(tmp_path)
     r, s = settings.config_for("o/r"), settings.config_for("o/s")
-    assert (r.tuning.github.timeout_seconds, r.tuning.planning.estimate_max_minutes) == (90, 60)
+    assert (r.tuning.forge.timeout_seconds, r.tuning.planning.estimate_max_minutes) == (90, 60)
     assert s.tuning.planning.estimate_max_minutes == 120
     assert r.clone == Path.home() / "src" / "r"
     assert changed_from_defaults(settings.tuning) == {
-        "github": {"timeout_seconds": 90.0},
+        "forge": {"timeout_seconds": 90.0},
         "planning": {"estimate_max_minutes": 120},
     }
     settings.save()
     text = (tmp_path / "config.toml").read_text(encoding="utf-8")
-    assert 'clone = "~/src/r"' in text and "[repos.tuning.planning]" in text and "schema = 1" in text
+    assert 'clone = "~/src/r"' in text and "[repos.tuning.planning]" in text and "schema = 2" in text
     again = load_settings(tmp_path)
     assert again.config_for("o/r").tuning.planning.estimate_max_minutes == 60
 
 
 def test_config_errors_point_at_the_problem(tmp_path: Path):
     path = tmp_path / "config.toml"
-    path.write_text('[tuning.github]\nretries = "lots"\n', encoding="utf-8")
-    with pytest.raises(ConfigError, match=r"tuning\.github\.retries must be a whole number"):
+    path.write_text('[tuning.forge]\nretries = "lots"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"tuning\.forge\.retries must be a whole number"):
         load_settings(tmp_path)
     path.write_text('[[repos]]\nname = "o/r"\nclnoe = "x"\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="did you mean 'clone'"):
@@ -108,7 +108,7 @@ def test_config_can_live_elsewhere(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("readthrough.config.DEFAULT_HOME", tmp_path / "home")
     settings = load_settings()
     assert settings.path == elsewhere and settings.default_repo == "o/r"
-    assert settings.config_for().repo_dir == tmp_path / "home" / "repos" / "o" / "r"
+    assert settings.config_for().repo_dir == tmp_path / "home" / "repos" / "github" / "o" / "r"
     assert load_settings(tmp_path / "explicit").path == tmp_path / "explicit" / "config.toml"
 
 
@@ -155,3 +155,15 @@ def test_setup_runs_once_until_reset(tmp_path: Path, fresh_logging):
     assert logging.getLogger("readthrough").handlers == handlers
     logs.reset()
     assert logging.getLogger("readthrough").handlers == []
+
+
+def test_a_github_owner_named_like_a_forge_is_not_a_slug(tmp_path: Path):
+    settings = Settings(home=tmp_path)
+    cfg = settings.config_for("gitlab/gitlab-foss")  # the GitHub mirror organization, not a GitLab slug
+    assert (cfg.forge, cfg.repo, cfg.slug) == ("github", "gitlab/gitlab-foss", "github/gitlab/gitlab-foss")
+    cfg = settings.config_for("gitlab/gitlab-org/cli")
+    assert (cfg.forge, cfg.repo) == ("gitlab", "gitlab-org/cli")
+    cfg = settings.config_for("forgejo/forgejo")  # a plain owner/name; the forge must be said
+    assert cfg.forge == "github"
+    assert settings.config_for("forgejo/forgejo", forge="forgejo").slug == "forgejo/forgejo/forgejo"
+    assert settings.config_for("ado/org/proj/repo").slug == "ado/org/proj/repo"

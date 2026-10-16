@@ -4,8 +4,9 @@ The session ID is derived from the PR URL, so the same button starts the session
 resumes it afterwards. ``review --fresh`` starts over with a random ID and remembers it in the ledger.
 
 Sessions started anywhere else (VS Code's agent window, a pasted prompt) get IDs readthrough didn't choose.
-Every prompt readthrough writes starts with a marker like ``[readthrough:owner/name#123]``, and ``SessionIndex``
-links any session whose first message carries one back to its PR.
+Every prompt readthrough writes starts with a marker like ``[readthrough:github/owner/name#123]`` (the repo's
+slug: its forge, then its path there), and ``SessionIndex`` links any session whose first message carries
+one back to its PR.
 """
 
 from __future__ import annotations
@@ -23,26 +24,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from readthrough import forges
 from readthrough.config import Config
-from readthrough.github import run
+from readthrough.process import run
 from readthrough.tuning import default_tuning
 
 log = logging.getLogger(__name__)
 
 URL_SCHEME = "readthrough"
 URL_ACTIONS = ("review", "refresh", "open")
-_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def copilot_home() -> Path:
     return Path(os.environ.get("COPILOT_HOME", Path.home() / ".copilot"))
 
 
-MARKER_RE = re.compile(r"\[readthrough:([\w.-]+/[\w.-]+)#(\d{1,7})\]")
+MARKER_RE = re.compile(r"\[readthrough:([\w.-]+(?:/[\w.-]+)+)#(\d{1,7})\]")
 
 
-def pr_marker(repo: str, number: int) -> str:
-    return f"[readthrough:{repo}#{number}]"
+def pr_marker(slug: str, number: int) -> str:
+    return f"[readthrough:{slug}#{number}]"
+
+
+def _same_repo(found: str, slug: str) -> bool:
+    """Markers name the repo by slug; ones written before there were forges name GitHub repos by path alone."""
+    found, slug = found.lower(), slug.lower()
+    return found == slug or (slug.startswith(f"{forges.DEFAULT}/") and found == slug.split("/", 1)[1])
 
 
 def _first_user_message(folder: Path, max_bytes: int | None = None) -> str | None:
@@ -135,10 +143,15 @@ class SessionIndex:
                 tmp.replace(self.path)
             return changed
 
-    def sessions_for(self, repo: str, number: int) -> dict[str, dict[str, str]]:
-        key = f"{repo.lower()}#{number}"
+    def sessions_for(self, slug: str, number: int) -> dict[str, dict[str, str]]:
         with self._lock:
-            return {sid: meta for sid, meta in self._known.items() if meta and meta["pr"] == key}
+            out = {}
+            for sid, meta in self._known.items():
+                if meta:
+                    found, _, n = meta["pr"].rpartition("#")
+                    if n == str(number) and _same_repo(found, slug):
+                        out[sid] = meta
+            return out
 
 
 _indexes: dict[Path, SessionIndex] = {}
@@ -154,7 +167,7 @@ def session_index(home: Path) -> SessionIndex:
 
 def pr_sessions(cfg: Config, number: int, primary: str) -> list[dict[str, object]]:
     """Every Copilot session for this PR, the default one first, then the most recently used."""
-    found = session_index(cfg.home).sessions_for(cfg.repo, number)
+    found = session_index(cfg.home).sessions_for(cfg.slug, number)
     out = []
     for sid in dict.fromkeys([primary, *found]):
         info = session_info(sid)
@@ -174,12 +187,13 @@ def pr_sessions(cfg: Config, number: int, primary: str) -> list[dict[str, object
     return out[:1] + sorted(out[1:], key=newest_first)
 
 
-def default_session_id(repo: str, number: int) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://github.com/{repo}/pull/{number}"))
+def default_session_id(cfg: Config, number: int) -> str:
+    """Derived from the PR's URL on its forge, so the same PR always gets the same session."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, forges.make(cfg).pr_url(number)))
 
 
-def session_id_for(repo: str, number: int, ledger_entry: dict | None) -> str:
-    return (ledger_entry or {}).get("session") or default_session_id(repo, number)
+def session_id_for(cfg: Config, number: int, ledger_entry: dict | None) -> str:
+    return (ledger_entry or {}).get("session") or default_session_id(cfg, number)
 
 
 def session_info(session_id: str) -> dict[str, object]:
@@ -215,9 +229,9 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def review_prompt(repo: str, number: int, brief: Path) -> str:
+def review_prompt(cfg: Config, number: int, brief: Path) -> str:
     return (
-        f"{pr_marker(repo, number)} Use the readthrough skill to run a deep review session for {repo}#{number}. "
+        f"{pr_marker(cfg.slug, number)} Use the readthrough skill to run a deep review session for {cfg.repo}#{number}. "
         f"The study brief is at {brief.as_posix()}"
     )
 
@@ -245,14 +259,14 @@ def plan_review(
             f"No local clone of {cfg.repo} configured. Set it with `readthrough onboard {cfg.repo} --clone PATH`."
         )
     if session_id is not None:
-        linked = {s["id"] for s in pr_sessions(cfg, number, session_id_for(cfg.repo, number, ledger_entry))}
+        linked = {s["id"] for s in pr_sessions(cfg, number, session_id_for(cfg, number, ledger_entry))}
         if session_id not in linked:
             raise ValueError(f"Session {session_id} isn't linked to #{number}")
     else:
-        session_id = str(uuid.uuid4()) if fresh else session_id_for(cfg.repo, number, ledger_entry)
+        session_id = str(uuid.uuid4()) if fresh else session_id_for(cfg, number, ledger_entry)
     resuming = bool(session_info(session_id)["exists"])
     common = ["--add-dir", str(cfg.repo_dir), *cfg.copilot_args]
-    short = cfg.repo.split("/")[1]
+    short = cfg.repo.rsplit("/", 1)[-1]
     if resuming:
         argv = [copilot, f"--resume={session_id}", *common]
     else:
@@ -261,7 +275,7 @@ def plan_review(
             copilot,
             f"--session-id={session_id}",
             f"--name={short} #{number} deep review",
-            "-i", review_prompt(cfg.repo, number, brief),
+            "-i", review_prompt(cfg, number, brief),
             *common,
         ]  # fmt: skip
     return ReviewLaunch(argv=argv, cwd=cfg.clone, session_id=session_id, resuming=resuming, title=f"{short} #{number}")
@@ -283,10 +297,11 @@ class ReadthroughUrl:
 
 
 def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughUrl:
-    """Parse ``readthrough://<action>/<owner>/<repo>[/<pr>]``. Anything unexpected is rejected.
+    """Parse ``readthrough://<action>/<forge>/<owner>/<repo>[/<pr>]``. Anything unexpected is rejected.
 
     Any web page can try to open this scheme, so this is strict: a fixed set of actions, a numeric PR,
-    and only repos you've onboarded. ``readthrough://open`` with no repo opens the dashboard's front page.
+    and only repos you've onboarded (``allowed_repos`` holds their slugs; a GitHub repo may also be named
+    by its bare ``owner/repo``). ``readthrough://open`` with no repo opens the dashboard's front page.
     """
     parts = urlsplit(url.strip())
     if parts.scheme.lower() != URL_SCHEME:
@@ -299,24 +314,24 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
     segments = [s for s in parts.path.split("/") if s]
     if action == "open" and not segments:
         return ReadthroughUrl(action)
+    if not all(_SEGMENT_RE.match(s) for s in segments):
+        raise ValueError("Unexpected characters in the path")
+    number: int | None = None
+    if action == "review":
+        if len(segments) < 3 or not re.fullmatch(r"\d{1,7}", segments[-1]):
+            raise ValueError(f"review needs a repo and a PR number, e.g. {URL_SCHEME}://review/github/owner/name/1234")
+        number = int(segments.pop())
     if len(segments) < 2:
-        raise ValueError(f"{action} needs a repo, e.g. {URL_SCHEME}://{action}/owner/name")
-    repo = f"{segments[0]}/{segments[1]}"
-    match = next((r for r in allowed_repos if r.lower() == repo.lower()), None)
-    if not _REPO_RE.match(repo) or match is None:
+        raise ValueError(f"{action} needs a repo, e.g. {URL_SCHEME}://{action}/github/owner/name")
+    repo = "/".join(segments)
+    match = next((slug for slug in allowed_repos if _same_repo(repo, slug)), None)
+    if match is None:
         raise ValueError(f"{repo!r} isn't an onboarded repo")
-    rest = segments[2:]
-    if action != "review":
-        if rest:
-            raise ValueError(f"{action} takes only a repo")
-        return ReadthroughUrl(action, match)
-    if len(rest) != 1 or not re.fullmatch(r"\d{1,7}", rest[0]):
-        raise ValueError(f"review needs a PR number, e.g. {URL_SCHEME}://review/owner/name/1234")
-    return ReadthroughUrl(action, match, int(rest[0]))
+    return ReadthroughUrl(action, match, number)
 
 
-def review_url(repo: str, number: int) -> str:
-    return f"{URL_SCHEME}://review/{repo}/{number}"
+def review_url(slug: str, number: int) -> str:
+    return f"{URL_SCHEME}://review/{slug}/{number}"
 
 
 def vscode_session_url(session_id: str) -> str:
@@ -351,7 +366,7 @@ def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Pa
     if cfg.clone is None:
         raise RuntimeError(f"No local clone of {cfg.repo} configured.")
     clone, ref, remote = str(cfg.clone), f"refs/remotes/readthrough/pr-{number}", repo_remote(cfg)
-    run(["git", "-C", clone, "fetch", "--quiet", remote, f"+pull/{number}/head:{ref}", base])
+    run(["git", "-C", clone, "fetch", "--quiet", remote, f"+{forges.make(cfg).pr_ref(number)}:{ref}", base])
     path = worktree_path(cfg, number)
     if (path / ".git").exists():
         run(["git", "-C", str(path), "checkout", "--quiet", "--detach", ref])

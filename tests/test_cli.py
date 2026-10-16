@@ -1,16 +1,13 @@
-import copy
 import json
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
-from conftest import PROFILE_PATH, REPO
+from conftest import PROFILE_PATH, REPO, SLUG
 
 from readthrough import cli, ledger, logs, onboard, review, system
-from readthrough.github import GhAuthError, GhNetworkError, GhNotFound
-from readthrough.tuning import default_tuning
+from readthrough.faults import AuthError, NetworkError
 
 CONFIG = f"""
 default_repo = "{REPO}"
@@ -24,59 +21,13 @@ name = "o/waiting"
 """
 
 
-class FakeGitHub:
-    prs: ClassVar[list] = []
-    fail: ClassVar[Exception | None] = None
-    unreadable: ClassVar[Exception | None] = None
-
-    def __init__(self, repo, account=None, tuning=None):
-        self.repo, self.account = repo, account
-        self.owner, self.name = repo.split("/")
-        self.tuning = tuning or default_tuning().github
-
-    def api(self, path):
-        if path == f"repos/{self.repo}":
-            if FakeGitHub.unreadable:
-                raise FakeGitHub.unreadable
-            return json.dumps({"full_name": self.repo, "name": self.name, "default_branch": "main"})
-        raise GhNotFound(f"api {path}", stderr="HTTP 404")
-
-    def run(self, cmd, *, check=True):
-        raise GhNotFound("not a member", stderr="HTTP 404")
-
-    def raw(self, path):
-        return "# the repo's profile\n"
-
-    def raw_or_none(self, path):
-        return None
-
-    def fetch_prs(self, limit):
-        if FakeGitHub.fail:
-            raise FakeGitHub.fail
-        return "me", copy.deepcopy(FakeGitHub.prs), len(FakeGitHub.prs)
-
-    def ci_context(self, bases):
-        return {}, set(), "main"
-
-    def rules(self, profile, *, branch):
-        return {}, [], []
-
-    def diffs(self, prs, cache):
-        return {}, {}, 0
-
-    def rate_limit(self):
-        return {"graphql": 4900, "rest": 4800}
-
-
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path: Path, make_pr):
+def isolated(monkeypatch, tmp_path: Path, make_pr, fake_forge):
     logs.reset()
     opened: list[str] = []
+    FakeGitHub = fake_forge  # noqa: N806 - the historical name, kept so the tests read the same
     FakeGitHub.prs = [make_pr(number=1), make_pr(number=2, title="FEAT: other", author={"login": "me"})]
-    FakeGitHub.fail = FakeGitHub.unreadable = None
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
-    monkeypatch.setattr("readthrough.build.GitHub", FakeGitHub)
-    monkeypatch.setattr("readthrough.cli.GitHub", FakeGitHub)
     monkeypatch.setattr("readthrough.build.registered_protocol_command", lambda: None)
     monkeypatch.setattr("readthrough.cli.signed_in_accounts", lambda: ["me"])
     monkeypatch.setattr("readthrough.cli.run", lambda cmd, **kw: "origin\n" if "remote" in cmd else "tool 1.0\n")
@@ -88,11 +39,10 @@ def isolated(monkeypatch, tmp_path: Path, make_pr):
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.toml").write_text(CONFIG, encoding="utf-8")
-    owner, name = REPO.split("/")
-    local_profile = home / "repos" / owner / name / "profile.toml"
+    local_profile = home / "repos" / Path(*SLUG.split("/")) / "profile.toml"
     local_profile.parent.mkdir(parents=True)
     local_profile.write_text(PROFILE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-    yield SimpleNamespace(home=home, opened=opened, tmp=tmp_path, profile=local_profile)
+    yield SimpleNamespace(home=home, opened=opened, tmp=tmp_path, profile=local_profile, forge=FakeGitHub)
     logs.reset()
 
 
@@ -130,7 +80,7 @@ def test_build_open_always_opens_the_static_dashboard(isolated):
 
 
 def test_a_failed_build_names_its_error_id(isolated, capsys):
-    FakeGitHub.fail = GhNetworkError("graphql OpenPRs failed: reset", stderr="connection reset by peer")
+    isolated.forge.fail = NetworkError("graphql OpenPRs failed: reset", stderr="connection reset by peer")
     assert dashboard(isolated, "build") == 1
     out = capsys.readouterr().out
     assert "the build failed [error " in out and "readthrough.log" in out
@@ -179,16 +129,16 @@ def test_config_shows_checks_and_explains_settings(isolated, capsys):
     assert dashboard(isolated, "config", "--check") == 0
     assert "valid (2 repos)" in capsys.readouterr().out
     assert dashboard(isolated, "config", "--defaults") == 0
-    assert "[github]" in capsys.readouterr().out
+    assert "[forge]" in capsys.readouterr().out
 
     config = isolated.home / "config.toml"
-    config.write_text(config.read_text(encoding="utf-8") + "\n[tuning.github]\nretries = 5\n", encoding="utf-8")
+    config.write_text(config.read_text(encoding="utf-8") + "\n[tuning.forge]\nretries = 5\n", encoding="utf-8")
     assert dashboard(isolated, "config") == 0
-    assert "github: retries=5" in capsys.readouterr().out
+    assert "forge: retries=5" in capsys.readouterr().out
 
 
 def test_an_invalid_config_is_reported_without_a_traceback(isolated, capsys):
-    (isolated.home / "config.toml").write_text("[tuning.github]\nretrys = 5\n", encoding="utf-8")
+    (isolated.home / "config.toml").write_text("[tuning.forge]\nretrys = 5\n", encoding="utf-8")
     assert dashboard(isolated, "config", "--check") == 1
     err = capsys.readouterr().err
     assert "retries" in err and "Traceback" not in err
@@ -237,9 +187,9 @@ def test_onboarding_drafts_then_accepts(isolated, capsys, monkeypatch):
     from test_onboard import AUTHORS, CHURN, TREE
 
     facts = onboard.RepoFacts("o/app", "main", TREE, CHURN, AUTHORS)
-    monkeypatch.setattr(onboard, "gather", lambda gh, **kw: facts)
+    monkeypatch.setattr(onboard, "gather", lambda forge, **kw: facts)
     assert dashboard(isolated, "onboard", "o/app", "--clone", str(isolated.tmp / "nowhere")) == 0
-    profile = isolated.home / "repos" / "o" / "app" / "profile.toml"
+    profile = isolated.home / "repos" / "github" / "o" / "app" / "profile.toml"
     assert profile.exists()
     assert "--accept" in capsys.readouterr().out
 
@@ -255,7 +205,7 @@ def test_onboarding_drafts_then_accepts(isolated, capsys, monkeypatch):
 
 
 def test_onboarding_an_unreadable_repo_lists_your_accounts(isolated, capsys):
-    FakeGitHub.unreadable = GhAuthError("api repos/o/secret failed", stderr="HTTP 403")
+    isolated.forge.unreadable = AuthError("api repos/o/secret failed", stderr="HTTP 403")
     assert dashboard(isolated, "onboard", "o/secret") == 1
     assert "Signed-in gh accounts: me" in capsys.readouterr().err
 
@@ -275,14 +225,14 @@ def test_doctor_reports_problems_and_writes_a_bundle(isolated, capsys, monkeypat
         names = set(z.namelist())
         versions = json.loads(z.read("versions.json"))
     assert {"versions.json", "config.toml", "health.json", "readthrough.log"} <= names
-    assert f"repos/{REPO.replace('/', '__')}.json" in names
+    assert f"repos/{SLUG.replace('/', '__')}.json" in names
     assert versions["gh_accounts"] == ["me"] and versions["repos"][0]["built"]
 
 
 def test_doctor_shows_the_servers_last_failure(isolated, capsys, monkeypatch):
-    status = {REPO: {"error": {"id": "abc123", "message": "reset", "step": "fetching PRs", "at": "10:00"},
+    status = {SLUG: {"error": {"id": "abc123", "message": "reset", "step": "fetching PRs", "at": "10:00"},
                      "consecutive_failures": 3}}  # fmt: skip
-    monkeypatch.setattr("readthrough.serve.server_alive", lambda port, **kw: {"repos": [REPO], "status": status})
+    monkeypatch.setattr("readthrough.serve.server_alive", lambda port, **kw: {"repos": [SLUG], "status": status})
     assert dashboard(isolated, "--repo", REPO, "doctor") == 1
     out = capsys.readouterr().out
     assert "3 failed refresh(es) in a row" in out and "error abc123" in out
@@ -386,13 +336,13 @@ def test_url_handler_routes_actions(isolated, monkeypatch):
     monkeypatch.setattr(cli, "cmd_build", lambda s, ns: calls.append(("refresh", ns.repo)) or 0)
     monkeypatch.setattr(cli, "cmd_open", lambda s, ns: calls.append(("open", ns.repo)) or 0)
     for url in (
-        f"readthrough://review/{REPO}/1",
-        f"readthrough://refresh/{REPO}",
-        f"readthrough://open/{REPO}",
+        f"readthrough://review/{SLUG}/1",
+        f"readthrough://refresh/{SLUG}",
+        f"readthrough://open/{REPO}",  # the pre-forge form still names a GitHub repo
         "readthrough://open",
     ):
         assert dashboard(isolated, "handle-url", url) == 0
-    assert calls == [("review", 1), ("refresh", REPO), ("open", REPO), ("open", None)]
+    assert calls == [("review", 1), ("refresh", SLUG), ("open", SLUG), ("open", None)]
 
 
 def test_unexpected_errors_get_an_id_and_point_at_the_bundle(isolated, capsys, monkeypatch):
@@ -408,7 +358,7 @@ def test_unexpected_errors_get_an_id_and_point_at_the_bundle(isolated, capsys, m
 
 def test_expected_errors_are_one_line(isolated, capsys, monkeypatch):
     def failing(settings, args):
-        raise GhNetworkError("api failed", stderr="connection reset")
+        raise NetworkError("api failed", stderr="connection reset")
 
     monkeypatch.setattr(cli, "cmd_repos", failing)
     assert dashboard(isolated, "repos") == 1

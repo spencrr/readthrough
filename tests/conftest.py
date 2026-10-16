@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fakes import FakeForge
 
+from readthrough.forges.github import normalize
+from readthrough.model import PullRequest
 from readthrough.profile import load_profile
 
 NOW = dt.datetime(2026, 10, 2, 12, 0, tzinfo=dt.UTC)
@@ -14,6 +17,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 PROFILE_PATH = FIXTURES / "courier.toml"
 PROFILE = load_profile(PROFILE_PATH)
 REPO = PROFILE.repo
+SLUG = f"github/{REPO}"
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +26,19 @@ def no_real_programs(monkeypatch: pytest.MonkeyPatch) -> None:
     everywhere instead of passing on a machine that happens to be signed in."""
     monkeypatch.setenv("READTHROUGH_GH", "readthrough-tests-must-not-run-gh")
     monkeypatch.setenv("READTHROUGH_GIT", "readthrough-tests-must-not-run-git")
+    monkeypatch.setenv("READTHROUGH_GLAB", "readthrough-tests-must-not-run-glab")
+    monkeypatch.setenv("READTHROUGH_AZ", "readthrough-tests-must-not-run-az")
+
+
+@pytest.fixture
+def fake_forge(monkeypatch: pytest.MonkeyPatch) -> type[FakeForge]:
+    """Every ``forges.make(cfg)`` returns a FakeForge for that repo; the class holds the data and records calls."""
+    FakeForge.reset()
+    monkeypatch.setattr(
+        "readthrough.forges.make",
+        lambda cfg: FakeForge(cfg.repo, None, cfg.tuning.forge, account=getattr(cfg, "account", None)),
+    )
+    return FakeForge
 
 
 def _base_pr() -> dict[str, Any]:
@@ -66,9 +83,21 @@ def _base_pr() -> dict[str, Any]:
 
 @pytest.fixture
 def make_pr():
+    """A PR as GitHub's GraphQL returns it (what the fake forge and the normalizer consume)."""
+
     def factory(**overrides: Any) -> dict[str, Any]:
         pr = copy.deepcopy(_base_pr())
         pr.update(overrides)
         return pr
+
+    return factory
+
+
+@pytest.fixture
+def make_pull(make_pr):
+    """The same PR as the neutral record the analysis consumes."""
+
+    def factory(**overrides: Any) -> PullRequest:
+        return normalize(make_pr(**overrides))
 
     return factory

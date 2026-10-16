@@ -45,7 +45,7 @@ def test_settings_file(tmp_path: Path):
     settings = load_settings(tmp_path)
     cfg = settings.config_for()
     assert (cfg.repo, cfg.clone, cfg.session_minutes, cfg.port) == ("o/r", Path.home() / "x", 45, 9000)
-    assert cfg.repo_dir == tmp_path / "repos" / "o" / "r"
+    assert cfg.repo_dir == tmp_path / "repos" / "github" / "o" / "r"
     corp = settings.config_for("CORP/Private")
     assert (corp.repo, corp.account, corp.session_minutes, corp.onboarded) == ("corp/private", "me_corp", 30, None)
 

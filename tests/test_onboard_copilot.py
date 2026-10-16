@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fakes import FakeForge
 
 from readthrough import onboard
 from readthrough import onboard_copilot as copilot_mod
@@ -103,7 +104,7 @@ def test_copilot_draft_reports_missing_sdk(monkeypatch: pytest.MonkeyPatch, cfg,
 
     monkeypatch.setattr("builtins.__import__", blocked_import)
     with pytest.raises(RuntimeError, match="Copilot SDK"):
-        copilot_draft(cfg, gh=None, facts=facts)
+        copilot_draft(cfg, forge=None, facts=facts)
 
 
 def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPatch, cfg, facts):
@@ -111,7 +112,7 @@ def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPa
     proposal = onboard.draft_profile(facts)
 
     class FakeDrafter:
-        def __init__(self, cfg, gh, facts, on_progress):
+        def __init__(self, cfg, forge, facts, on_progress):
             self.best = None
             self.summary = ""
 
@@ -122,7 +123,7 @@ def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPa
     _install_fake_copilot(monkeypatch)
     monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
 
-    text = copilot_draft(cfg, gh=None, facts=facts, on_progress=progress.append)
+    text = copilot_draft(cfg, forge=None, facts=facts, on_progress=progress.append)
 
     assert text.startswith("# Drafted with Copilot")
     assert onboard.check_profile_text(text, facts)[0].drafted_by == "copilot"
@@ -131,7 +132,7 @@ def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPa
 
 def test_copilot_draft_raises_when_session_never_proposes(monkeypatch: pytest.MonkeyPatch, cfg, facts):
     class FakeDrafter:
-        def __init__(self, cfg, gh, facts, on_progress):
+        def __init__(self, cfg, forge, facts, on_progress):
             self.best = None
             self.summary = ""
 
@@ -142,7 +143,7 @@ def test_copilot_draft_raises_when_session_never_proposes(monkeypatch: pytest.Mo
     monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
 
     with pytest.raises(RuntimeError, match="didn't propose"):
-        copilot_draft(cfg, gh=None, facts=facts)
+        copilot_draft(cfg, forge=None, facts=facts)
 
 
 def test_run_starts_client_creates_locked_down_session_and_disconnects(cfg, facts, monkeypatch: pytest.MonkeyPatch):
@@ -172,7 +173,7 @@ def test_run_starts_client_creates_locked_down_session_and_disconnects(cfg, fact
 
     client = Client()
     _install_fake_copilot(monkeypatch, client)
-    drafter = _Drafter(cfg, gh=None, facts=facts, on_progress=lambda _m: None)
+    drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     monkeypatch.setattr(drafter, "_tools", lambda: [SimpleNamespace(name="read_file")])
     monkeypatch.setattr(drafter, "_first_prompt", lambda: "first prompt")
 
@@ -218,7 +219,7 @@ class FakeSession:
 
 def test_send_records_progress_summary_and_unsubscribes(cfg, facts):
     progress = []
-    drafter = _Drafter(cfg, gh=None, facts=facts, on_progress=progress.append)
+    drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=progress.append)
     session = FakeSession(
         [
             _event("tool.execution_start", tool_name="read_file"),
@@ -236,7 +237,7 @@ def test_send_records_progress_summary_and_unsubscribes(cfg, facts):
 
 
 def test_send_raises_errors_only_when_no_best_proposal_exists(cfg, facts):
-    drafter = _Drafter(cfg, gh=None, facts=facts, on_progress=lambda _m: None)
+    drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(drafter._send(FakeSession([_event("session.error", message="boom")]), "prompt"))
 
@@ -246,7 +247,7 @@ def test_send_raises_errors_only_when_no_best_proposal_exists(cfg, facts):
 
 def test_send_timeout_unsubscribes(cfg, facts):
     cfg.tuning = replace(cfg.tuning, study=replace(cfg.tuning.study, onboarding_turn_timeout_seconds=0.05))
-    drafter = _Drafter(cfg, gh=None, facts=facts, on_progress=lambda _m: None)
+    drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     session = FakeSession([])  # never signals
     with pytest.raises(TimeoutError):
         asyncio.run(drafter._send(session, "prompt"))
@@ -254,7 +255,7 @@ def test_send_timeout_unsubscribes(cfg, facts):
 
 
 def test_first_prompt_includes_reference_docs_authors_and_no_clone_notice(cfg, facts):
-    prompt = _Drafter(cfg, gh=None, facts=facts, on_progress=lambda _m: None)._first_prompt()
+    prompt = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)._first_prompt()
 
     assert "Draft the architecture profile for o/app" in prompt
     assert "<profile_reference>" in prompt
@@ -268,11 +269,11 @@ def test_first_prompt_includes_reference_docs_authors_and_no_clone_notice(cfg, f
 def test_helpers_read_from_github_search_clone_and_track_best(
     cfg, facts, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    class Gh:
-        def raw_or_none(self, path):
+    class Gh(FakeForge):
+        def read_file(self, path):
             return "alpha\nbeta\ngamma\n" if path == "src/app/api/routes.py" else None
 
-    drafter = _Drafter(cfg, gh=Gh(), facts=facts, on_progress=lambda _m: None)
+    drafter = _Drafter(cfg, forge=Gh("o/app"), facts=facts, on_progress=lambda _m: None)
     assert "    2  beta" in drafter._read("src/app/api/routes.py", 2, 99)
     assert "isn't a file in the repo" in drafter._read("../secret.txt", 1, 2)
     assert (
@@ -282,7 +283,7 @@ def test_helpers_read_from_github_search_clone_and_track_best(
     clone = tmp_path / "clone"
     (clone / ".git").mkdir(parents=True)
     clone_drafter = _Drafter(
-        Config(home=tmp_path / "home", repo="o/app", clone=clone), gh=None, facts=facts, on_progress=lambda _m: None
+        Config(home=tmp_path / "home", repo="o/app", clone=clone), forge=None, facts=facts, on_progress=lambda _m: None
     )
     clone_drafter.cfg.tuning = replace(
         clone_drafter.cfg.tuning,
@@ -300,7 +301,7 @@ def test_helpers_read_from_github_search_clone_and_track_best(
 
 def test_tools_delegate_to_helpers_and_validate_profile(cfg, facts, monkeypatch: pytest.MonkeyPatch):
     _install_fake_copilot(monkeypatch)
-    drafter = _Drafter(cfg, gh=None, facts=facts, on_progress=lambda _m: None)
+    drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     tools = {tool.name: tool for tool in drafter._tools()}
     monkeypatch.setattr(drafter, "_search", lambda pattern, path_glob: f"{pattern}:{path_glob}")
 

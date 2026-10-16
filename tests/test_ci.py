@@ -1,19 +1,24 @@
-from readthrough.ci import STATE_RANK, classify, failing_names, latest_checks
+from readthrough import ci
+from readthrough.ci import STATE_RANK, failing_names, latest_checks
+from readthrough.forges.github import _checks
+from readthrough.model import Check
+
+# Checks are described the way GitHub's GraphQL returns them and mapped through the GitHub adapter, so
+# these tests cover both the mapping and the classification.
 
 
-def run(name, conclusion, *, started="2026-10-01T10:00:00Z", status="COMPLETED", url=None):
-    return {
-        "__typename": "CheckRun",
-        "name": name,
-        "conclusion": conclusion,
-        "status": status,
-        "startedAt": started,
-        "detailsUrl": url,
-    }
+def run(name, conclusion, *, started="2026-10-01T10:00:00Z", status="COMPLETED", url=None) -> Check:
+    node = {"__typename": "CheckRun", "name": name, "conclusion": conclusion, "status": status, "startedAt": started,
+            "detailsUrl": url}  # fmt: skip
+    return _checks([node])[0]
 
 
-def status(context, state, *, created="2026-10-01T10:00:00Z"):
-    return {"__typename": "StatusContext", "context": context, "state": state, "createdAt": created}
+def status(context, state, *, created="2026-10-01T10:00:00Z") -> Check:
+    return _checks([{"__typename": "StatusContext", "context": context, "state": state, "createdAt": created}])[0]
+
+
+def classify(checks, *, required, main_failing):
+    return ci.classify(checks, required=required, main_failing=main_failing)
 
 
 REQUIRED = {"tests", "lint"}
@@ -89,3 +94,16 @@ def test_status_contexts_count():
 
 def test_rank_puts_required_failures_first():
     assert STATE_RANK["failing"] < STATE_RANK["failing-optional"] < STATE_RANK["passing"] < STATE_RANK["none"]
+    assert STATE_RANK["unknown"] < STATE_RANK["passing"], "an unreadable CI isn't filed with the passing ones"
+
+
+def test_unreadable_checks_are_unknown_not_none():
+    info = ci.unknown("HTTP 403")
+    assert info["state"] == "unknown" and info["reason"] == "HTTP 403" and not info["required_known"]
+    assert ci.STATE_LABELS["unknown"] == "couldn't be read"
+
+
+def test_pending_status_contexts_have_no_conclusion():
+    check = status("ci/jenkins", "PENDING")
+    assert (check.status, check.conclusion) == ("PENDING", None)
+    assert classify([check], required=None, main_failing=set())["state"] == "pending"

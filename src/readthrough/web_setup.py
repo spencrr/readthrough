@@ -12,7 +12,6 @@ it from the page you're on breaks that page). The page shows them read-only with
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
 import re
 import shutil
@@ -24,11 +23,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from readthrough import onboard, review
-from readthrough.config import REPO_RE, Config, ConfigError, Settings, guess_clone, remote_for
-from readthrough.github import FileReader, GhError, GitHub, Reader, run, signed_in_accounts
+from readthrough import forges, onboard, review
+from readthrough.config import Config, ConfigError, Settings, guess_clone, remote_for
+from readthrough.faults import ForgeError
+from readthrough.forges import Forge
+from readthrough.forges.github import signed_in_accounts
 from readthrough.limits import BROWSER_EDITABLE_INTS, LOGIN_RE, MODEL_RE
-from readthrough.profile import REPO_PROFILE_PATH, ProfileError, parse_profile, profile_sources
+from readthrough.process import run
+from readthrough.profile import ProfileError, parse_profile, profile_sources, repo_profile_paths
+from readthrough.registry import RegistryError
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +62,7 @@ class SetupService:
 
     def get(self, path: str, query: dict[str, str]) -> Any:
         if path == "/api/setup/state":
-            return self.state(query.get("repo"))
+            return self.state(query.get("repo"), query.get("forge"))
         if m := re.fullmatch(r"/api/setup/jobs/([0-9a-f]{32})", path):
             return self.job(m.group(1))
         raise LookupError("not found")
@@ -86,7 +89,7 @@ class SetupService:
 
     # ---------------------------------------------------------------- reading
 
-    def state(self, repo: str | None) -> dict[str, Any]:
+    def state(self, repo: str | None, forge: str | None = None) -> dict[str, Any]:
         settings = self.load()
         out: dict[str, Any] = {
             "settings": {
@@ -96,20 +99,27 @@ class SetupService:
                 "version": _version(settings),
                 "path": str(settings.path),
             },
-            "repos": [_repo_view(c) for c in settings.all()],
+            "repos": [{**_repo_view(c), "cli_name": n} for n, c in zip(settings.names(), settings.all(), strict=True)],
             "accounts": signed_in_accounts(),
+            "forges": [_forge_view(name) for name in forges.names()],
         }
         if repo:
-            repo = _repo_name(repo)
-            entry = settings.entry(repo)
-            cfg = settings.config_for(repo)
-            out["repo"] = {**_repo_view(cfg), "configured": entry is not None, **self._profile_view(cfg)}
+            forge_name, repo = _locator(repo, forge)
+            entry = settings.entry(repo, forge_name)
+            cfg = settings.config_for(repo, forge=forge_name)
+            cli_name = settings.display_name(cfg.slug) if entry is not None else cfg.repo
+            out["repo"] = {
+                **_repo_view(cfg),
+                "cli_name": cli_name,
+                "configured": entry is not None,
+                **self._profile_view(cfg),
+            }
         return out
 
-    def _profile_view(self, cfg: Config, gh: Reader | None = None) -> dict[str, Any]:
+    def _profile_view(self, cfg: Config, forge: Forge | None = None) -> dict[str, Any]:
         try:
-            sources = profile_sources(cfg, gh)
-        except GhError:
+            sources = profile_sources(cfg, forge)
+        except ForgeError:
             sources = profile_sources(cfg)
         if not sources:
             return {"source": None, "sources": [], "profile_text": "", "editable": True}
@@ -117,7 +127,7 @@ class SetupService:
         return {
             "source": {"kind": first.kind, "label": first.label},
             "sources": [{"kind": s.kind, "label": s.label} for s in sources],
-            "profile_text": _source_text(first, gh),
+            "profile_text": first.read(),
             "editable": first.kind == "local",
         }
 
@@ -131,34 +141,49 @@ class SetupService:
     # ---------------------------------------------------------------- repo, account, clone
 
     def inspect(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo, account = _repo_name(body.get("repo")), _account(body.get("account"))
-        gh = GitHub(repo, account)
-        try:
-            info = json.loads(gh.api(f"repos/{repo}"))
-        except GhError as exc:
-            accounts = signed_in_accounts()
-            hint = f" Signed-in gh accounts: {', '.join(accounts)}; pick the one that can see it." if accounts else ""
-            raise SetupError(f"Can't read {repo}{' as ' + account if account else ''}.{hint}") from exc
-        name = info["full_name"]
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
+        account = _account(body.get("account"), forge_name)
         settings = self.load()
-        entry = settings.entry(name) or {}
-        clone = entry.get("clone") or guess_clone(name)
-        cfg = settings.config_for(name)
-        if account and not entry.get("account"):
+        cfg = settings.config_for(repo, forge=forge_name)
+        if account:
             cfg.account = account
+        forge = forges.make(cfg)
+        try:
+            info = forge.repo_info()
+        except ForgeError as exc:
+            accounts = signed_in_accounts() if "accounts" in forge.capabilities else []
+            hint = f" Signed-in gh accounts: {', '.join(accounts)}; pick the one that can see it." if accounts else ""
+            raise SetupError(
+                f"Can't read {repo} on {forge.label}{' as ' + account if account else ''}: {exc.reason}.{hint}"
+            ) from exc
+        name = info.get("full_name") or repo
+        entry = settings.entry(name, forge_name) or {}
+        clone = entry.get("clone") or guess_clone(name)
+        if name.lower() != repo.lower():  # the forge's own spelling of the name
+            cfg = settings.config_for(name, forge=forge_name)
+            if account:
+                cfg.account = account
+            forge = forges.make(cfg)
+        branch = info.get("default_branch") or "main"
+        profile_path = repo_profile_paths(forge)[0]
         return {
             "full_name": name,
+            "forge": forge_name,
+            "forge_label": forge.label,
+            "slug": cfg.slug,
             "private": info.get("private", False),
-            "default_branch": info.get("default_branch"),
+            "default_branch": branch,
             "description": info.get("description") or "",
             "configured": bool(entry),
             "onboarded": cfg.onboarded,
             "clone": str(clone) if clone else "",
-            **self._profile_view(cfg, gh),
+            "profile_path": profile_path,
+            "propose_url": forge.new_file_url(profile_path, branch),
+            **self._profile_view(cfg, forge),
         }
 
     def check_clone(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo = _repo_name(body.get("repo"))
+        _, repo = _locator(body.get("repo"), body.get("forge"))
         clone = _clone_path(body.get("clone"))
         if clone is None:
             return {"ok": False, "message": "No clone: reviews and worktrees need one, but the map works without it."}
@@ -181,7 +206,8 @@ class SetupService:
     # ---------------------------------------------------------------- drafting and checking
 
     def start_draft(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo, account = _repo_name(body.get("repo")), _account(body.get("account"))
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
+        account = _account(body.get("account"), forge_name)
         mode = body.get("mode", "plain")
         if mode not in ("plain", "copilot", "source"):
             raise SetupError("mode must be plain, copilot, or source")
@@ -190,11 +216,11 @@ class SetupService:
         version = body.get("version")
 
         def work(say: Callable[[str], None]) -> dict[str, Any]:
-            cfg = self._remember(repo, account=account, clone=clone, remote=remote, version=version)
-            gh = GitHub(cfg.repo, cfg.account)
-            facts = self._gather(cfg, gh, say)
+            cfg = self._remember(repo, forge_name, account=account, clone=clone, remote=remote, version=version)
+            forge = forges.make(cfg)
+            facts = self._gather(cfg, forge, say)
             if mode == "source":
-                view = self._profile_view(cfg, gh)
+                view = self._profile_view(cfg, forge)
                 text = view["profile_text"]
                 if not text:
                     raise SetupError("There's no existing profile for this repo; draft one instead.")
@@ -202,18 +228,19 @@ class SetupService:
                 from readthrough.onboard_copilot import copilot_draft
 
                 say("Copilot is reading the repo. This takes a few minutes.")
-                text = copilot_draft(cfg, gh, facts, on_progress=say)
+                text = copilot_draft(cfg, forge, facts, on_progress=say)
             else:
                 say("Drafting from the file tree, CODEOWNERS, docs, and recent PRs")
-                text = onboard.draft_profile(facts, title=cfg.repo.split("/")[1])
+                text = onboard.draft_profile(facts, title=cfg.repo.rsplit("/", 1)[-1])
             return {"toml": text, "report": self._report(text, cfg, facts)}
 
-        return {"job": self._run_job(f"draft:{repo.lower()}", work)}
+        return {"job": self._run_job(f"draft:{forge_name}/{repo.lower()}", work)}
 
     def check(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo, text = _repo_name(body.get("repo")), _toml_text(body.get("toml"))
-        cfg = self.load().config_for(repo)
-        facts = self._gather(cfg, GitHub(cfg.repo, cfg.account), log.info)
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
+        text = _toml_text(body.get("toml"))
+        cfg = self.load().config_for(repo, forge=forge_name)
+        facts = self._gather(cfg, forges.make(cfg), log.info)
         return self._report(text, cfg, facts)
 
     def _report(self, text: str, cfg: Config, facts: onboard.RepoFacts) -> dict[str, Any]:
@@ -243,12 +270,13 @@ class SetupService:
         }
 
     def start_preview(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo, text = _repo_name(body.get("repo")), _toml_text(body.get("toml"))
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
+        text = _toml_text(body.get("toml"))
 
         def work(say: Callable[[str], None]) -> dict[str, Any]:
             from readthrough.build import build
 
-            cfg = self.load().config_for(repo)
+            cfg = self.load().config_for(repo, forge=forge_name)
             profile = _parse(text)
             say("Fetching open PRs and laying them out with this profile (no diffs, so it's quick)")
             payload = build(cfg, with_diffs=False, profile=profile, draft=True, write=False)
@@ -259,16 +287,17 @@ class SetupService:
                     self._previews.pop(next(iter(self._previews)))
             return {"url": f"/setup/preview/{preview_id}"}
 
-        return {"job": self._run_job(f"preview:{repo.lower()}", work)}
+        return {"job": self._run_job(f"preview:{forge_name}/{repo.lower()}", work)}
 
     # ---------------------------------------------------------------- writing
 
     def save_profile(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo, text = _repo_name(body.get("repo")), _toml_text(body.get("toml"))
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
+        text = _toml_text(body.get("toml"))
         profile = _parse(text)
         if profile.repo.lower() != repo.lower():
             raise SetupError(f"The profile's repo is {profile.repo!r}, not {repo}")
-        cfg = self._remember(repo, version=body.get("version"))
+        cfg = self._remember(repo, forge_name, version=body.get("version"))
         cfg.repo_dir.mkdir(parents=True, exist_ok=True)
         path = cfg.local_profile_path
         if path.exists():
@@ -279,29 +308,28 @@ class SetupService:
         return {"saved": str(path)}
 
     def accept(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo = _repo_name(body.get("repo"))
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
         if body.get("toml"):
             self.save_profile(body)
         settings = self.load()
-        cfg = settings.config_for(repo)
-        gh = GitHub(cfg.repo, cfg.account)
-        sources = profile_sources(cfg, gh, first_only=True)  # a local draft saves fetching the repo's file
+        cfg = settings.config_for(repo, forge=forge_name)
+        forge = forges.make(cfg)
+        sources = profile_sources(cfg, forge, first_only=True)  # a local draft saves fetching the repo's file
         if not sources:
             raise SetupError("Draft or choose a profile first.")
-        text = _source_text(sources[0], gh)
-        report = self._report(text, cfg, self._gather(cfg, gh, log.info))
+        report = self._report(sources[0].read(), cfg, self._gather(cfg, forge, log.info))
         if not report.get("valid"):
             raise SetupError(report.get("error", "The profile doesn't load."))
         if report["problems"] and not body.get("force"):
             raise SetupError("Not accepted yet: " + " ".join(report["problems"]))
         with self._config_lock:
             settings = self.load()
-            settings.upsert(cfg.repo, onboarded=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
+            settings.upsert(cfg.slug, onboarded=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
             if not settings.default_repo and len(settings.repos) == 1:
                 settings.default_repo = cfg.repo
             settings.save()
         self.on_change()
-        return {"onboarded": True, "url": f"/r/{cfg.repo}/"}
+        return {"onboarded": True, "url": f"/r/{cfg.slug}/"}
 
     def save_settings(self, body: dict[str, Any]) -> dict[str, Any]:
         values = body.get("values") or {}
@@ -312,16 +340,17 @@ class SetupService:
             settings = self.load()
             _check_version(settings, body.get("version"))
             if body.get("repo"):
-                repo = _repo_name(body["repo"])
-                if settings.entry(repo) is None:
+                forge_name, repo = _locator(body["repo"], body.get("forge"))
+                if settings.entry(repo, forge_name) is None:
                     raise SetupError(f"{repo} isn't configured; onboard it first")
-                settings.upsert(repo, **_clean_repo_values(values, repo))
+                settings.upsert(repo, forge=forge_name, **_clean_repo_values(values, repo, forge_name))
             if "default_repo" in glob:
-                default = glob["default_repo"] or None
-                if default is not None and settings.entry(_repo_name(default)) is None:
+                default = glob["default_repo"]
+                if not isinstance(default, str | None):
+                    raise SetupError("default_repo must be a repo name")
+                if default and settings.entry(default) is None:
                     raise SetupError(f"{default} isn't configured")
-                entry = settings.entry(_repo_name(default)) if default else None
-                settings.default_repo = entry["name"] if entry else None
+                settings.default_repo = settings.display_name(default) if default else None
             if "refresh_minutes" in glob:
                 settings.refresh_minutes = _int(glob["refresh_minutes"], "refresh_minutes", 1, 1440)
             settings.save()
@@ -329,12 +358,12 @@ class SetupService:
         return {"version": _version(self.load())}
 
     def remove(self, body: dict[str, Any]) -> dict[str, Any]:
-        repo = _repo_name(body.get("repo"))
+        forge_name, repo = _locator(body.get("repo"), body.get("forge"))
         with self._config_lock:
             settings = self.load()
             _check_version(settings, body.get("version"))
-            cfg = settings.config_for(repo)
-            if not settings.remove(cfg.repo):
+            cfg = settings.config_for(repo, forge=forge_name)
+            if not settings.remove(cfg.slug):
                 raise SetupError(f"{repo} isn't configured")
             settings.save()
         self.on_change()
@@ -350,7 +379,7 @@ class SetupService:
 
     # ---------------------------------------------------------------- helpers
 
-    def _remember(self, repo: str, *, account: str | None = None, clone: Path | None = None,
+    def _remember(self, repo: str, forge: str, *, account: str | None = None, clone: Path | None = None,
                   remote: str | None = None, version: Any = None) -> Config:  # fmt: skip
         """Add the repo to config.toml (or update it), the way `readthrough onboard` does before drafting."""
         with self._config_lock:
@@ -363,19 +392,19 @@ class SetupService:
             if clone:
                 values["clone"] = clone
                 values["remote"] = remote or remote_for(clone, repo)
-            if settings.entry(repo) is None or values:
-                settings.upsert(repo, **values)
+            if settings.entry(repo, forge) is None or values:
+                settings.upsert(repo, forge=forge, **values)
                 settings.save()
-            return settings.config_for(repo)
+            return settings.config_for(repo, forge=forge)
 
-    def _gather(self, cfg: Config, gh: Reader, say: Callable[[str], None]) -> onboard.RepoFacts:
-        key = (cfg.repo.lower(), cfg.account, str(cfg.clone) if cfg.clone else None)
+    def _gather(self, cfg: Config, forge: Forge, say: Callable[[str], None]) -> onboard.RepoFacts:
+        key = (cfg.slug.lower(), cfg.account, str(cfg.clone) if cfg.clone else None)
         with self._lock:
             cached = self._facts.get(key)
         if cached and time.time() - cached[0] < cfg.tuning.onboarding.facts_cache_minutes * 60:
             return cached[1]
-        say(f"Reading {cfg.repo}: recent merged PRs, the file tree, CODEOWNERS, and docs")
-        facts = onboard.gather(gh, clone=cfg.clone, sample=cfg.tuning.onboarding.merged_sample)
+        say(f"Reading {cfg.repo}: recent merged {forge.pr_noun}s, the file tree, CODEOWNERS, and docs")
+        facts = onboard.gather(forge, clone=cfg.clone, sample=cfg.tuning.onboarding.merged_sample)
         with self._lock:
             self._facts[key] = (time.time(), facts)
         return facts
@@ -400,7 +429,7 @@ class SetupService:
                 result = work(say)
                 with self._lock:
                     job.update(status="done", result=result)
-            except (SetupError, ConfigError, ProfileError, GhError, RuntimeError, ValueError) as exc:
+            except (SetupError, ConfigError, ProfileError, ForgeError, RuntimeError, ValueError) as exc:
                 with self._lock:
                     job.update(status="error", error=str(exc))
             except Exception as exc:
@@ -415,15 +444,44 @@ class SetupService:
 # ---------------------------------------------------------------- validation
 
 
-def _repo_name(value: Any) -> str:
-    if not isinstance(value, str) or not REPO_RE.match(value.strip()):
-        raise SetupError("Repo must look like owner/name")
-    return value.strip()
+def _locator(value: Any, forge: Any) -> tuple[str, str]:
+    """``(forge name, repo)`` from a request, checked against the forge's idea of a repo locator.
+
+    ``repo`` may be a ``forge/owner/name`` slug, in which case ``forge`` is redundant and must agree.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 300:
+        raise SetupError("Which repo?")
+    repo = value.strip().strip("/")
+    if forge is not None and not isinstance(forge, str):
+        raise SetupError("forge must be a name")
+    forge = forge or None
+    try:
+        asked = forges.adapter(forge) if forge else None
+    except RegistryError as exc:
+        raise SetupError(str(exc)) from exc
+    head, _, rest = repo.partition("/")
+    # A slug (forge/owner/name) names its forge, unless the "forge" is really an owner who shares a forge's name
+    # (the whole string then has to be a valid locator for the forge that was asked for, or GitHub).
+    is_slug = head in forges.names() and bool(rest) and forges.validate_repo(head, rest) is None
+    if is_slug and (asked or forges.adapter("github")).validate_repo(repo) is None:
+        is_slug = False
+    if is_slug:
+        if forge and head != forge:
+            raise SetupError(f"{repo} names a {head} repo, but the request says {forge}")
+        forge, repo = head, rest
+    adapter = forges.adapter(forge or "github")
+    forge = adapter.name
+    problem = adapter.validate_repo(repo)
+    if problem:
+        raise SetupError(f"On {adapter.label}, a repo looks like {adapter.shape}: {problem}")
+    return forge, repo
 
 
-def _account(value: Any) -> str | None:
+def _account(value: Any, forge: str = "github") -> str | None:
     if value in (None, ""):
         return None
+    if "accounts" not in forges.adapter(forge).capabilities:
+        raise SetupError(f"Accounts apply to GitHub repos; {forges.adapter(forge).label} uses its own token")
     if not isinstance(value, str) or not LOGIN_RE.match(value):
         raise SetupError("That isn't a GitHub login")
     if value not in signed_in_accounts():
@@ -476,21 +534,21 @@ def _int(value: Any, name: str, low: int, high: int) -> int:
     return number
 
 
-def _clean_repo_values(values: dict[str, Any], repo: str) -> dict[str, Any]:
+def _clean_repo_values(values: dict[str, Any], repo: str, forge: str = "github") -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in values.items():
         if key in BROWSER_EDITABLE_INTS:
             out[key] = None if value in (None, "") else _int(value, key, *BROWSER_EDITABLE_INTS[key])
         elif key in EDITABLE_LISTS:
             if not isinstance(value, list) or not all(isinstance(v, str) and LOGIN_RE.match(v) for v in value):
-                raise SetupError(f"{key} must be a list of GitHub logins")
+                raise SetupError(f"{key} must be a list of logins")
             out[key] = sorted(set(value), key=str.lower) or None
         elif key == "study_model":
             if value not in (None, "") and not (isinstance(value, str) and MODEL_RE.match(value)):
                 raise SetupError("That isn't a model name")
             out[key] = value or None
         elif key == "account":
-            out[key] = _account(value)
+            out[key] = _account(value, forge)
         elif key == "clone":
             out[key] = _clone_path(value)
         elif key == "remote":
@@ -516,10 +574,28 @@ def _check_version(settings: Settings, version: Any) -> None:
         )
 
 
+def _forge_view(name: str) -> dict[str, Any]:
+    plugin = forges.FORGES.get(name)
+    adapter = plugin.impl
+    return {
+        "name": name,
+        "label": adapter.label,
+        "summary": plugin.summary,
+        "pr_noun": adapter.pr_noun,
+        "shape": adapter.shape,
+        "accounts": "accounts" in adapter.capabilities,
+    }
+
+
 def _repo_view(cfg: Config) -> dict[str, Any]:
     built = cfg.data_path.stat().st_mtime if cfg.data_path.exists() else None
+    adapter = forges.adapter(cfg.forge)
     return {
         "name": cfg.repo,
+        "forge": cfg.forge,
+        "forge_label": adapter.label,
+        "slug": cfg.slug,
+        "pr_noun": adapter.pr_noun,
         "onboarded": cfg.onboarded,
         "account": cfg.account,
         "clone": str(cfg.clone) if cfg.clone else "",
@@ -534,9 +610,3 @@ def _repo_view(cfg: Config) -> dict[str, Any]:
         "built": built,
         "data_dir": str(cfg.repo_dir),
     }
-
-
-def _source_text(source: Any, gh: FileReader | None) -> str:
-    if source.path is not None:
-        return source.path.read_text(encoding="utf-8")
-    return (gh.raw_or_none(REPO_PROFILE_PATH) if gh else None) or ""

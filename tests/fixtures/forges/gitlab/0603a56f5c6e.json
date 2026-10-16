@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/approvals",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "ratelimit-remaining": "498"
+ },
+ "text": "{\"id\":533077369,\"iid\":3928,\"project_id\":34675721,\"title\":\"feat(df): add go module proxy matcher\",\"description\":\"Adds `GoMatcher`, the proxy classifier for the Go module ecosystem, following the precedent of the merged npm/pypi/gem/maven matchers and the cargo (!3890) and nuget matchers.\\n\\nThe matcher recognizes module **zip downloads** served by a module proxy (`.../{module}/@v/{version}.zip`) and maps them to their exact module coordinate. The wire path is bang-decoded back to canonical form (a `!x` sequence on the wire means uppercase `X`), and version-suffixed module paths are handled through the standard module path.\\n\\nMetadata and index requests (`.info`, `.mod`, `@latest`, `/@v/list`) pass through untouched. A recognized-but-unparseable zip download (empty module path or version) fails closed via the `unparseableMatch` helper. Blocked Go fetches use the default plain-text 403 block body.\\n\\nScoped to the `internal/dependencyfirewall/proxy` package. Stacked on the nuget matcher branch (!3927).\",\"state\":\"opened\",\"created_at\":\"2026-09-16T21:40:10.524Z\",\"updated_at\":\"2026-10-16T02:02:18.217Z\",\"merge_status\":\"cannot_be_merged\",\"approved\":false,\"approvals_required\":1,\"approvals_left\":1,\"require_password_to_approve\":false,\"approved_by\":[],\"suggested_approvers\":[],\"approvers\":[],\"approver_groups\":[],\"user_has_approved\":false,\"user_can_approve\":false,\"approval_rules_left\":[{\"id\":381099178,\"name\":\"/internal/dependencyfirewall/\",\"rule_type\":\"code_owner\"}],\"has_approval_rules\":true,\"merge_request_approvers_available\":true,\"multiple_approval_rules_available\":true,\"invalid_approvers_rules\":[]}"
+}

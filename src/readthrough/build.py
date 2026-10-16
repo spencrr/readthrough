@@ -12,34 +12,37 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, ledger, logs, review, study
+from readthrough import __version__, forges, ledger, logs, review, study
 from readthrough.analyze import analyze, compute_overlaps, plan_sessions, rule_descriptions, whats_new
 from readthrough.brief import build_brief
 from readthrough.config import Config
+from readthrough.faults import ForgeError, TooLarge
 from readthrough.files import write_atomic
-from readthrough.github import Fetcher, GhError, GhTooLarge, GitHub, Reader
+from readthrough.forges import Forge
+from readthrough.logs import pool_map
 from readthrough.membership import internal_members
+from readthrough.model import Capability, PullRequest, unavailable
 from readthrough.profile import Profile, resolve_profile
-from readthrough.rules import Contract, Instruction
+from readthrough.rules import Contract, Instruction, contracts_for, parse_instruction
 from readthrough.system import registered_protocol_command
 from readthrough.tuning import Tuning
 
 # data.json's layout. Bump it when a field changes meaning or is removed (adding fields doesn't need it),
 # so a newer data file is never misread by an older dashboard or server.
-DATA_SCHEMA = 1
+DATA_SCHEMA = 2
 log = logging.getLogger(__name__)
 
 
 @dataclass
 class Snapshot:
-    """Everything fetched from GitHub for one build. Analysis is a pure function of this and the profile."""
+    """Everything fetched from the forge for one build. Analysis is a pure function of this and the profile."""
 
     viewer: str
-    prs: list[dict[str, Any]]
+    prs: list[PullRequest]
     contracts: dict[str, Contract]
     instructions: list[Instruction]
-    required_checks: dict[str, set[str] | None]
-    main_failing: set[str]
+    required_checks: dict[str, Capability[set[str]]]
+    main_failing: Capability[set[str]]
     diffs: dict[int, str]
     now: dt.datetime
     members: set[str] = field(default_factory=set)
@@ -52,11 +55,11 @@ class BuildFailed(RuntimeError):
     """A build that couldn't finish. Says which step failed, and carries an error id shown in the dashboard."""
 
     def __init__(self, repo: str, step: str, cause: BaseException, error_id: str, seconds: float) -> None:
-        reason = cause.args[0] if isinstance(cause, GhError) and cause.args else f"{type(cause).__name__}: {cause}"
+        reason = cause.args[0] if isinstance(cause, ForgeError) and cause.args else f"{type(cause).__name__}: {cause}"
         super().__init__(f"{step}: {reason}")
         self.repo, self.step, self.cause, self.error_id, self.seconds = repo, step, cause, error_id, seconds
         self.reason = reason
-        self.expected = isinstance(cause, GhError)
+        self.expected = isinstance(cause, ForgeError)
 
 
 class Warnings(list):
@@ -75,47 +78,53 @@ def fetch_snapshot(
     profile: Profile,
     *,
     with_diffs: bool = True,
-    github: Fetcher | None = None,
+    forge: Forge | None = None,
     steps: logs.Steps | None = None,
 ) -> Snapshot:
     """Fetch everything for a build. Only the PR list is essential; other inputs degrade to a warning."""
-    gh: Fetcher = github or GitHub(cfg.repo, cfg.account, cfg.tuning.github)
+    forge = forge or forges.make(cfg)
     steps = steps or logs.Steps(log)
     warnings = Warnings()
+    for note in profile.notes:
+        warnings.add("profile", note)
     now = dt.datetime.now(dt.UTC)
     with steps.step("fetching PRs"):
-        log.info("Fetching open PRs%s", f" as {cfg.account}" if cfg.account else "")
-        viewer, raw, total = gh.fetch_prs(cfg.limit)
-    if total > len(raw):
+        log.info("Fetching open %ss from %s%s", forge.pr_noun, forge.label, f" as {cfg.account}" if cfg.account else "")
+        viewer, prs, total = forge.fetch_prs(cfg.limit)
+    if total > len(prs):
         warnings.add(
             "limit",
-            f"Showing the {len(raw)} most recently active of {total} open PRs. Raise `limit` for this repo to see more.",
+            f"Showing the {len(prs)} most recently active of {total} open {forge.pr_noun}s. Raise `limit` for this repo to see more.",
         )
     capped = [
-        f"#{p['number']} {', '.join(f'{k} {have} of {of}' for k, (have, of) in p['truncated'].items())}"
-        for p in raw
-        if p.get("truncated")
+        f"#{p.number} {', '.join(f'{k} {have} of {of}' for k, (have, of) in p.truncated.items())}"
+        for p in prs
+        if p.truncated
     ]
     if capped:
         warnings.add(
             "truncated",
-            f"{len(capped)} PRs are too big to fetch completely, so their map placement and checks are partial",
+            f"{len(capped)} {forge.pr_noun}s are too big to fetch completely, so their map placement and checks are partial",
             capped,
         )
+    _gap_warnings(warnings, prs, forge)
 
     with steps.step("fetching CI context"):
         try:
-            required_checks, main_failing, branch = gh.ci_context({p["baseRefName"] for p in raw})
-        except GhError as exc:
+            context = forge.ci_context({p.base for p in prs})
+            problems = sorted({c.reason for c in (*context.required.values(), context.main_failing) if not c.known})
+        except ForgeError as exc:
+            context = forges.CiContext({}, unavailable(exc.reason), "main")
+            problems = [exc.reason]
+        if problems:
             warnings.add(
                 "ci",
                 "Couldn't read required checks or the default branch's CI, so CI states are less precise",
-                [exc.reason],
+                problems,
             )
-            required_checks, main_failing, branch = {}, set(), "main"
     with steps.step("fetching rules"):
-        log.info("Fetching architecture contracts and instruction files from %s", branch)
-        contracts, instructions, problems = gh.rules(profile, branch=branch)
+        log.info("Fetching architecture contracts and instruction files from %s", context.default_branch)
+        contracts, instructions, problems = fetch_rules(forge, profile, branch=context.default_branch)
         if problems:
             warnings.add(
                 "rules",
@@ -125,14 +134,17 @@ def fetch_snapshot(
     diffs: dict[int, str] = {}
     diff_problems: dict[int, str] = {}
     fetched = 0
-    if with_diffs:
+    if with_diffs and "diffs" not in forge.capabilities:
+        warnings.add("diffs", f"{forge.label} has no API for whole-change diffs, so line heuristics never run here")
+        diff_problems = dict.fromkeys((p.number for p in prs), "unsupported")
+    elif with_diffs:
         with steps.step("fetching diffs"):
-            diffs, failures, fetched = gh.diffs(raw, cfg.cache_dir)
+            diffs, failures, fetched = forge.diffs(prs, cfg.cache_dir)
             log.info(
                 "Diffs: %d downloaded, %d from cache, %d unavailable", fetched, len(diffs) - fetched, len(failures)
             )
-            diff_problems = {n: ("too-large" if isinstance(e, GhTooLarge) else e.reason) for n, e in failures.items()}
-            errors = [f"#{n}: {e.reason}" for n, e in failures.items() if not isinstance(e, GhTooLarge)]
+            diff_problems = {n: ("too-large" if isinstance(e, TooLarge) else e.reason) for n, e in failures.items()}
+            errors = [f"#{n}: {e.reason}" for n, e in failures.items() if not isinstance(e, TooLarge)]
             if errors:
                 warnings.add(
                     "diffs",
@@ -141,7 +153,7 @@ def fetch_snapshot(
                 )
     with steps.step("checking memberships"):
         members, failed = fetch_members(
-            gh, profile, raw, cfg.cache_dir / "members.json", cfg.tuning.authors.membership_cache_days
+            forge, profile, prs, cfg.cache_dir / "members.json", cfg.tuning.authors.membership_cache_days
         )
         if failed:
             warnings.add(
@@ -149,14 +161,14 @@ def fetch_snapshot(
                 f"Couldn't check {len(failed)} team or org memberships; those authors use the profile's other rules this time",
                 failed,
             )
-    stats = {"prs": len(raw), "open": total, "diffs_downloaded": fetched, "diffs_cached": len(diffs) - fetched}
+    stats = {"prs": len(prs), "open": total, "diffs_downloaded": fetched, "diffs_cached": len(diffs) - fetched}
     return Snapshot(
         viewer,
-        raw,
+        prs,
         contracts,
         instructions,
-        required_checks,
-        main_failing,
+        context.required,
+        context.main_failing,
         diffs,
         now,
         members,
@@ -166,15 +178,81 @@ def fetch_snapshot(
     )
 
 
+def _gap_warnings(warnings: Warnings, prs: list[PullRequest], forge: Forge) -> None:
+    """One warning per kind of thing the forge couldn't tell us, so the gap is visible beyond the PR signals."""
+    gaps: dict[tuple[str, str], list[str]] = {}
+    for pr in prs:
+        for name, cap in pr.gaps():
+            gaps.setdefault((name, cap.kind), []).append(f"#{pr.number}: {cap.reason}")
+    for (name, kind), details in sorted(gaps.items()):
+        if kind == "unsupported":
+            warnings.add(
+                f"gap-{name}",
+                f"{forge.label} can't tell us the {name.replace('_', ' ')}; related signals and lanes use a neutral default",
+            )
+        else:
+            warnings.add(
+                f"gap-{name}",
+                f"Couldn't read the {name.replace('_', ' ')} for {len(details)} {forge.pr_noun}s this time",
+                details,
+            )
+
+
+def fetch_rules(
+    forge: Forge, profile: Profile, *, branch: str = "main"
+) -> tuple[dict[str, Contract], list[Instruction], list[str]]:
+    """The profile's architecture contracts and the repo's instruction files, from the default branch.
+
+    Also returns what couldn't be fetched, so the build can carry on with the rest and say what's missing.
+    """
+    problems: list[str] = []
+    doc = None
+    if profile.contracts_source:
+        try:
+            doc = forge.read_file(profile.contracts_source)
+        except ForgeError as exc:
+            problems.append(f"{profile.contracts_source}: {exc.reason}")
+    contracts = contracts_for(profile, doc)
+    if not profile.instructions_dir:
+        return contracts, [], problems
+    try:
+        names = [n for n in forge.list_dir(profile.instructions_dir) if n.endswith(".md")]
+    except ForgeError as exc:
+        problems.append(f"{profile.instructions_dir}/: {exc.reason}")
+        return contracts, [], problems
+
+    def fetch(name: str) -> str | None:
+        try:
+            return forge.read_file(f"{profile.instructions_dir}/{name}")
+        except ForgeError as exc:
+            problems.append(f"{name}: {exc.reason}")
+            return None
+
+    texts = pool_map(fetch, names, forge.tuning.concurrency)
+    instructions = [
+        parse_instruction(n, t, forge.file_url(f"{profile.instructions_dir}/{n}", branch))
+        for n, t in zip(names, texts, strict=True)
+        if t is not None
+    ]
+    return contracts, [i for i in instructions if i.patterns], problems
+
+
 def fetch_members(
-    gh: Reader, profile: Profile, prs: list[dict[str, Any]], cache_path: Path, ttl_days: float = 7.0
+    forge: Forge, profile: Profile, prs: list[PullRequest], cache_path: Path, ttl_days: float = 7.0
 ) -> tuple[set[str], list[str]]:
-    logins = {
-        (p.get("author") or {}).get("login", "") for p in prs if (p.get("author") or {}).get("__typename") != "Bot"
-    }
     a = profile.authors
+    if not (a.internal_teams or a.internal_orgs):
+        return set(), []
+    if "memberships" not in forge.capabilities:
+        return set(), [f"{forge.label} can't answer team or org membership questions"]
+    logins = {p.author.login for p in prs if not p.author.bot}
     return internal_members(
-        gh, teams=a.internal_teams, orgs=a.internal_orgs, logins=logins - {""}, cache_path=cache_path, ttl_days=ttl_days
+        forge,
+        teams=a.internal_teams,
+        orgs=a.internal_orgs,
+        logins=logins - {""},
+        cache_path=cache_path,
+        ttl_days=ttl_days,
     )
 
 
@@ -190,17 +268,17 @@ def analyze_snapshot(
             profile=profile,
             viewer=snap.viewer,
             instructions=snap.instructions,
-            diff_text=snap.diffs.get(p["number"]),
+            diff_text=snap.diffs.get(p.number),
             now=snap.now,
             required_checks=snap.required_checks,
-            main_failing=snap.main_failing,
+            main_failing=snap.main_failing.get(set()),
             members=snap.members,
             planning=tuning.planning if tuning else None,
             payload=tuning.payload if tuning else None,
         )
         for p in snap.prs
     ]
-    by_number = {p["number"]: p for p in snap.prs}
+    by_number = {p.number: p for p in snap.prs}
     for it in items:
         _partial_flags(it, by_number[it["number"]], snap.diff_problems.get(it["number"]))
     overlaps = compute_overlaps(items, profile)
@@ -229,17 +307,20 @@ def analyze_snapshot(
     }
 
 
-def _partial_flags(item: dict[str, Any], raw: dict[str, Any], diff_problem: str | None) -> None:
+def _partial_flags(item: dict[str, Any], pr: PullRequest, diff_problem: str | None) -> None:
     """Say on the PR itself when its data is incomplete, so nobody mistakes "no signals" for "nothing to see"."""
     if diff_problem == "too-large":
         item["flags"].append({"id": "diff-too-large", "kind": "info",
-                              "msg": f"Diff too large for GitHub to serve ({raw['changedFiles']} files): line heuristics skipped"})  # fmt: skip
+                              "msg": f"Diff too large to serve ({pr.changed_files} files): line heuristics skipped"})  # fmt: skip
+    elif diff_problem == "unsupported":
+        item["flags"].append({"id": "diff-unsupported", "kind": "info",
+                              "msg": "This forge serves no whole-change diff: line heuristics can't run"})  # fmt: skip
     elif diff_problem:
         item["flags"].append(
             {"id": "diff-unavailable", "kind": "info", "msg": f"Diff couldn't be fetched this time: {diff_problem}"}
         )
-    if raw.get("truncated"):
-        parts = ", ".join(f"{have} of {of} {name}" for name, (have, of) in raw["truncated"].items())
+    if pr.truncated:
+        parts = ", ".join(f"{have} of {of} {name}" for name, (have, of) in pr.truncated.items())
         item["flags"].append(
             {
                 "id": "partial",
@@ -247,7 +328,7 @@ def _partial_flags(item: dict[str, Any], raw: dict[str, Any], diff_problem: str 
                 "msg": f"Only partly fetched ({parts}): placement and checks may be incomplete",
             }
         )
-        item["truncated"] = raw["truncated"]
+        item["truncated"] = {k: list(v) for k, v in pr.truncated.items()}
 
 
 def build(
@@ -279,10 +360,11 @@ def build(
                 log.exception(message, *args, extra=extra)
             raise failed from exc
         stats = payload["stats"]
+        left = ", ".join(f"{v} {k}" for k, v in (stats.get("rate_limit") or {}).items())
         log.info(
             "built in %.1fs: %d PRs, %d diffs downloaded / %d cached, %d warnings%s (%s)",
             time.monotonic() - started, stats["prs"], stats["diffs_downloaded"], stats["diffs_cached"], len(payload["warnings"]),
-            f", rate limit left: {stats['rate_limit']['graphql']} GraphQL / {stats['rate_limit']['rest']} REST" if stats.get("rate_limit") else "",
+            f", rate limit left: {left}" if left else "",
             steps.summary(),
         )  # fmt: skip
         return payload
@@ -293,10 +375,10 @@ def _build(
 ) -> dict[str, Any]:
     from readthrough.onboard import drift
 
-    gh = GitHub(cfg.repo, cfg.account, cfg.tuning.github)
+    forge = forges.make(cfg)
     with steps.step("resolving profile"):
-        profile = profile or resolve_profile(cfg, gh)
-    snap = fetch_snapshot(cfg, profile, with_diffs=with_diffs, github=gh, steps=steps)
+        profile = profile or resolve_profile(cfg, forge)
+    snap = fetch_snapshot(cfg, profile, with_diffs=with_diffs, forge=forge, steps=steps)
     with steps.step("analyzing"):
         entries = ledger.load(cfg.ledger_path)
         result = analyze_snapshot(snap, profile, budget=cfg.session_minutes, ledger_entries=entries, tuning=cfg.tuning)
@@ -311,7 +393,7 @@ def _build(
     review.session_index(cfg.home).scan(force=True)
     for it in items:
         entry = entries.get(str(it["number"]))
-        primary = review.session_id_for(cfg.repo, it["number"], entry)
+        primary = review.session_id_for(cfg, it["number"], entry)
         it["session"] = review.session_info(primary)
         it["sessions"] = review.pr_sessions(cfg, it["number"], primary)
         log_entries = study.load(cfg, it["number"])
@@ -327,6 +409,8 @@ def _build(
         "schema": DATA_SCHEMA,
         "version": __version__,
         "repo": cfg.repo,
+        "slug": cfg.slug,
+        "forge": {"name": forge.name, "label": forge.label, "pr_noun": forge.pr_noun, "url": forge.web_url()},
         "viewer": snap.viewer,
         "generated": snap.now.isoformat(),
         "profile": {**profile.to_payload(), "onboarded": cfg.onboarded},
@@ -349,7 +433,7 @@ def _build(
         "drift": drift(items, cfg.tuning.onboarding.drift_coverage),
         "draft": draft,
         "warnings": snap.warnings,
-        "stats": {**snap.stats, "rate_limit": gh.rate_limit()},
+        "stats": {**snap.stats, "rate_limit": forge.rate_limit()},
         "freshness": {
             "stale_live_hours": cfg.tuning.freshness.stale_live_hours,
             "stale_snapshot_hours": cfg.tuning.freshness.stale_snapshot_hours,
@@ -458,7 +542,7 @@ def refresh_sessions(payload: dict[str, Any], cfg: Config) -> dict[int, dict[str
     changed = {}
     for it in payload["prs"]:
         entry = payload["ledger"].get(str(it["number"]))
-        primary = review.session_id_for(cfg.repo, it["number"], entry)
+        primary = review.session_id_for(cfg, it["number"], entry)
         info, sessions = review.session_info(primary), review.pr_sessions(cfg, it["number"], primary)
         if info != it.get("session") or sessions != it.get("sessions"):
             it["session"], it["sessions"] = info, sessions

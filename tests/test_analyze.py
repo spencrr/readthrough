@@ -9,6 +9,7 @@ from readthrough.analyze import (
     plan_sessions,
     whats_new,
 )
+from readthrough.model import known, unavailable, unsupported
 
 DIFF = """\
 diff --git a/courier/transports/smtp.py b/courier/transports/smtp.py
@@ -55,20 +56,20 @@ def test_find_smells():
     assert all(s["path"].startswith("courier/") for s in find_smells(parse_diff(DIFF), PROFILE))
 
 
-def test_analyze_ready_lane_and_rules(make_pr):
+def test_analyze_ready_lane_and_rules(make_pull):
     from readthrough.rules import parse_instruction
 
     ins = parse_instruction("transports.md", '---\napplyTo: "courier/transports/**"\n---\n', "u")
-    it = analyze(make_pr(), profile=PROFILE, viewer="me", instructions=[ins], diff_text=None, now=NOW)
+    it = analyze(make_pull(), profile=PROFILE, viewer="me", instructions=[ins], diff_text=None, now=NOW)
     assert it["lane"] == "ready"
     assert it["primary"] == "transports"
     assert it["rules"] == ["transports.md"]
     assert it["priority"] > 0
 
 
-def test_lanes(make_pr):
+def test_lanes(make_pull):
     def lane(**kw):
-        return analyze(make_pr(**kw), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)["lane"]
+        return analyze(make_pull(**kw), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)["lane"]
 
     assert lane(author={"login": "me"}) == "mine"
     assert lane(isDraft=True) == "draft"
@@ -80,12 +81,12 @@ def test_lanes(make_pr):
     assert lane(reviewDecision="CHANGES_REQUESTED", latestReviews=review) == "waiting"
 
 
-def test_push_after_changes_requested_is_a_re_review(make_pr):
+def test_push_after_changes_requested_is_a_re_review(make_pull):
     review = {
         "nodes": [{"author": {"login": "r"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-01T06:00:00Z"}]
     }
     it = analyze(
-        make_pr(reviewDecision="CHANGES_REQUESTED", latestReviews=review),
+        make_pull(reviewDecision="CHANGES_REQUESTED", latestReviews=review),
         profile=PROFILE,
         viewer="me",
         instructions=[],
@@ -96,30 +97,30 @@ def test_push_after_changes_requested_is_a_re_review(make_pr):
     assert any(f["id"] == "re-review" for f in it["flags"])
 
 
-def test_no_tests_flag(make_pr):
+def test_no_tests_flag(make_pull):
     files = {
         "nodes": [{"path": "courier/transports/smtp.py", "additions": 50, "deletions": 0, "changeType": "MODIFIED"}]
     }
-    it = analyze(make_pr(files=files), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
+    it = analyze(make_pull(files=files), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
     assert any(f["id"] == "no-tests" for f in it["flags"])
 
 
-def _items(make_pr):
-    a = analyze(make_pr(number=1), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
-    b = analyze(make_pr(number=2), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
+def _items(make_pull):
+    a = analyze(make_pull(number=1), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
+    b = analyze(make_pull(number=2), profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
     return a, b
 
 
-def test_overlaps_and_sessions(make_pr):
-    a, b = _items(make_pr)
+def test_overlaps_and_sessions(make_pull):
+    a, b = _items(make_pull)
     overlaps = compute_overlaps([a, b], PROFILE)
     assert overlaps == [{"a": 1, "b": 2, "files": ["courier/transports/smtp.py", "tests/unit/transports/test_smtp.py"]}]
     sessions = plan_sessions([a, b], PROFILE, budget=a["minutes"])
     assert [s["prs"] for s in sessions] == [[1], [2]]
 
 
-def test_whats_new(make_pr):
-    a, b = _items(make_pr)
+def test_whats_new(make_pull):
+    a, b = _items(make_pull)
     first = whats_new(None, [a], {}, "me")
     assert first["since"] is None and is_newsworthy(first)
 
@@ -140,7 +141,7 @@ def test_whats_new(make_pr):
     assert not is_newsworthy(quiet)
 
 
-def _with_checks(make_pr, *checks):
+def _with_checks(make_pull, *checks):
     nodes = [
         {
             "__typename": "CheckRun",
@@ -152,24 +153,49 @@ def _with_checks(make_pr, *checks):
         for n, c in checks
     ]
     rollup = {"state": "FAILURE", "contexts": {"nodes": nodes}}
-    return make_pr(
+    return make_pull(
         commits={"nodes": [{"commit": {"committedDate": "2026-10-01T12:00:00Z", "statusCheckRollup": rollup}}]}
     )
 
 
-def test_only_own_required_failures_block(make_pr):
+def test_only_own_required_failures_block(make_pull):
     def go(pr, main=frozenset()):
         return analyze(
             pr, profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW,
-            required_checks={"main": {"tests"}}, main_failing=set(main),
+            required_checks={"main": known({"tests"})}, main_failing=set(main),
         )  # fmt: skip
 
-    blocked = go(_with_checks(make_pr, ("tests", "FAILURE")))
+    blocked = go(_with_checks(make_pull, ("tests", "FAILURE")))
     assert (blocked["lane"], blocked["ci_state"]) == ("blocked", "failing")
-    optional = go(_with_checks(make_pr, ("tests", "SUCCESS"), ("docs", "FAILURE")))
+    optional = go(_with_checks(make_pull, ("tests", "SUCCESS"), ("docs", "FAILURE")))
     assert (optional["lane"], optional["ci_state"]) == ("ready", "failing-optional")
     assert any(f["id"] == "ci-optional" for f in optional["flags"])
-    on_main = go(_with_checks(make_pr, ("tests", "FAILURE")), main={"tests"})
+    on_main = go(_with_checks(make_pull, ("tests", "FAILURE")), main={"tests"})
     assert (on_main["lane"], on_main["ci_state"]) == ("ready", "failing-main")
-    passing = go(_with_checks(make_pr, ("tests", "SUCCESS")))
+    passing = go(_with_checks(make_pull, ("tests", "SUCCESS")))
     assert passing["priority"] > optional["priority"]
+
+
+def test_gaps_become_signals_and_neutral_defaults(make_pull):
+    """What the forge couldn't say is flagged on the PR and never read as a fact."""
+    pr = make_pull(mergeable="CONFLICTING", reviewDecision="APPROVED")
+    pr.mergeable = unavailable("HTTP 502")
+    pr.decision = unsupported("review decision")
+    pr.checks = unavailable("pipeline API timed out")
+    it = analyze(pr, profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW)
+    gaps = [f["msg"] for f in it["flags"] if f["id"] == "gap"]
+    assert len(gaps) == 3
+    assert any("merges cleanly" in g and "HTTP 502" in g for g in gaps)
+    assert any("review decision" in g.lower() and "forge" in g for g in gaps)
+    assert it["lane"] == "ready", "an unknown decision is neither approved nor blocked"
+    assert it["mergeable"] == "UNKNOWN" and it["review_decision"] == "NONE"
+    assert it["ci_state"] == "unknown" and it["ci_checks"]["reason"] == "pipeline API timed out"
+    assert not any(f["id"].startswith("ci") for f in it["flags"]), "no CI verdict is drawn from unreadable checks"
+
+
+def test_unknown_required_checks_fall_back_to_any_failure_counting(make_pull):
+    pr = make_pull()
+    pr.checks = known(_with_checks(make_pull, ("docs", "FAILURE")).checks.value)
+    it = analyze(pr, profile=PROFILE, viewer="me", instructions=[], diff_text=None, now=NOW,
+                 required_checks={"main": unavailable("branch protection isn't visible")})  # fmt: skip
+    assert it["ci_state"] == "failing", "without known required checks, a failure errs towards attention"

@@ -16,9 +16,10 @@ import types
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, Generic, TypeVar, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
+Impl = TypeVar("Impl")  # the exact type of one registered implementation, so decorating a class keeps its type
 
 
 class RegistryError(ValueError):
@@ -45,15 +46,15 @@ class Registry(Generic[T]):
         self.what = what
         self._plugins: dict[str, Plugin[T]] = {}
 
-    def add(self, name: str, summary: str, *, options: type[Any] = NoOptions) -> Callable[[T], T]:
-        """Register the decorated implementation under ``name``."""
+    def add(self, name: str, summary: str, *, options: type[Any] = NoOptions) -> Callable[[Impl], Impl]:
+        """Register the decorated implementation under ``name``. The decorated object comes back unchanged."""
         if not is_dataclass(options):
             raise TypeError(f"{self.what} {name!r}: options must be a dataclass")
 
-        def register(impl: T) -> T:
+        def register(impl: Impl) -> Impl:
             if name in self._plugins:
                 raise RegistryError(f"{self.what} {name!r} is registered twice")
-            self._plugins[name] = Plugin(name, summary, impl, options)
+            self._plugins[name] = Plugin(name, summary, cast("T", impl), options)
             return impl
 
         return register

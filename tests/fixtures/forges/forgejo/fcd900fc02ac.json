@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "url": "https://codeberg.org/api/v1/repos/forgejo/forgejo/pulls/14791/files?limit=50",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json;charset=utf-8",
+  "x-total-count": "1"
+ },
+ "text": "[{\"filename\":\"modules/setting/server.go\",\"status\":\"changed\",\"additions\":1,\"deletions\":8,\"changes\":9,\"html_url\":\"https://codeberg.org/mfenniak/forgejo/src/commit/5e5a39737c19f1648651d3fe87a621c409594459/modules/setting/server.go\",\"contents_url\":\"https://codeberg.org/api/v1/repos/mfenniak/forgejo/contents/modules/setting/server.go?ref=5e5a39737c19f1648651d3fe87a621c409594459\",\"raw_url\":\"https://codeberg.org/mfenniak/forgejo/raw/commit/5e5a39737c19f1648651d3fe87a621c409594459/modules/setting/server.go\"}]\n"
+}

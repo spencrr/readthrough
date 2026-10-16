@@ -1,33 +1,49 @@
 from collections import Counter
 from pathlib import Path
-from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
+from fakes import FakeForge
 
 from readthrough import onboard, web_setup
 from readthrough.config import load_settings
-from readthrough.github import GhError
+from readthrough.faults import NotFound
 from readthrough.limits import BROWSER_EDITABLE_INTS
 from readthrough.web_setup import Conflict, SetupError, SetupService
 
 TREE = ["src/app/core.py", "src/app/api.py", "tests/test_core.py", "README.md"]
 FACTS = onboard.RepoFacts("o/app", "main", TREE, Counter({"src/app/core.py": 50, "tests/test_core.py": 10}),
-                          [{"login": "alice", "typename": "User", "association": "MEMBER"}])  # fmt: skip
+                          [{"login": "alice", "bot": False, "association": "MEMBER"}])  # fmt: skip
 
 
 CHANGES: list[int] = []
 
 
+class SetupForge(FakeForge):
+    """The fake forge as the setup page sees it: records who asked for what, and knows one repo."""
+
+    made: list[tuple[str, str | None]] = []  # noqa: RUF012 - reset by the fixture
+
+    def __init__(self, repo: str, options=None, tuning=None, *, account=None) -> None:
+        super().__init__(repo, options, tuning, account=account)
+        SetupForge.made.append((repo, account))
+
+    def repo_info(self):
+        if self.repo == "o/missing":
+            raise NotFound("api repos/o/missing failed: Not Found", stderr="HTTP 404")
+        return {"full_name": "o/app", "default_branch": "main", "private": True, "description": None}
+
+
 @pytest.fixture
-def service(tmp_path: Path, monkeypatch):
+def service(tmp_path: Path, monkeypatch, fake_forge):
     home = tmp_path / "home"
     monkeypatch.setattr(web_setup, "signed_in_accounts", lambda: ["me", "me_corp"])
-    monkeypatch.setattr(web_setup, "GitHub", FakeGitHub)  # nothing here may reach the real gh
-    FakeGitHub.calls = []
+    monkeypatch.setattr(  # nothing here may reach a real forge
+        "readthrough.forges.make", lambda cfg: SetupForge(cfg.repo, None, cfg.tuning.forge, account=cfg.account)
+    )
+    SetupForge.made = []
     CHANGES.clear()
     svc = SetupService(lambda: load_settings(home), on_change=lambda: CHANGES.append(1))
-    monkeypatch.setattr(svc, "_gather", lambda cfg, gh, say: FACTS)
+    monkeypatch.setattr(svc, "_gather", lambda cfg, forge, say: FACTS)
     return svc, home
 
 
@@ -44,10 +60,14 @@ def test_accept_needs_a_profile_that_passes(service):
         svc.accept({"repo": "o/app", "toml": broken})
 
     result = svc.accept({"repo": "o/app"})
-    assert result == {"onboarded": True, "url": "/r/o/app/"}
+    assert result == {"onboarded": True, "url": "/r/github/o/app/"}
     settings = load_settings(home)
     assert settings.config_for("o/app").onboarded and settings.default_repo == "o/app"
     assert CHANGES
+    state = svc.state("github/o/app")
+    assert state["repo"]["slug"] == "github/o/app" and state["repo"]["cli_name"] == "o/app"
+    assert [f["name"] for f in state["forges"]] == ["ado", "forgejo", "github", "gitlab"]
+    assert next(f for f in state["forges"] if f["name"] == "github")["accounts"] is True
 
 
 def test_settings_are_validated_and_version_checked(service):
@@ -79,6 +99,14 @@ def test_inputs_are_checked_before_use(service, tmp_path: Path):
     for repo in ("", "no-slash", "o/app; calc", None):
         with pytest.raises(SetupError):
             svc.check({"repo": repo, "toml": "schema = 1"})
+    with pytest.raises(SetupError, match="organization/project/repository"):
+        svc.check({"repo": "o/app", "forge": "ado", "toml": "schema = 1"})
+    with pytest.raises(SetupError, match="names a gitlab repo, but the request says github"):
+        svc.check({"repo": "gitlab/o/app", "forge": "github", "toml": "schema = 1"})
+    with pytest.raises(SetupError, match="did you mean 'gitlab'"):
+        svc.check({"repo": "o/app", "forge": "gitlabb", "toml": "schema = 1"})
+    with pytest.raises(SetupError, match="Accounts apply to GitHub"):
+        svc.inspect({"repo": "g/p", "forge": "gitlab", "account": "me"})
     with pytest.raises(SetupError, match="isn't a git clone"):
         svc.check_clone({"repo": "o/app", "clone": str(tmp_path)})
     with pytest.raises(SetupError, match="full path"):
@@ -110,48 +138,25 @@ class ImmediateThread:
         self.target()
 
 
-class FakeGitHub:
-    calls: ClassVar[list[tuple[str, str | None, str]]] = []
-    remote_files: ClassVar[dict[str, str]] = {}  # path -> contents the fake repo "has"
-
-    def __init__(self, repo: str, account: str | None = None):
-        self.repo = repo
-        self.account = account
-
-    def api(self, path: str) -> str:
-        self.calls.append((self.repo, self.account, path))
-        if self.repo == "o/missing":
-            raise GhError("not found", stderr="HTTP 404")
-        return '{"full_name":"o/app","private":true,"default_branch":"main","description":null}'
-
-    def raw_or_none(self, path: str) -> str | None:
-        return self.remote_files.get(path)
-
-
-def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkeypatch):
+def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkeypatch, fake_forge):
     svc, _home = service
-    monkeypatch.setattr(FakeGitHub, "remote_files", {".github/readthrough.toml": "remote .github/readthrough.toml"})
+    fake_forge.files = {".github/readthrough.toml": "remote .github/readthrough.toml"}
     guessed = tmp_path / "guessed"
     monkeypatch.setattr(web_setup, "guess_clone", lambda repo: guessed)
     assert svc.get("/api/setup/state", {})["accounts"] == ["me", "me_corp"]
     with pytest.raises(LookupError):
         svc.get("/api/setup/jobs/" + "0" * 32, {})
 
-    local = tmp_path / "profile.toml"
-    local.write_text("local profile", encoding="utf-8")
-    source = SimpleNamespace(kind="local", label="Local profile", path=local)
-    assert web_setup._source_text(source, None) == "local profile"
-    remote_source = SimpleNamespace(kind="repo", label="Repo profile", path=None)
-    assert web_setup._source_text(remote_source, FakeGitHub("o/app")) == "remote .github/readthrough.toml"
-
     result = svc.inspect({"repo": "o/app", "account": "me_corp"})
-    assert result["full_name"] == "o/app"
+    assert result["full_name"] == "o/app" and result["slug"] == "github/o/app"
     assert result["private"] is True
     assert result["description"] == ""
     assert result["clone"] == str(guessed)
-    assert FakeGitHub.calls[-1] == ("o/app", "me_corp", "repos/o/app")
+    assert result["source"]["kind"] == "repo" and result["profile_text"] == "remote .github/readthrough.toml"
+    assert result["propose_url"] == "https://github.com/o/app/new/main?filename=.github/readthrough.toml"
+    assert SetupForge.made[-1] == ("o/app", "me_corp")
 
-    with pytest.raises(SetupError, match="Can't read o/missing as me"):
+    with pytest.raises(SetupError, match="Can't read o/missing on GitHub as me"):
         svc.inspect({"repo": "o/missing", "account": "me"})
 
     assert svc.check_clone({"repo": "o/app", "clone": ""})["ok"] is False
@@ -166,7 +171,6 @@ def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkey
 def test_setup_jobs_cover_draft_preview_and_errors(service, monkeypatch):
     svc, _ = service
     monkeypatch.setattr(web_setup.threading, "Thread", ImmediateThread)
-    monkeypatch.setattr(web_setup, "GitHub", FakeGitHub)
 
     job_id = svc.start_draft({"repo": "o/app", "mode": "plain"})["job"]
     job = svc.job(job_id)
@@ -181,7 +185,7 @@ def test_setup_jobs_cover_draft_preview_and_errors(service, monkeypatch):
 
     from readthrough import onboard_copilot
 
-    monkeypatch.setattr(onboard_copilot, "copilot_draft", lambda cfg, gh, facts, on_progress: job["result"]["toml"])
+    monkeypatch.setattr(onboard_copilot, "copilot_draft", lambda cfg, forge, facts, on_progress: job["result"]["toml"])
     copilot_job = svc.start_draft({"repo": "o/app", "mode": "copilot"})["job"]
     assert svc.job(copilot_job)["log"][0] == "Copilot is reading the repo. This takes a few minutes."
 
@@ -230,7 +234,7 @@ def test_browser_setting_validation_edges(service):
 
     with pytest.raises(SetupError, match="values and global"):
         svc.save_settings({"values": ["x"], "global": {}})
-    with pytest.raises(SetupError, match="Repo must"):
+    with pytest.raises(SetupError, match="isn't configured"):
         svc.save_settings({"global": {"default_repo": "not-a-repo"}})
     with pytest.raises(SetupError, match="isn't configured"):
         svc.save_settings({"global": {"default_repo": "o/other"}})
@@ -240,3 +244,16 @@ def test_browser_setting_validation_edges(service):
         svc.save_settings({"repo": "o/app", "version": version, "values": {"clone": "x" * 401}})
     with pytest.raises(SetupError, match="remote name"):
         svc.save_settings({"repo": "o/app", "version": version, "values": {"remote": "origin;bad"}})
+
+
+def test_slugs_without_a_forge_field_name_their_own_forge(service):
+    """The page sends `repo: <slug>` on its own for most calls; the slug must say which forge, not fall back to GitHub."""
+    svc, _ = service
+    assert web_setup._locator("gitlab/o/app", None) == ("gitlab", "o/app")
+    assert web_setup._locator("forgejo/o/app", "") == ("forgejo", "o/app")
+    assert web_setup._locator("ado/org/proj/repo", None) == ("ado", "org/proj/repo")
+    assert web_setup._locator("github/o/app", None) == ("github", "o/app")
+    assert web_setup._locator("gitlab/gitlab-foss", None) == ("github", "gitlab/gitlab-foss"), "an owner, not a forge"
+    assert web_setup._locator("o/app", None) == ("github", "o/app")
+    with pytest.raises(SetupError, match="isn't configured"):
+        svc.save_settings({"repo": "gitlab/o/app", "values": {"limit": 5}})

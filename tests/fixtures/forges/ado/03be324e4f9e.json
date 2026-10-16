@@ -1,0 +1,9 @@
+{
+ "method": "GET",
+ "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/diffs/commits?baseVersion=86c4fcab74a286f87d47901b6ec0f8c2d64a3def&baseVersionType=commit&targetVersion=9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837&targetVersionType=commit&%24top=1000&%24skip=0&api-version=7.1",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json; charset=utf-8; api-version=7.1"
+ },
+ "text": "{\"allChangesIncluded\":true,\"changeCounts\":{\"Add\":2},\"changes\":[{\"item\":{\"objectId\":\"957d2936b0e7bfe3e93d8f4e76ed1bf379265d5f\",\"gitObjectType\":\"tree\",\"commitId\":\"9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\",\"path\":\"/.pipeline\",\"isFolder\":true,\"url\":\"https://dev.azure.com/powershell/2972bb5c-f20c-4a60-8bd9-00ffe9987edc/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/items/.pipeline?versionType=Commit&version=9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\"},\"changeType\":\"add\"},{\"item\":{\"objectId\":\"a864794cc3543614dc55ba4e83f2777218a75346\",\"gitObjectType\":\"blob\",\"commitId\":\"9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\",\"path\":\"/.pipeline/feed-sync.yml\",\"url\":\"https://dev.azure.com/powershell/2972bb5c-f20c-4a60-8bd9-00ffe9987edc/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/items/.pipeline%2Ffeed-sync.yml?versionType=Commit&version=9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\"},\"changeType\":\"add\"}],\"commonCommit\":\"86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"baseCommit\":\"86c4fcab74a286f87d47901b6ec0f8c2d64a3def\",\"targetCommit\":\"9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\",\"aheadCount\":13,\"behindCount\":0}"
+}

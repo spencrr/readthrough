@@ -32,8 +32,8 @@ from typing import Any, Protocol
 
 from readthrough import review, study
 from readthrough.config import AUTO, Config
-from readthrough.github import run
 from readthrough.limits import MAX_SEARCH_OUTPUT
+from readthrough.process import run
 from readthrough.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -359,8 +359,11 @@ def system_message(repo: str, guidance: str) -> str:
     return text + (f"\nAbout this repository:\n{guidance.strip()}\n" if guidance.strip() else "")
 
 
-def study_session_id(repo: str, number: int) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://github.com/{repo}/pull/{number}#study"))
+def study_session_id(cfg: Config, number: int) -> str:
+    """Derived from the PR's URL like the review session's id, but never the same one."""
+    from readthrough import forges
+
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, forges.make(cfg).pr_url(number) + "#study"))
 
 
 class CopilotAssistant:
@@ -445,7 +448,7 @@ class CopilotAssistant:
                 await client.start()
                 self._client = client
         worktree, _ = await self._worktree(number)
-        session_id = study_session_id(self.cfg.repo, number)
+        session_id = study_session_id(self.cfg, number)
         self._pr_by_session[session_id] = number
         tools = self._build_tools()
         options: dict[str, Any] = {

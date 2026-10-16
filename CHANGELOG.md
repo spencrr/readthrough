@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Repos on GitLab, Forgejo (Codeberg and other Forgejo or Gitea servers), and Azure DevOps, next to GitHub. A
+  repo's config entry says where it lives (`forge = "gitlab"`; GitHub is the default), and `readthrough onboard
+  --forge gitlab group/project` writes it. GitHub keeps going through `gh`; the others are read through their
+  REST API with a token from the platform's CLI (`glab`, `az`) or an environment variable (`GITLAB_TOKEN`,
+  `FORGEJO_TOKEN`, `AZURE_DEVOPS_EXT_PAT`), else anonymously, which is enough for public repos. Hosts and
+  variable names go under `[forges.<name>]`; tokens never go in the config. Each adapter was checked against a
+  real public repo, and the tests replay those recorded responses.
+- What a forge can't tell us is said, not assumed: a warning on the dashboard and a *gap* signal on each affected
+  PR when a platform has no review decision, no merge state, no diffs, no per-file line counts (Azure DevOps),
+  no named required checks (GitLab), or when author associations need a token (Forgejo). CI that couldn't be read
+  is its own state, "couldn't be read", never "passing" or "no CI".
+- A repo can carry its profile as `readthrough.toml` in its forge's dot-directory (`.github/`, `.gitlab/`,
+  `.forgejo/`, `.azuredevops/`) or at the root as `.readthrough.toml` or `readthrough.toml`. The dot-directory's
+  wins when a repo has several, with a warning. Shared profile directories take `forge/owner/name.toml`.
+- Rate-limit replies that name a `Retry-After` are waited for that long (capped by `rate_limit_wait_seconds`)
+  instead of a fixed minute. gitlab.com throttles anonymous callers per IP address; the guide says so.
+- `[tuning.forge] max_tree_files` caps how much of a repo's tree onboarding lists through an API that pages a
+  hundred files at a time. A partial tree is reported as partial, and path patterns aren't judged against it.
+- `scripts/probe_forge.py` exercises an adapter against a real repo and can record its responses for the tests.
+
+### Changed
+
+- The config file is schema 2. Each repo's data lives under `repos/<forge>/<owner>/<name>/` (so
+  `repos/github/microsoft/vscode/`), dashboard pages under `/r/<forge>/<owner>/<name>/`, and
+  `readthrough://` links and the marker in Copilot prompts name repos the same way. There is no migration: move
+  `repos/owner/name` to `repos/github/owner/name`, rename `[tuning.github]` to `[tuning.forge]`, and set
+  `schema = 2`; the error message for an old file says the same. Sessions linked by the old `owner/name` marker
+  are still found.
+- `data.json` is schema 2: the raw GitHub rollup state (`ci`) is gone, `ci_state` has the new `unknown` value,
+  and the payload carries the repo's `slug` and `forge`.
+- Saving `config.toml` from the browser keeps `terminal`, `assistant`, and the plugin option tables; before, a
+  save from the settings page dropped them.
+- The onboarding drafter ranks source roots by recent churn rather than file count, and names a generic
+  directory (`src`, `lib`, `core`) after its parent. Onboarding microsoft/vscode went from 76% coverage, refused,
+  to 100%.
+
+### Removed
+
+- `github.py`. Its pieces are `forges/github.py` (the adapter), `process.py` (running programs, secrets), and
+  `faults.py` (the error hierarchy, now shared with the REST adapters).
+
 ## 0.3.0 (2026-10-14)
 
 The first release under the name readthrough, and the first with a public baseline. Earlier versions were a

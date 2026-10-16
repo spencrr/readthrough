@@ -1,0 +1,9 @@
+{
+ "method": "GET",
+ "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/pullrequests/53/commits?%24top=1&api-version=7.1",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json; charset=utf-8; api-version=7.1"
+ },
+ "text": "{\"count\":1,\"value\":[{\"commitId\":\"9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\",\"author\":{\"name\":\"Aditya Patwardhan\",\"email\":null,\"date\":\"2026-05-08T18:27:52Z\"},\"committer\":{\"name\":\"Aditya Patwardhan\",\"email\":null,\"date\":\"2026-05-08T18:27:52Z\"},\"comment\":\"Add retry to save job\",\"url\":\"https://dev.azure.com/powershell/2972bb5c-f20c-4a60-8bd9-00ffe9987edc/_apis/git/repositories/81d9437d-52d6-4065-a85e-54a8b8e347bb/commits/9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837\"}]}"
+}

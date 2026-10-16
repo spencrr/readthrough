@@ -15,10 +15,12 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, ledger, logs, review, system
+from readthrough import __version__, forges, ledger, logs, review, system
 from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
-from readthrough.github import GhError, GitHub, run, signed_in_accounts
+from readthrough.faults import ForgeError
+from readthrough.forges.github import signed_in_accounts
+from readthrough.process import run
 from readthrough.profile import ProfileError
 
 log = logging.getLogger("readthrough")
@@ -228,7 +230,7 @@ def cmd_review(settings: Settings, args: argparse.Namespace) -> int:
     if args.fresh:
         ledger.record(cfg.ledger_path, args.pr, session=launch.session_id)
     if args.vscode:
-        prompt = review.review_prompt(cfg.repo, args.pr, cfg.briefs_dir / f"pr-{args.pr}.md")
+        prompt = review.review_prompt(cfg, args.pr, cfg.briefs_dir / f"pr-{args.pr}.md")
         url = (
             review.vscode_session_url(launch.session_id)
             if launch.resuming
@@ -264,7 +266,7 @@ def cmd_handle_url(settings: Settings, args: argparse.Namespace) -> int:
     """Entry point for the readthrough:// protocol. Runs windowless, so errors go to a message box."""
     log.info("URL: %s", args.url)
     try:
-        target = review.parse_readthrough_url(args.url, allowed_repos=[c.repo for c in settings.all() if c.onboarded])
+        target = review.parse_readthrough_url(args.url, allowed_repos=[c.slug for c in settings.all() if c.onboarded])
         if target.repo is None:
             from readthrough.serve import base_url, server_alive
 
@@ -294,9 +296,10 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
 
     repo = args.target or args.repo or settings.default_repo
     if not repo:
-        log.error("Which repo? readthrough onboard owner/name")
+        log.error("Which repo? readthrough onboard owner/name (or --forge gitlab group/project, and so on)")
         return 1
-    existing = settings.entry(repo) or {}
+    existing = settings.entry(repo, args.forge) or {}
+    forge_name = existing.get("forge") or args.forge
     repo = existing.get("name", repo)
     clone = (
         Path(args.clone).expanduser()
@@ -304,40 +307,44 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
         else (Path(existing["clone"]) if existing.get("clone") else guess_clone(repo))
     )
     account = args.account or existing.get("account")
-    gh = GitHub(repo, account)
+    cfg = settings.config_for(repo, forge=forge_name)
+    cfg.account = account
+    forge = forges.make(cfg)
     try:
-        info = json.loads(gh.api(f"repos/{repo}"))
-    except GhError as exc:
-        log.error("Can't read %s%s: %s", repo, f" as {account}" if account else "", str(exc)[:200])
-        accounts = signed_in_accounts()
+        info = forge.repo_info()
+    except ForgeError as exc:
+        log.error("Can't read %s on %s%s: %s", repo, forge.label, f" as {account}" if account else "", exc.reason)
+        accounts = signed_in_accounts() if "accounts" in forge.capabilities else []
         if accounts:
             log.error("Signed-in gh accounts: %s. Pick one with --account.", ", ".join(accounts))
         return 1
-    if info["full_name"].lower() != repo.lower() and existing:
-        log.error("%s now lives at %s. Remove it and onboard the new name.", repo, info["full_name"])
+    full_name = info.get("full_name") or repo
+    if full_name.lower() != repo.lower() and existing:
+        log.error("%s now lives at %s. Remove it and onboard the new name.", repo, full_name)
         return 1
-    repo = info["full_name"]
+    repo = full_name
     remote = args.remote or existing.get("remote") or (remote_for(clone, repo) if clone else None)
-    settings.upsert(repo, clone=clone, account=account, remote=remote)
-    cfg = settings.config_for(repo)
+    settings.upsert(repo, forge=forge.name, clone=clone, account=account, remote=remote)
+    cfg = settings.config_for(repo, forge=forge.name)
+    forge = forges.make(cfg)
     if clone is None:
         log.info("No local clone found (looked in ~/src and ~/repos). Reviews need one; set it with --clone.")
 
-    log.info("Looking at %s: recent merged PRs, the file tree, CODEOWNERS, and docs...", repo)
-    facts = onboard.gather(gh, clone=clone, sample=cfg.tuning.onboarding.merged_sample)
-    sources = profile_sources(cfg, gh)
+    log.info("Looking at %s: recent merged %ss, the file tree, CODEOWNERS, and docs...", repo, forge.pr_noun)
+    facts = onboard.gather(forge, clone=clone, sample=cfg.tuning.onboarding.merged_sample)
+    sources = profile_sources(cfg, forge)
 
     if args.copilot:
         from readthrough.onboard_copilot import copilot_draft
 
-        _write_profile(cfg, copilot_draft(cfg, gh, facts, on_progress=lambda m: log.info("  %s", m)))
-        sources = profile_sources(cfg, gh)
+        _write_profile(cfg, copilot_draft(cfg, forge, facts, on_progress=lambda m: log.info("  %s", m)))
+        sources = profile_sources(cfg, forge)
     elif args.update or args.draft or not sources:
         if cfg.local_profile_path.exists() and not (args.update or args.force):
             log.info("Keeping your draft at %s (pass --update to redraft it).", cfg.local_profile_path)
         else:
-            _write_profile(cfg, onboard.draft_profile(facts, title=info.get("name")))
-            sources = profile_sources(cfg, gh)
+            _write_profile(cfg, onboard.draft_profile(facts, title=repo.rsplit("/", 1)[-1]))
+            sources = profile_sources(cfg, forge)
     source = sources[0]
     log.info("Profile: %s", source.label)
 
@@ -362,12 +369,13 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
             log.error("Not accepted. Fix the items above, or pass --force to accept anyway.")
             settings.save()
             return 1
-        settings.upsert(repo, onboarded=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
+        settings.upsert(cfg.slug, onboarded=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
         if not settings.default_repo and len(settings.repos) == 1:
             settings.default_repo = repo
         settings.save()
+        name = settings.display_name(cfg.slug)
         _say(
-            f"\n{repo} is onboarded. Build it with `readthrough --repo {repo} build --open`; a running server picks it up on its own."
+            f"\n{repo} is onboarded. Build it with `readthrough --repo {name} build --open`; a running server picks it up on its own."
         )
         return 0
     settings.save()
@@ -402,15 +410,16 @@ def cmd_repos(settings: Settings, args: argparse.Namespace) -> int:
     if not settings.repos:
         _say("No repos yet. Onboard one with `readthrough onboard owner/name`.")
         return 0
-    for cfg in settings.all():
+    default = settings.entry(settings.default_repo) if settings.default_repo else None
+    for name, cfg in zip(settings.names(), settings.all(), strict=True):
         sources = profile_sources(cfg)
         built = (
             dt.datetime.fromtimestamp(cfg.data_path.stat().st_mtime, tz=dt.UTC).astimezone().strftime("%Y-%m-%d %H:%M")
             if cfg.data_path.exists()
             else "never"
         )
-        star = "*" if settings.default_repo and settings.default_repo.lower() == cfg.repo.lower() else " "
-        _say(f"{star} {cfg.repo:32} {'onboarded' if cfg.onboarded else 'NOT ONBOARDED':13}  built {built:16}  "
+        star = "*" if default is not None and default is settings.entry(cfg.slug) else " "
+        _say(f"{star} {name:32} {'onboarded' if cfg.onboarded else 'NOT ONBOARDED':13}  built {built:16}  "
              f"profile: {sources[0].label if sources else 'in-repo file or none'}"
              + (f"  (as {cfg.account})" if cfg.account else ""))  # fmt: skip
     return 0
@@ -418,18 +427,18 @@ def cmd_repos(settings: Settings, args: argparse.Namespace) -> int:
 
 def cmd_default(settings: Settings, args: argparse.Namespace) -> int:
     cfg = settings.config_for(args.target)
-    if settings.entry(cfg.repo) is None:
+    if settings.entry(cfg.slug) is None:
         log.error("%s isn't configured", args.target)
         return 1
-    settings.default_repo = cfg.repo
+    settings.default_repo = settings.display_name(cfg.slug)
     settings.save()
-    _say(f"Default repo: {cfg.repo}")
+    _say(f"Default repo: {settings.default_repo}")
     return 0
 
 
 def cmd_remove(settings: Settings, args: argparse.Namespace) -> int:
     cfg = settings.config_for(args.target)
-    if not settings.remove(cfg.repo):
+    if not settings.remove(cfg.slug):
         log.error("%s isn't configured", args.target)
         return 1
     settings.save()
@@ -446,7 +455,7 @@ def cmd_remove(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_profile(settings: Settings, args: argparse.Namespace) -> int:
-    from readthrough.profile import REPO_PROFILE_PATH, load_profile, profile_sources
+    from readthrough.profile import load_profile, profile_sources
 
     if args.action == "check" and args.file:
         try:
@@ -457,8 +466,8 @@ def cmd_profile(settings: Settings, args: argparse.Namespace) -> int:
         _say(f"{args.file}: a valid profile for {p.repo} ({len(p.layers)} layers, {len(p.components)} components)")
         return 0
     cfg = settings.config_for(args.repo)
-    gh = GitHub(cfg.repo, cfg.account)
-    sources = profile_sources(cfg, gh)
+    forge = forges.make(cfg)
+    sources = profile_sources(cfg, forge)
     if not sources:
         log.error("No profile for %s. Run `readthrough onboard %s`.", cfg.repo, cfg.repo)
         return 1
@@ -471,13 +480,13 @@ def cmd_profile(settings: Settings, args: argparse.Namespace) -> int:
         _say(source.label)
         return 0
     if args.action == "export":
-        _say(source.path.read_text(encoding="utf-8") if source.path is not None else gh.raw(REPO_PROFILE_PATH))
+        _say(source.read())
         return 0
     profile = source.load()
     if args.action == "check":
         from readthrough import onboard
 
-        facts = onboard.gather(gh, clone=cfg.clone, sample=cfg.tuning.onboarding.merged_sample)
+        facts = onboard.gather(forge, clone=cfg.clone, sample=cfg.tuning.onboarding.merged_sample)
         cov = onboard.measure(profile, facts, raw=_raw_profile(source), min_coverage=cfg.tuning.onboarding.min_coverage)
         _say(onboard.report(cov, profile, onboard.author_table(profile, facts)))
         return 1 if cov.problems() else 0
@@ -638,26 +647,28 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
     if not configs:
         _say("\nNo repos yet. Onboard one with `readthrough onboard owner/name`.")
     for cfg in configs:
-        _doctor_repo(cfg, check, accounts, health.get(cfg.repo))
+        _doctor_repo(cfg, check, accounts, health.get(cfg.slug))
     return 1 if problems else 0
 
 
 def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, Any] | None = None) -> None:
     from readthrough.profile import profile_sources
 
-    _say(f"\n{cfg.repo}")
+    forge = forges.make(cfg)
+    _say(f"\n{cfg.repo}" + (f" ({forge.label})" if forge.name != forges.DEFAULT else ""))
     if cfg.account:
         check(cfg.account in accounts, "account", cfg.account, f"gh auth login (as {cfg.account})")
+    check(True, "auth", forge.describe_auth())
     try:
-        GitHub(cfg.repo, cfg.account).api(f"repos/{cfg.repo}")
+        forge.repo_info()
         check(True, "access", "can read the repo")
-    except GhError as exc:
-        check(
-            False,
-            "access",
-            str(exc)[:120],
-            "pick a gh account that can read it: readthrough onboard REPO --account LOGIN",
+    except ForgeError as exc:
+        fix = (
+            "pick a gh account that can read it: readthrough onboard REPO --account LOGIN"
+            if "accounts" in forge.capabilities
+            else f"give readthrough a token: {forge.describe_auth()}"
         )
+        check(False, "access", exc.reason[:120], fix)
     clone_ok = bool(cfg.clone and (cfg.clone / ".git").exists())
     check(
         clone_ok if cfg.clone else None,
@@ -672,13 +683,13 @@ def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, A
             remote in remotes,
             "remote",
             f"{remote} in {remotes}",
-            f"git -C {cfg.clone} remote add {remote} https://github.com/{cfg.repo}",
+            f"git -C {cfg.clone} remote add {remote} {forge.web_url()}",
         )
     sources = profile_sources(cfg)
     check(
         bool(sources) or None,
         "profile",
-        sources[0].label if sources else "none local (an in-repo .github/readthrough.toml may apply)",
+        sources[0].label if sources else f"none local (an in-repo {forge.config_dir}/readthrough.toml may apply)",
     )
     check(bool(cfg.onboarded), "onboarded", cfg.onboarded or "no", f"readthrough onboard {cfg.repo}")
     if cfg.data_path.exists():
@@ -717,7 +728,7 @@ def _doctor_bundle(settings: Settings, args: argparse.Namespace) -> int:
     def version(cmd: list[str]) -> str:
         try:
             return run(cmd, timeout=20).strip().splitlines()[0]
-        except (GhError, IndexError) as exc:
+        except (ForgeError, IndexError) as exc:
             return f"unavailable ({exc})"
 
     # The checkout this runs from, when it's an editable install; a wheel install just reports "unavailable".
@@ -726,7 +737,7 @@ def _doctor_bundle(settings: Settings, args: argparse.Namespace) -> int:
         "readthrough": __version__, "git_commit": sha, "python": sys.version, "platform": platform.platform(),
         "gh": version(["gh", "--version"]), "copilot": version(["copilot", "--version"]),
         "gh_accounts": signed_in_accounts(), "home": str(settings.home), "config": str(settings.path),
-        "repos": [{"name": c.repo, "onboarded": c.onboarded, "built": cfg_built(c)} for c in settings.all()],
+        "repos": [{"name": c.slug, "onboarded": c.onboarded, "built": cfg_built(c)} for c in settings.all()],
     }  # fmt: skip
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("versions.json", json.dumps(info, indent=2))
@@ -739,7 +750,7 @@ def _doctor_bundle(settings: Settings, args: argparse.Namespace) -> int:
             if cfg.data_path.exists():
                 data = json.loads(cfg.data_path.read_text(encoding="utf-8"))
                 summary = {k: data.get(k) for k in ("schema", "version", "generated", "warnings", "stats", "drift")}
-                z.writestr(f"repos/{cfg.repo.replace('/', '__')}.json", json.dumps(summary, indent=2))
+                z.writestr(f"repos/{cfg.slug.replace('/', '__')}.json", json.dumps(summary, indent=2))
     _say(
         f"Wrote {out}\nIt has your config, recent logs, versions, and server health; no tokens. Attach it to a bug report."
     )
@@ -761,12 +772,15 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="Lay out a repo's open PRs and study them in depth.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--home", type=Path, help="data directory (default ~/.readthrough)")
-    parser.add_argument("--repo", metavar="OWNER/NAME", help="which repo (default: the default repo, or the only one)")
+    parser.add_argument("--repo", metavar="OWNER/NAME",
+                        help="which repo (default: the default repo, or the only one); FORGE/OWNER/NAME when a name is on several forges")  # fmt: skip
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     p = sub.add_parser("onboard", help="map a repo's architecture so readthrough can lay out its PRs")
     p.add_argument("target", nargs="?", metavar="OWNER/NAME")
+    p.add_argument("--forge", choices=forges.names(), default=None,
+                   help=f"where the repo lives (default: {forges.DEFAULT}; a FORGE/OWNER/NAME target says it too)")  # fmt: skip
     p.add_argument("--clone", help="your local clone (default: looks in ~/src and ~/repos)")
     p.add_argument("--remote", help="git remote that points at the repo (default: detected)")
     p.add_argument("--account", help="gh account to read the repo as (for repos only one of your accounts can see)")
@@ -888,7 +902,7 @@ def main(argv: list[str] | None = None, *, prog: str = "readthrough") -> None:
     _setup_logging(settings, verbose=args.verbose, command=args.command)
     try:
         code = args.func(settings, args)
-    except (GhError, ProfileError, RuntimeError, ValueError, NotImplementedError) as exc:
+    except (ForgeError, ProfileError, RuntimeError, ValueError, NotImplementedError) as exc:
         log.error("%s", exc)
         code = 1
     except Exception as exc:

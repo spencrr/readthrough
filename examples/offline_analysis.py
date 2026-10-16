@@ -4,6 +4,9 @@ readthrough's analysis is a pure function of a profile and the PR data: which co
 to, which lane the PR is in, what signals fire, and how long it would take to review. This script feeds it
 two made-up PRs for a made-up repo and prints what it concludes, then writes the brief for one of them.
 
+The PRs are built as ``readthrough.model.PullRequest`` records, the forge-neutral shape every adapter
+(GitHub, GitLab, Forgejo, Azure DevOps) produces, so this is also what a new adapter has to fill in.
+
     uv run python examples/offline_analysis.py
 """
 
@@ -15,6 +18,7 @@ from pathlib import Path
 
 from readthrough.build import Snapshot, analyze_snapshot
 from readthrough.config import Config
+from readthrough.model import Author, ChangedFile, PullRequest, known, unsupported
 from readthrough.profile import parse_profile
 
 PROFILE = parse_profile(
@@ -57,36 +61,30 @@ NOW = dt.datetime(2026, 10, 14, 9, 0, tzinfo=dt.UTC)
 
 def pr(
     number: int, title: str, files: list[tuple[str, int]], *, author: str, association: str, draft: bool = False
-) -> dict:
-    """The shape GitHub's GraphQL API returns for a pull request, reduced to what the analysis reads."""
-    return {
-        "number": number,
-        "title": title,
-        "url": f"https://github.com/octo/courier/pull/{number}",
-        "body": "",
-        "isDraft": draft,
-        "createdAt": "2026-10-01T12:00:00Z",
-        "updatedAt": "2026-10-10T12:00:00Z",
-        "additions": sum(add for _, add in files),
-        "deletions": 0,
-        "changedFiles": len(files),
-        "headRefOid": f"{number:040x}",
-        "baseRefName": "main",
-        "reviewDecision": "REVIEW_REQUIRED",
-        "mergeable": "MERGEABLE",
-        "authorAssociation": association,
-        "author": {"__typename": "User", "login": author},
-        "labels": {"nodes": []},
-        "files": {
-            "nodes": [{"path": p, "additions": add, "deletions": 0, "changeType": "MODIFIED"} for p, add in files]
-        },
-        "reviewRequests": {"nodes": []},
-        "latestReviews": {"nodes": []},
-        "reviewThreads": {"nodes": []},
-        "comments": {"totalCount": 0},
-        "commits": {"nodes": [{"commit": {"committedDate": "2026-10-10T12:00:00Z", "statusCheckRollup": None}}]},
-        "closingIssuesReferences": {"nodes": []},
-    }
+) -> PullRequest:
+    """One pull request as the analysis sees it. Anything a forge can't supply is marked, not defaulted."""
+    return PullRequest(
+        number=number,
+        title=title,
+        url=f"https://github.com/octo/courier/pull/{number}",
+        body="",
+        draft=draft,
+        created="2026-10-01T12:00:00Z",
+        updated="2026-10-10T12:00:00Z",
+        additions=sum(add for _, add in files),
+        deletions=0,
+        changed_files=len(files),
+        head=f"{number:040x}",
+        base="main",
+        author=Author(author),
+        files=[ChangedFile(path, add, 0) for path, add in files],
+        last_commit="2026-10-10T12:00:00Z",
+        association=known(association),
+        decision=known("REVIEW_REQUIRED"),
+        mergeable=known("MERGEABLE"),
+        threads=known([]),
+        checks=unsupported("this made-up forge has no CI"),  # shows up as a signal, never as "passing"
+    )
 
 
 DIFF_41 = """\
@@ -116,7 +114,7 @@ def main() -> None:
         contracts={},
         instructions=[],
         required_checks={},
-        main_failing=set(),
+        main_failing=known(set()),
         diffs={41: DIFF_41},
         now=NOW,
     )

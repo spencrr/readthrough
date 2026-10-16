@@ -34,7 +34,7 @@ def build_brief(
     w(
         f"[Open on GitHub]({it['url']}) · [Files]({it['url']}/files) · author **@{it['author']}** ({_author_label(profile, it)}) · lane **{it['lane']}** · "
         f"+{it['additions']}/-{it['deletions']} in {it['changed_files']} files · opened {int(it['age_days'])}d ago · "
-        f"idle {int(it['idle_days'])}d · CI **{STATE_LABELS.get(it.get('ci_state', ''), it['ci'])}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
+        f"idle {int(it['idle_days'])}d · CI **{STATE_LABELS.get(it.get('ci_state', ''), 'unknown')}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
     )
     w(f"Head SHA: `{it['head']}`\n")
     if ledger_entry:

@@ -69,23 +69,24 @@ def test_onboard_build_study_and_cache_hit(cli):
     out = cli("onboard", repo, "--clone", str(home / "nowhere"), "--accept")
     assert f"{repo} is onboarded" in out.stdout
     assert "Coverage:" in out.stdout
-    profile = home / "repos" / "octo" / "courier" / "profile.toml"
+    profile = home / "repos" / "github" / "octo" / "courier" / "profile.toml"
     assert profile.exists() and "repo = 'octo/courier'" in profile.read_text(encoding="utf-8").replace('"', "'")
 
     cli.reset_calls()
     out = cli("build")
     assert f"{repo}: 2 open PRs" in out.stderr and "Dashboard:" in out.stderr
-    data = json.loads((home / "repos" / "octo" / "courier" / "data.json").read_text(encoding="utf-8"))
-    assert data["schema"] == 1 and data["repo"] == repo and data["viewer"] == fake_gh.VIEWER
+    data = json.loads((home / "repos" / "github" / "octo" / "courier" / "data.json").read_text(encoding="utf-8"))
+    assert data["schema"] == 2 and data["repo"] == repo and data["viewer"] == fake_gh.VIEWER
+    assert data["slug"] == f"github/{repo}" and data["forge"]["label"] == "GitHub"
     by_number = {p["number"]: p for p in data["prs"]}
     assert set(by_number) == {41, 42}
     assert by_number[42]["lane"] == "mine" and by_number[41]["lane"] == "ready"
     assert any(f["id"] == "requested" for f in by_number[41]["flags"]), "the viewer's review was requested"
     assert data["stats"]["diffs_downloaded"] == 2 and data["stats"]["rate_limit"] == {"rest": 4990, "graphql": 4980}
     assert by_number[41]["smells"] == [], "a drafted profile carries no line heuristics yet"
-    html = (home / "repos" / "octo" / "courier" / "index.html").read_text(encoding="utf-8")
+    html = (home / "repos" / "github" / "octo" / "courier" / "index.html").read_text(encoding="utf-8")
     assert "<title>" in html and "Content-Security-Policy" in html and "LUCIDE" in html
-    brief = (home / "repos" / "octo" / "courier" / "briefs" / "pr-41.md").read_text(encoding="utf-8")
+    brief = (home / "repos" / "github" / "octo" / "courier" / "briefs" / "pr-41.md").read_text(encoding="utf-8")
     assert brief.startswith("# #41 ") and "## 0. Predict before you read" in brief
     diff_calls = [c for c in cli.gh_calls() if c[:2] == ["pr", "diff"]]
     assert sorted(c[2] for c in diff_calls) == ["41", "42"]
@@ -95,7 +96,7 @@ def test_onboard_build_study_and_cache_hit(cli):
         "--at", "courier/transports/smtp.py:15")  # fmt: skip
     out = cli("study", "41")
     assert "Adds retries" in out.stdout and "swallows errors" in out.stdout
-    brief = (home / "repos" / "octo" / "courier" / "briefs" / "pr-41.md").read_text(encoding="utf-8")
+    brief = (home / "repos" / "github" / "octo" / "courier" / "briefs" / "pr-41.md").read_text(encoding="utf-8")
     assert "Study log (evidence of understanding)" in brief and "swallows errors" in brief
 
     # A second build reuses the cached diffs: the heads didn't change, so gh isn't asked for them again.

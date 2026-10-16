@@ -1,0 +1,247 @@
+[
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli",
+  "file": null,
+  "error": {
+   "type": "RateLimited",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli failed: HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details",
+   "stderr": "HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli",
+  "file": "293c168adbb5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli",
+  "file": "293c168adbb5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests?state=opened&order_by=updated_at&sort=desc&with_labels_details=false&per_page=2",
+  "file": "5a7f9f9571ba.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests?state=opened&per_page=1",
+  "file": "05a1a7170d04.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928",
+  "file": "054a7bf76049.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131",
+  "file": "2214b16b333f.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/diffs?per_page=100",
+  "file": null,
+  "error": {
+   "type": "RateLimited",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/diffs failed: HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details",
+   "stderr": "HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/diffs?per_page=100",
+  "file": null,
+  "error": {
+   "type": "RateLimited",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/diffs failed: HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details",
+   "stderr": "HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/diffs?per_page=100",
+  "file": null,
+  "error": {
+   "type": "RateLimited",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/diffs failed: HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details",
+   "stderr": "HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/diffs?per_page=100",
+  "file": "995df583d679.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/approvals",
+  "file": "6d0b7f56058c.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/discussions?per_page=100",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/discussions failed: HTTP 401 {\"message\":\"401 Unauthorized\"}",
+   "stderr": "HTTP 401 {\"message\":\"401 Unauthorized\"}"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4131/closes_issues",
+  "file": "6e76cb3a29c6.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/members/all?per_page=100",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/members/all failed: HTTP 401 {\"message\":\"401 Unauthorized\"}",
+   "stderr": "HTTP 401 {\"message\":\"401 Unauthorized\"}"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/diffs?per_page=100",
+  "file": "e56b428bb2c2.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/approvals",
+  "file": "0603a56f5c6e.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/discussions?per_page=100",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/discussions failed: HTTP 401 {\"message\":\"401 Unauthorized\"}",
+   "stderr": "HTTP 401 {\"message\":\"401 Unauthorized\"}"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/closes_issues",
+  "file": "87847cd77255.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests?state=merged&order_by=updated_at&sort=desc&per_page=2",
+  "file": "03addf8039b3.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3927/diffs?per_page=100",
+  "file": "6c9d9aaf4865.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/4031/diffs?per_page=100",
+  "file": "ba7bbd8d7f4d.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli",
+  "file": "293c168adbb5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?ref=main&recursive=true&per_page=100",
+  "file": "cb31d203bf57.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=2&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "1faa33d3d89d.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=3&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "6f7a226c9418.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=4&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "9159d1034171.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=5&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "26c82541d833.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=6&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "235e10ac50b2.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=7&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "d9cf27bbda67.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=8&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "c0d36d9d5385.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=9&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "fe1e852021c5.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=10&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": null,
+  "error": {
+   "type": "RateLimited",
+   "message": "GET /api/v4/projects/gitlab-org%2Fcli/repository/tree failed: HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details",
+   "stderr": "HTTP 429 Rate limit exceeded; see https://docs.gitlab.com/ee/user/gitlab_com/#gitlabcom-specific-rate-limits for more details\n"
+  }
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=10&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "229ccc31e324.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?id=gitlab-org%2Fcli&page=11&pagination=legacy&per_page=100&recursive=true&ref=main&with_last_commit=false",
+  "file": "5d53ec48c954.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/files/README.md/raw?ref=main",
+  "file": "788d7a59a435.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/files/docs%2FREADME.md/raw?ref=main",
+  "file": "3a0f3d9a23f8.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/files/definitely%2Fnot%2Fhere.md/raw?ref=main",
+  "file": null
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/repository/tree?path=.claude&ref=main&per_page=100",
+  "file": "93514ae445cf.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/pipelines?ref=main&per_page=1&order_by=updated_at&sort=desc",
+  "file": "4f32035198bb.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/merge_requests/3928/raw_diffs",
+  "file": "a103f9259efe.json"
+ }
+]

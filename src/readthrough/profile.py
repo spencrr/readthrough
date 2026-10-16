@@ -18,6 +18,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from readthrough.model import ChangedFile
 from readthrough.registry import Registry
 from readthrough.rules import glob_to_regex
 
@@ -82,10 +83,9 @@ class Signal:
     def regexes(self) -> list[re.Pattern[str]]:
         return [glob_to_regex(p) for p in self.paths]
 
-    def fires(self, files: list[dict[str, Any]]) -> bool:
+    def fires(self, files: list[ChangedFile]) -> bool:
         return any(
-            any(r.match(f["path"]) for r in self.regexes)
-            and (not self.change_types or f["changeType"] in self.change_types)
+            any(r.match(f.path) for r in self.regexes) and (not self.change_types or f.change in self.change_types)
             for f in files
         )
 
@@ -178,6 +178,7 @@ class Profile:
     authors: Authors = field(default_factory=Authors)
     drafted_by: str | None = None
     origin: str = ""
+    notes: list[str] = field(default_factory=list)  # anything odd about how it was found, for the build's warnings
 
     # ---- lookups
 
@@ -245,7 +246,17 @@ class Profile:
 
 # ---------------------------------------------------------------- finding a repo's profile
 
-REPO_PROFILE_PATH = ".github/readthrough.toml"
+PROFILE_FILE = "readthrough.toml"
+
+
+def repo_profile_paths(forge: Any = None) -> list[str]:
+    """Where a repo may carry its own profile, in the order they're tried.
+
+    The forge's dot-directory first (``.github/readthrough.toml`` on GitHub: next to CODEOWNERS and the
+    other review conventions, and what "Propose upstream" creates), then the repo root, dotted or plain.
+    """
+    config_dir = getattr(forge, "config_dir", "") or ".github"
+    return [f"{config_dir}/{PROFILE_FILE}", f".{PROFILE_FILE}", PROFILE_FILE]
 
 
 @dataclass
@@ -254,10 +265,14 @@ class ProfileSource:
     label: str
     load: Any
     path: Path | None = None  # the file, for every kind except "repo"
+    text: str | None = None  # the file's content when it was fetched rather than read from ``path``
+
+    def read(self) -> str:
+        return self.path.read_text(encoding="utf-8") if self.path is not None else (self.text or "")
 
 
 # A finder returns the source it would supply for this repo, or None. ``cfg`` is the repo's Config and
-# ``github`` a GitHub client (None when the caller wants to stay offline). Options come from the
+# ``forge`` its forge adapter (None when the caller wants to stay offline). Options come from the
 # ``[profile_sources.<name>]`` table in config.toml, validated against the finder's options dataclass.
 Finder = Callable[[Any, Any, Any], "ProfileSource | None"]
 
@@ -269,7 +284,7 @@ PRECEDENCE = ("explicit", "local", "repo", "shared")
 
 
 @PROFILE_SOURCES.add("explicit", "the file named by `profile = ...` in the repo's config entry")
-def _explicit(cfg: Any, github: Any, options: Any) -> ProfileSource | None:
+def _explicit(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
     if not getattr(cfg, "profile", None):
         return None
     path = Path(cfg.profile).expanduser()
@@ -279,22 +294,36 @@ def _explicit(cfg: Any, github: Any, options: Any) -> ProfileSource | None:
 
 
 @PROFILE_SOURCES.add("local", "your draft from onboarding, in the repo's data directory")
-def _local(cfg: Any, github: Any, options: Any) -> ProfileSource | None:
+def _local(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
     local = cfg.local_profile_path
     if not local.exists():
         return None
     return ProfileSource("local", str(local), lambda: load_profile(local), local)
 
 
-@PROFILE_SOURCES.add("repo", f"the repo's own {REPO_PROFILE_PATH}, read through gh")
-def _repo(cfg: Any, github: Any, options: Any) -> ProfileSource | None:
-    if github is None:
+@PROFILE_SOURCES.add(
+    "repo", f"the repo's own {PROFILE_FILE} (in its forge's dot-directory or at the root), read from the forge"
+)
+def _repo(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
+    if forge is None:
         return None
-    text = github.raw_or_none(REPO_PROFILE_PATH)
-    if text is None:
+    candidates = repo_profile_paths(forge)
+    found = forge.read_files(candidates)
+    if not found:
         return None
-    label = f"{cfg.repo}:{REPO_PROFILE_PATH}"
-    return ProfileSource("repo", label, lambda: parse_profile(_toml(text, label), origin=label))
+    path = next(p for p in candidates if p in found)
+    label = f"{cfg.repo}:{path}"
+    notes = []
+    if len(found) > 1:
+        others = ", ".join(p for p in candidates if p in found and p != path)
+        notes.append(f"{cfg.repo} carries more than one profile ({path} is used; also found {others})")
+
+    def load() -> Profile:
+        profile = parse_profile(_toml(found[path], label), origin=label)
+        profile.notes.extend(notes)
+        return profile
+
+    return ProfileSource("repo", label, load, text=found[path])
 
 
 @dataclass(frozen=True)
@@ -305,29 +334,37 @@ class SharedOptions:
 @PROFILE_SOURCES.add(
     "shared", "directories of profiles, one file per repo (`dirs` in [profile_sources.shared])", options=SharedOptions
 )
-def _shared(cfg: Any, github: Any, options: Any) -> ProfileSource | None:
+def _shared(cfg: Any, forge: Any, options: Any) -> ProfileSource | None:
     for directory in options.dirs:
-        path = shared_profile_path(directory, cfg.repo)
+        path = shared_profile_path(directory, getattr(cfg, "slug", f"github/{cfg.repo}"))
         if path is not None:
             return ProfileSource("shared", str(path), lambda p=path: load_profile(p), path)
     return None
 
 
-def shared_profile_path(directory: Path, repo: str) -> Path | None:
-    """``<directory>/<owner>/<name>.toml``, matched case-insensitively the way GitHub treats repo names."""
-    owner, name = repo.split("/")
-    exact = directory / owner / f"{name}.toml"
-    if exact.is_file():
-        return exact
-    if not directory.is_dir():
-        return None
-    for candidate in directory.glob("*/*.toml"):
-        if candidate.parent.name.lower() == owner.lower() and candidate.stem.lower() == name.lower():
-            return candidate
+def shared_profile_path(directory: Path, slug: str) -> Path | None:
+    """``<directory>/<forge>/<owner>/<name>.toml``, matched case-insensitively the way forges treat repo names.
+
+    ``<directory>/<owner>/<name>.toml`` is also accepted for GitHub repos, which is what the directory
+    held before there were other forges.
+    """
+    *parents, name = slug.split("/")
+    layouts = [parents] + ([parents[1:]] if parents[:1] == ["github"] else [])
+    for layout in layouts:
+        exact = directory.joinpath(*layout) / f"{name}.toml"
+        if exact.is_file():
+            return exact
+        if not directory.is_dir():
+            return None
+        pattern = "/".join(["*"] * len(layout) + ["*.toml"])
+        for candidate in directory.glob(pattern):
+            found = [*candidate.relative_to(directory).parts[:-1], candidate.stem]
+            if [p.lower() for p in found] == [p.lower() for p in [*layout, name]]:
+                return candidate
     return None
 
 
-def profile_sources(cfg: Any, github: Any = None, *, first_only: bool = False) -> list[ProfileSource]:
+def profile_sources(cfg: Any, forge: Any = None, *, first_only: bool = False) -> list[ProfileSource]:
     """Every place a profile for ``cfg.repo`` could come from, highest precedence first.
 
     With ``first_only``, stops at the first one found, so a local profile saves fetching the repo's file.
@@ -337,7 +374,7 @@ def profile_sources(cfg: Any, github: Any = None, *, first_only: bool = False) -
     for name in PRECEDENCE:
         finder = PROFILE_SOURCES.get(name)
         options = configured.get(name) or PROFILE_SOURCES.defaults_for(name)
-        source = finder.impl(cfg, github, options)
+        source = finder.impl(cfg, forge, options)
         if source is not None:
             sources.append(source)
             if first_only:
@@ -352,9 +389,9 @@ def _toml(text: str, label: str) -> dict[str, Any]:
         raise ProfileError(f"{label}: {exc}") from exc
 
 
-def resolve_profile(cfg: Any, github: Any = None) -> Profile:
+def resolve_profile(cfg: Any, forge: Any = None) -> Profile:
     """The profile for ``cfg.repo`` from the highest-precedence source that has one."""
-    sources = profile_sources(cfg, github, first_only=True)
+    sources = profile_sources(cfg, forge, first_only=True)
     if not sources:
         raise ProfileError(f"No architecture profile for {cfg.repo}. Onboard it: readthrough onboard {cfg.repo}")
     profile = sources[0].load()

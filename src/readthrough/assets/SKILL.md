@@ -1,11 +1,11 @@
 ---
 name: readthrough
-description: Lay out a GitHub repo's open pull requests on its architecture (interactive dashboard, burn-down plan, overlap graph) and run guided deep-review sessions where the reviewer predicts, explains back, and critiques a PR before any review is drafted. Use when the user asks to triage, lay out, prioritize, burn down, get up to speed on, study, or deeply review PRs, or says "run a deep review session for owner/name#N".
+description: Lay out a repo's open pull requests (GitHub, GitLab, Forgejo, or Azure DevOps) on its architecture (interactive dashboard, burn-down plan, overlap graph) and run guided deep-review sessions where the reviewer predicts, explains back, and critiques a PR before any review is drafted. Use when the user asks to triage, lay out, prioritize, burn down, get up to speed on, study, or deeply review PRs, or says "run a deep review session for owner/name#N".
 ---
 
 # Readthrough
 
-Everything goes through the `readthrough` CLI. Every command takes `--repo owner/name`; without it, the user's default repo is used. Run `readthrough repos` to see which repos are onboarded. If the command is missing, tell the user to install it (see the readthrough guide).
+Everything goes through the `readthrough` CLI. Every command takes `--repo owner/name` (or `--repo forge/owner/name` when the same name is onboarded on two forges); without it, the user's default repo is used. `readthrough repos` shows each repo and, in the dashboard data, `forge.label` says which platform it's on. Run `readthrough repos` to see which repos are onboarded. If the command is missing, tell the user to install it (see the readthrough guide).
 
 Two modes:
 
@@ -72,7 +72,7 @@ Ask the user to explain the whole PR in 3-4 sentences as if they were briefing a
 
 1. Draft review comments **only** for points the user agreed with, in their voice, each anchored to `path:line`. Aim for 2-3 high-signal comments, not 15.
 2. Ask for the verdict: comment, approve, request changes, or not yet.
-3. On explicit confirmation, post with `gh pr review N -R OWNER/NAME --comment|--approve|--request-changes --body-file <file>`. For inline comments, use `gh api repos/OWNER/NAME/pulls/N/reviews` with a `comments` array. If `readthrough config` shows an `account` for the repo, run `gh` as that account (`$env:GH_TOKEN = gh auth token --user <account>`).
+3. On explicit confirmation, post the review. On GitHub: `gh pr review N -R OWNER/NAME --comment|--approve|--request-changes --body-file <file>`; for inline comments, `gh api repos/OWNER/NAME/pulls/N/reviews` with a `comments` array; if `readthrough config` shows an `account` for the repo, run `gh` as that account (`$env:GH_TOKEN = gh auth token --user <account>`). On GitLab use `glab mr note` / `glab mr approve`; on Azure DevOps `az repos pr set-vote` and `az repos pr update`; on Forgejo, hand the user the drafted comments to post, since there is no signed-in CLI to post through.
 4. Record the outcome. The ledger pins it to the head SHA, so new commits flag the PR again. If the live dashboard is open, the PR ticks off there within a few seconds:
    ```powershell
    readthrough R ledger N --status reviewed --note "<one line the user learned>"

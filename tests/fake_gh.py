@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -230,6 +231,12 @@ def _graphql(argv: list[str]) -> str:
                 }
             }
         )
+    if "query Files" in query:
+        # Several files in one call: each alias is `fN: object(expression:"HEAD:<path>")`; only the docs exist.
+        aliases = re.findall(r'(f\d+): object\(expression:"HEAD:([^"]+)"\)', query)
+        text = "# Architecture\n\n## Transports\n\n**Responsibility**: deliver one envelope.\n\n**Does not own**: persistence.\n"
+        repo = {alias: ({"text": text} if path == "docs/architecture.md" else None) for alias, path in aliases}
+        return json.dumps({"data": {"repository": repo}})
     raise SystemExit(f"fake gh: unexpected graphql query {query[:60]!r}")
 
 
