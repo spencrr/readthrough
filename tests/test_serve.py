@@ -221,6 +221,32 @@ def test_setup_page_and_api_are_protected(live):
     assert _request(port, "/api/setup/state", headers={"Host": "evil.example"})[0] == 403
 
 
+def test_a_forge_refusal_during_setup_is_an_answer_not_a_crash(live, monkeypatch, capsys):
+    """A sign-in the forge won't accept used to escape the handler: a traceback on stderr and a dropped
+    connection. It is the response now, and anything else unexpected is a 500 that names its error id."""
+    from readthrough.faults import AuthError
+    from readthrough.web_setup import SetupService
+
+    dashboard, port = live
+    token = {"X-Readthrough-Token": dashboard.token}
+
+    def refuse(self, path, query):
+        raise AuthError("GET /o/p/_apis/git/repositories/r failed: HTTP 401 TF400813", what="GET repositories/r",
+                        stderr="HTTP 401 TF400813: not authorized")  # fmt: skip
+
+    monkeypatch.setattr(SetupService, "get", refuse)
+    status, body = _request(port, "/api/setup/state?repo=o/r", headers=token)
+    assert status == 502 and json.loads(body)["error"] == "HTTP 401 TF400813: not authorized (GET repositories/r)"
+
+    def explode(self, path, query):
+        raise ZeroDivisionError("a bug")
+
+    monkeypatch.setattr(SetupService, "get", explode)
+    status, body = _request(port, "/api/setup/state?repo=o/r", headers=token)
+    assert status == 500 and json.loads(body)["error"].startswith("ZeroDivisionError: a bug [error ")
+    assert "Traceback" not in capsys.readouterr().err, "logged with its id, not spilled by socketserver"
+
+
 def test_failed_refreshes_are_recorded_and_retried_sooner(live, monkeypatch):
     from readthrough import serve as serve_mod
     from readthrough.build import BuildFailed

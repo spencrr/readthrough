@@ -17,9 +17,13 @@ class ForgeError(RuntimeError):
     retryable = False
     kind = "error"
 
-    def __init__(self, message: str, *, what: str = "", stderr: str = "", returncode: int | None = None) -> None:
+    def __init__(
+        self, message: str, *, what: str = "", stderr: str = "", returncode: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:  # fmt: skip
         super().__init__(message)
         self.what, self.stderr, self.returncode = what, stderr, returncode
+        self.headers = headers or {}  # an HTTP refusal's response headers (lower-cased): some say how to sign in
 
     @property
     def reason(self) -> str:

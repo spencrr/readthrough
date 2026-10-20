@@ -1,6 +1,20 @@
 [
  {
   "method": "GET",
+  "url": "https://dev.azure.com/powershell/_apis/projects?%24top=1&api-version=7.1",
+  "file": null,
+  "error": {
+   "type": "AuthError",
+   "message": "GET /powershell/_apis/projects failed: HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequ",
+   "stderr": "HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequestException\",\"errorCode\":0,\"eventId\":3000}",
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "x-vss-resourcetenant": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+   }
+  }
+ },
+ {
+  "method": "GET",
   "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo?api-version=7.1",
   "file": "7f26382a26ef.json"
  },
@@ -60,8 +74,12 @@
   "file": null,
   "error": {
    "type": "AuthError",
-   "message": "GET /powershell/PowerShell/_apis/policy/configurations needs sign-in (the forge answered with its sign-in page)",
-   "stderr": "HTTP 203 sign-in page"
+   "message": "GET /powershell/PowerShell/_apis/policy/configurations failed: HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequ",
+   "stderr": "HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequestException\",\"errorCode\":0,\"eventId\":3000}",
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "x-vss-resourcetenant": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+   }
   }
  },
  {

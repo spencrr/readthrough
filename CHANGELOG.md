@@ -97,6 +97,19 @@
   The bound is now nine digits, in one place.
 - A PR's brief says "Open on Azure DevOps" (or GitLab, or Forgejo) rather than "Open on GitHub" for every
   forge, and its Files link, like the ones under each signal, opens the files tab the way that forge spells it.
+- Azure DevOps sign-in no longer depends on which tenant `az` happens to default to. readthrough asks the
+  organization for its tenant (an anonymous call it refuses, naming it; the request carries
+  `X-TFS-FedAuthRedirect: Suppress`, so refusals are 401s rather than a sign-in page) and asks `az` for a
+  token in that tenant, so an account signed in to several tenants is no longer refused by an organization
+  outside its default one. When `az` has no sign-in there, `doctor` repeats what `az` said and its fix is a
+  single-tenant login (`az login --tenant … --allow-no-subscriptions --scope …`), which prompts once; a plain
+  `az login` with many accounts in Windows opens a window per tenant and most fail. A failed token lookup is
+  retried after ten minutes, so a sign-in made after `doctor`'s advice is picked up by a running server.
+- An organization that refuses both the `az` identity and anonymous access now fails with an error that
+  says how to sign in, instead of a bare refusal after a log line claiming anonymous access was fine. The
+  live server answers a forge refusal during setup with that message (HTTP 502) rather than a traceback on
+  stderr and a dropped connection, and anything else unexpected in a request with a 500 that names its
+  error id.
 
 ### Removed
 

@@ -23,6 +23,7 @@ in your browser can't drive it.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -44,6 +45,7 @@ from readthrough import __version__, ledger, logs, review, study
 from readthrough.build import DATA_SCHEMA, BuildFailed, build, mark_seen, refresh_sessions, render_html, render_setup
 from readthrough.config import DEFAULT_HOME, Config, load_settings
 from readthrough.engine import Busy, StudyEngine, public_entries
+from readthrough.faults import ForgeError
 from readthrough.files import mtime
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
@@ -491,6 +493,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except LookupError as exc:
             return self._error(HTTPStatus.NOT_FOUND, str(exc))
+        except ForgeError as exc:  # the forge refused or failed: that's the answer, not a crash
+            return self._error(HTTPStatus.BAD_GATEWAY, f"{exc.reason} ({exc.what})" if exc.what else exc.reason)
+
+    def handle_one_request(self) -> None:
+        """Whatever escapes a handler is logged once, with an error id, and answered; never a traceback on
+        stderr and a dropped connection, which is what ``socketserver`` does by default."""
+        try:
+            super().handle_one_request()
+        except (ConnectionError, TimeoutError):
+            raise  # the client went away; nothing to answer
+        except Exception as exc:
+            error_id = logs.new_id()
+            log.exception("Request %s failed [error %s]", self.path, error_id, extra={"error_id": error_id})
+            with contextlib.suppress(Exception):  # the response may be half-written already
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, f"{type(exc).__name__}: {exc} [error {error_id}]")
 
     def _page(self, dashboard: Dashboard) -> None:
         snapshot = dashboard.snapshot()

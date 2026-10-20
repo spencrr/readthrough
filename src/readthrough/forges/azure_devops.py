@@ -73,14 +73,47 @@ class AzureDevOpsOptions:
     credential_env: str = "AZURE_DEVOPS_EXT_PAT"
 
 
-def _az_token() -> str | None:
-    def ask() -> str | None:
-        out = quiet_output(
-            ["az", "account", "get-access-token", "--resource", ADO_RESOURCE, "--query", "accessToken", "-o", "tsv"]
-        )
-        return out.strip() if out else None
+# What `az` said when it had no token to give, per tenant, so `doctor` can repeat it. Never the token itself.
+_az_notes: dict[str, str] = {}
 
-    return cached_cli_token("az", ask)
+
+def _az_token(tenant: str | None) -> str | None:
+    """An access token for Azure DevOps from a signed-in ``az``, for the organization's tenant when known.
+
+    Asking for the tenant matters: an account signed in to several tenants holds a token for the default
+    one, and an organization in another tenant refuses it. ``get-access-token`` never prompts; when it has
+    nothing it says so on stderr, and that note is kept for ``doctor``.
+    """
+    cmd = ["az", "account", "get-access-token", "--resource", ADO_RESOURCE, "--query", "accessToken", "-o", "tsv"]
+    if tenant:
+        cmd += ["--tenant", tenant]
+
+    def ask() -> str | None:
+        out, complaint = quiet_output(cmd, with_failure=True)
+        if out:
+            _az_notes.pop(tenant or "", None)
+            return out.strip()
+        _az_notes[tenant or ""] = _az_complaint(complaint)
+        return None
+
+    return cached_cli_token(f"az:{tenant or ''}", ask)
+
+
+def _az_complaint(stderr: str) -> str:
+    """The one line of az's stderr worth repeating: the AADSTS code when there is one (it names the policy that
+    wants a sign-in), else the last error line, which is the message when az prints a whole traceback."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not lines:
+        return "az isn't installed or isn't signed in"
+    picked = next((line for line in lines if "AADSTS" in line), None) or next(
+        (line for line in reversed(lines) if line.startswith("ERROR:") or re.match(r"^\w*(Error|Exception)\b", line)),
+        lines[0],
+    )
+    return picked.removeprefix("ERROR:").strip()[:200]
+
+
+_tenants: dict[str, str | None] = {}  # organization (lower-cased) -> its Entra tenant id, or None when it has none
+_tenants_lock = threading.Lock()
 
 
 @FORGES.add("ado", "Azure DevOps Repos, through its REST API", options=AzureDevOpsOptions)
@@ -96,17 +129,18 @@ class AzureDevOps(Forge):
         super().__init__(repo, options or AzureDevOpsOptions(), tuning, account=account)
         self.host: str = self.options.host
         self.org, self.project, self.repo_name = repo.split("/")
-        env = self.options.credential_env
-
-        def find() -> Credential:
-            # A PAT is sent as Basic auth; an az access token as Bearer.
-            cred = credential(env=env, cli=None, cli_name="", scheme="Basic")
-            return cred if cred.token else credential(env="", cli=_az_token, cli_name="az")
-
-        self.rest = Rest(f"https://{self.host}/{quote(self.org)}/", find, self.tuning)
+        self.env = self.options.credential_env
+        # Without the header, an unauthorized call gets the sign-in page (a 203); with it, a 401 that names the
+        # organization's tenant, which is what tells `az` which of its identities to use.
+        self.headers = {"X-TFS-FedAuthRedirect": "Suppress"}
+        self.rest = Rest(
+            f"https://{self.host}/{quote(self.org)}/", self._find_credential, self.tuning, headers=self.headers
+        )
         # Identities and the graph live on another host, which gets the same credential (a Rest sends its
         # Authorization header only to its own host) and follows when the main one steps aside to anonymous.
-        self.vssps = Rest(f"https://vssps.{self.host}/{quote(self.org)}/", lambda: self.rest.cred, self.tuning)
+        self.vssps = Rest(
+            f"https://vssps.{self.host}/{quote(self.org)}/", lambda: self.rest.cred, self.tuning, headers=self.headers
+        )
         self._default_branch: str | None = None
         self._repo_id: str | None = None
         self._merge_commits_of: dict[int, tuple[str, str]] = {}  # from fetch_prs, so fetch_diff needn't ask again
@@ -116,20 +150,81 @@ class AzureDevOps(Forge):
         self._team_descriptors: dict[str, str] = {}
         self._id_of: dict[str, str] = {}  # login -> identity id, from the PRs' authors
 
+    # ---- credentials
+
+    def _find_credential(self) -> Credential:
+        """A PAT from the environment (sent as Basic auth), else an az token for the organization's tenant
+        (Bearer), else anonymous, which public projects answer."""
+        cred = credential(env=self.env, cli=None, cli_name="", scheme="Basic")
+        if cred.token:
+            return cred
+        tenant = self.tenant()
+        return credential(env="", cli=lambda: _az_token(tenant), cli_name="az")
+
+    def tenant(self) -> str | None:
+        """The organization's Entra tenant id, from the 401 an anonymous listing of its projects gets (even an
+        organization with public projects refuses that); None for one with no tenant (a Microsoft-account
+        organization). Asked once per process; the answer names nobody."""
+        key = self.org.lower()
+        with _tenants_lock:
+            if key not in _tenants:
+                probe = Rest(self.rest.base, Credential("anonymous"), self.tuning, headers=self.headers)
+                try:
+                    probe.call("GET", "_apis/projects", params={"$top": 1, "api-version": API})
+                    _tenants[key] = None
+                except AuthError as exc:
+                    _tenants[key] = exc.headers.get("x-vss-resourcetenant") or None
+                except ForgeError:
+                    return None  # couldn't ask this time; not remembered, so the next adapter asks again
+            return _tenants[key]
+
+    def sign_in_hint(self) -> str:
+        """What to run to be let in: a login scoped to the organization's tenant, which prompts once, where a
+        plain `az login` visits every tenant the account can reach and may prompt for each."""
+        tenant = self.tenant()
+        login = (
+            f"az login --tenant {tenant} --allow-no-subscriptions" if tenant else "az login --allow-no-subscriptions"
+        )
+        return f"{login} --scope {ADO_RESOURCE}/.default, or set {self.env} to a personal access token"
+
+    def describe_auth(self) -> str:
+        source = self.rest.cred.source
+        if source == "az":
+            tenant = self.tenant()
+            return f"az (tenant {tenant})" if tenant else "az"
+        if source == "anonymous" and (note := _az_notes.get(self.tenant() or "")):
+            return f"anonymous; az has no token for {self.org}: {note}"
+        return source
+
     def retrying(self, what: str, call: Any) -> Any:
         """Like the base, but an ``az`` identity the organization refuses steps aside for anonymous access.
 
         The az token is opportunistic (nobody configured it), and a public project answers anonymous calls
-        that it refuses to a signed-in outsider. A token someone set on purpose is never second-guessed.
+        that it refuses to a signed-in outsider. A token someone set on purpose is never second-guessed. When
+        anonymous is refused too, the identity is kept and the error says how to sign in to this organization.
         """
         try:
             return super().retrying(what, call)
-        except AuthError:
+        except AuthError as refused:
             if self.rest.cred.source != "az":
                 raise
-            log.warning("%s refuses the az identity; continuing anonymously (fine for a public project)", self.org)
-            self.rest = Rest(self.rest.base, Credential("anonymous"), self.tuning)
-            return super().retrying(what, call)
+            signed_in, self.rest = (
+                self.rest,
+                Rest(self.rest.base, Credential("anonymous"), self.tuning, headers=self.headers),
+            )
+            try:
+                result = super().retrying(what, call)
+            except AuthError as exc:
+                self.rest = signed_in
+                raise AuthError(
+                    f"{self.org} refuses both the az identity and anonymous access; sign in to it with: {self.sign_in_hint()}",
+                    what=what, stderr=exc.stderr, headers=exc.headers,
+                ) from refused  # fmt: skip
+            log.warning(
+                "%s refuses the az identity; continuing anonymously, which this public project answers", self.org
+            )
+            self.vssps = Rest(self.vssps.base, Credential("anonymous"), self.tuning, headers=self.headers)
+            return result
 
     @classmethod
     def validate_repo(cls, repo: str) -> str | None:
@@ -158,9 +253,6 @@ class AzureDevOps(Forge):
 
     def file_url(self, path: str, branch: str) -> str:
         return f"{self.web_url()}?path={quote('/' + path)}&version=GB{quote(branch)}"
-
-    def describe_auth(self) -> str:
-        return self.rest.cred.source
 
     # ---- REST helpers
 

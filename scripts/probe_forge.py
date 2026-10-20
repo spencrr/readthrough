@@ -43,7 +43,15 @@ def _plain(value: Any) -> Any:
 
 # Only the response headers the adapters read are kept: the rest can carry identities (Azure DevOps puts the
 # caller's account in `x-vss-userdata`), cookies, and request ids that have no place in a repository.
-KEPT_HEADERS = {"content-type", "link", "x-total-count", "x-total-pages", "ratelimit-remaining", "retry-after"}
+KEPT_HEADERS = {
+    "content-type",
+    "link",
+    "x-total-count",
+    "x-total-pages",
+    "ratelimit-remaining",
+    "retry-after",
+    "x-vss-resourcetenant",
+}
 SKIPPED_PATHS = ("connectionData",)  # answers about the signed-in user, which the tests run without
 
 
@@ -66,7 +74,8 @@ def record_to(directory: Path) -> None:
             # Azure DevOps names the refused caller by id in the message; that id is nobody's business.
             scrub = re.compile(r"The user '[0-9a-f-]{36}'")
             entry["error"] = {"type": type(exc).__name__, "message": scrub.sub("The user '<id>'", str(exc)),
-                              "stderr": scrub.sub("The user '<id>'", exc.stderr)}  # fmt: skip
+                              "stderr": scrub.sub("The user '<id>'", exc.stderr),
+                              "headers": {k: v for k, v in exc.headers.items() if k in KEPT_HEADERS}}  # fmt: skip
             raise
         else:
             if resp is not None:

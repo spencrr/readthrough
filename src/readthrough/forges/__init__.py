@@ -124,16 +124,22 @@ def credential(*, env: str, cli: Callable[[], str | None] | None, cli_name: str,
     return Credential("anonymous", None, scheme)
 
 
-_cli_tokens: dict[str, str | None] = {}
+_cli_tokens: dict[str, tuple[str | None, float]] = {}
 _cli_tokens_lock = threading.Lock()
+RETRY_MISSING_TOKEN_SECONDS = 600.0
 
 
 def cached_cli_token(key: str, lookup: Callable[[], str | None]) -> str | None:
-    """Ask a CLI for a token once per process. Spawning ``az`` or ``glab`` costs seconds; the answer doesn't change."""
+    """Ask a CLI for a token once per process. Spawning ``az`` or ``glab`` costs seconds; the answer doesn't change.
+
+    Except from "none": someone who signs in after seeing `doctor`'s advice shouldn't have to restart the
+    server, so a lookup that found nothing is asked again after a while.
+    """
     with _cli_tokens_lock:
-        if key not in _cli_tokens:
-            _cli_tokens[key] = lookup()
-        return _cli_tokens[key]
+        found = _cli_tokens.get(key)
+        if found is None or (found[0] is None and time.monotonic() - found[1] > RETRY_MISSING_TOKEN_SECONDS):
+            found = _cli_tokens[key] = (lookup(), time.monotonic())
+        return found[0]
 
 
 # ---------------------------------------------------------------- REST over urllib
@@ -213,10 +219,12 @@ class Rest:
             cls = classify_http(exc.code, text)
             if absent and issubclass(cls, absent):
                 return None
-            first = next((line.strip() for line in text.splitlines() if line.strip()), "")[:300]
+            first = error_summary(text)
             error = cls(
-                f"{what} failed: HTTP {exc.code} {first}".rstrip(), what=what, stderr=f"HTTP {exc.code} {text[:4000]}"
-            )
+                f"{what} failed: HTTP {exc.code} {first}".rstrip(), what=what,
+                stderr=f"HTTP {exc.code} {first}\n{text[:4000]}".rstrip(),
+                headers={k.lower(): v for k, v in exc.headers.items()},
+            )  # fmt: skip
             if isinstance(error, RateLimited):
                 error.retry_after = retry_after(exc.headers.get("Retry-After"), exc.headers.get("RateLimit-Reset"))
             raise error from exc
@@ -235,6 +243,20 @@ class Rest:
                 stderr="HTTP 203 sign-in page",
             )
         return Response(status, resp_headers, text, raw)
+
+
+def error_summary(text: str) -> str:
+    """One readable line from an error body: the ``message`` of a JSON error (what every forge's API sends),
+    else the body's first line. For the one-line ``reason`` a log or `doctor` shows; the body stays in ``stderr``."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        for key in ("message", "error_description", "error"):
+            if isinstance(data.get(key), str) and data[key].strip():
+                return data[key].strip()[:300]
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")[:300]
 
 
 def retry_after(header: str | None, reset: str | None = None, *, now: float | None = None) -> float | None:
@@ -379,6 +401,10 @@ class Forge:
     def new_file_url(self, path: str, branch: str) -> str | None:  # noqa: ARG002 - the default has no such page
         """A page where a maintainer can create ``path`` on ``branch``, for proposing a profile upstream."""
         return None
+
+    def sign_in_hint(self) -> str:
+        """For `doctor`: what to run so this forge lets readthrough in. Adapters that know better override it."""
+        return f"give readthrough a token: {self.describe_auth()}"
 
     def describe_auth(self) -> str:
         """For `doctor`: how calls are authenticated, never including the token."""

@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any, Literal, overload
 
 from readthrough.faults import ForgeError, Timeout, classify_stderr
 from readthrough.tuning import default_tuning
@@ -138,18 +139,31 @@ def run(
     return proc.stdout
 
 
-def quiet_output(cmd: list[str], *, with_stderr: bool = False) -> str | None:
+@overload
+def quiet_output(cmd: list[str], *, with_stderr: bool = False) -> str | None: ...
+@overload
+def quiet_output(
+    cmd: list[str], *, with_stderr: bool = False, with_failure: Literal[True]
+) -> tuple[str | None, str]: ...
+
+
+def quiet_output(cmd: list[str], *, with_stderr: bool = False, with_failure: bool = False) -> Any:
     """A program's stdout, or None if it isn't installed or failed. For looking things up (tokens, sign-ins).
 
     ``with_stderr`` appends what the program wrote to stderr: ``glab auth status`` reports there, not to stdout.
+    ``with_failure`` returns ``(stdout or None, why)`` instead, where ``why`` is the redacted stderr of a
+    failed run (or what kept it from running), for telling the user what the program said.
     """
     try:
         proc = subprocess.run(
             [*which(cmd[0]), *cmd[1:]], capture_output=True, text=True, encoding="utf-8", errors="replace",
             creationflags=NO_WINDOW, check=False, timeout=default_tuning().forge.timeout_seconds,
         )  # fmt: skip
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+    except FileNotFoundError:
+        return (None, f"{cmd[0]} isn't installed or isn't on PATH") if with_failure else None
+    except subprocess.TimeoutExpired:
+        return (None, f"{cmd[0]} didn't answer in time") if with_failure else None
     if proc.returncode != 0:
-        return None
-    return proc.stdout + ("\n" + proc.stderr if with_stderr and proc.stderr else "")
+        return (None, redact(proc.stderr.strip())) if with_failure else None
+    out = proc.stdout + ("\n" + proc.stderr if with_stderr and proc.stderr else "")
+    return (out, "") if with_failure else out

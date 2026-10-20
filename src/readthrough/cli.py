@@ -667,7 +667,8 @@ def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, A
     _say(f"\n{cfg.repo}" + (f" ({forge.label})" if forge.name != forges.DEFAULT else ""))
     if cfg.account:
         check(cfg.account in accounts, "account", cfg.account, f"gh auth login (as {cfg.account})")
-    check(True, "auth", forge.describe_auth())
+    auth = forge.describe_auth()
+    check(None if auth.startswith("anonymous") else True, "auth", auth)  # anonymous is fine for a public repo
     try:
         forge.repo_info()
         check(True, "access", "can read the repo")
@@ -675,7 +676,7 @@ def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, A
         fix = (
             "pick a gh account that can read it: readthrough onboard REPO --account LOGIN"
             if "accounts" in forge.capabilities
-            else f"give readthrough a token: {forge.describe_auth()}"
+            else forge.sign_in_hint()
         )
         check(False, "access", exc.reason[:120], fix)
     clone_ok = bool(cfg.clone and (cfg.clone / ".git").exists())

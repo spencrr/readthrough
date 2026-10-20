@@ -48,7 +48,8 @@ def replay(monkeypatch: pytest.MonkeyPatch):
                 cls = getattr(faults, entry["error"]["type"])
                 if kw.get("absent") and issubclass(cls, kw["absent"]):
                     return None
-                raise cls(entry["error"]["message"], what=path, stderr=entry["error"]["stderr"])
+                raise cls(entry["error"]["message"], what=path, stderr=entry["error"]["stderr"],
+                          headers=entry["error"].get("headers") or {})  # fmt: skip
             if entry["file"] is None:  # a 404 the adapter asked to have as None
                 return None
             data = json.loads((directory / entry["file"]).read_text("utf-8"))
@@ -138,10 +139,18 @@ def test_forgejo_urls_and_refs():
 
 def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
-    monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda: None)
+    tenants_asked: list[str | None] = []
+    monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda tenant: tenants_asked.append(tenant))
+    monkeypatch.setattr("readthrough.forges.azure_devops._tenants", {})
     asked = replay("ado")
     forge = AzureDevOps("powershell/PowerShell/PSGallery-Cache-Repo", tuning=TUNING)
     assert forge.describe_auth() == "anonymous"
+    # Even an organization with public projects refuses an anonymous listing of them, and that refusal names
+    # its tenant, which is what az is asked for a token in.
+    assert tenants_asked == ["72f988bf-86f1-41af-91ab-2d7cd011db47"] and forge.tenant() == tenants_asked[0]
+    assert forge.sign_in_hint().startswith(
+        "az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47 --allow-no-subscriptions"
+    )
     assert "diffs" in forge.capabilities, "assembled from blobs"
     info = forge.repo_info()
     assert info["full_name"] == "powershell/PowerShell/PSGallery-Cache-Repo" and info["default_branch"] == "main"
@@ -167,7 +176,7 @@ def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     assert forge.read_file("definitely/not/here.md") is None
     context = forge.ci_context({"main"})
     # Branch policies need sign-in on Azure DevOps: unavailable, with the reason, never an empty set.
-    assert not context.required["main"].known and "sign-in" in context.required["main"].reason
+    assert not context.required["main"].known and "not authorized" in context.required["main"].reason
     assert context.main_failing.known
     # The diff is assembled from the blobs: this PR adds one file, so one blob fetch and a new-file header.
     diff = forge.fetch_diff(53)
@@ -357,23 +366,62 @@ def test_azure_devops_repo_can_be_onboarded(replay, monkeypatch):
 
 
 def test_azure_devops_steps_aside_when_the_org_refuses_the_az_identity(monkeypatch):
+    """A public project answers anonymously what it refuses to an outsider's az token: the adapter steps aside.
+    A private one refuses both, and then the error says how to sign in to this organization's tenant."""
     from readthrough.faults import AuthError
 
     monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
-    monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda: "eyJ-not-a-real-token")
+    monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda tenant: "eyJ-not-a-real-token")
+    monkeypatch.setattr("readthrough.forges.azure_devops._tenants", {"o": "t-1"})
     forge = AzureDevOps("o/p/r", tuning=TUNING)
-    assert forge.describe_auth() == "az"
+    assert forge.describe_auth() == "az (tenant t-1)"
     attempts: list[str | None] = []
+    public = True
 
     def call(self: Rest, method: str, path: str, **kw: Any) -> Response:
         attempts.append(self.cred.source)
-        if self.cred.token:
-            raise AuthError("GET x failed: HTTP 401", what=path, stderr="HTTP 401")
+        if self.cred.token or not public:
+            raise AuthError("GET x failed: HTTP 401", what=path, stderr="HTTP 401 TF400813: not authorized")
         return Response(200, {}, json.dumps({"id": "1", "name": "r", "defaultBranch": "refs/heads/main"}))
 
     monkeypatch.setattr(Rest, "call", call)
     assert forge.repo_info()["default_branch"] == "main"
     assert attempts == ["az", "anonymous"] and forge.describe_auth() == "anonymous"
+    assert forge.vssps.cred.source == "anonymous", "the identities host follows"
+
+    public = False
+    private = AzureDevOps("o/p/r", tuning=TUNING)
+    with pytest.raises(AuthError, match="refuses both the az identity and anonymous access") as refused:
+        private.repo_info()
+    assert "az login --tenant t-1 --allow-no-subscriptions" in str(refused.value)
+    assert refused.value.__cause__ is not None, "the first refusal is kept as the cause"
+    assert private.describe_auth() == "az (tenant t-1)", "the identity is kept; stepping aside didn't help"
+
+
+def test_azure_devops_remembers_why_az_had_no_token(monkeypatch):
+    """When az has nothing for the tenant, doctor repeats the line of az's complaint that explains it."""
+    from readthrough.forges import azure_devops as ado
+
+    monkeypatch.setattr("readthrough.forges._cli_tokens", {})
+    monkeypatch.setattr(ado, "_az_notes", {})
+    monkeypatch.setattr(ado, "_tenants", {"o": "t-1"})
+    said = {
+        "out": None,
+        "err": "ERROR: AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication.\nInteractive authentication is needed. Please run:\naz login --scope x",
+    }
+    monkeypatch.setattr(ado, "quiet_output", lambda cmd, with_failure=False: (said["out"], said["err"]))
+    forge = AzureDevOps("o/p/r", tuning=TUNING)
+    assert forge.describe_auth().startswith("anonymous; az has no token for o: AADSTS50076")
+    assert (
+        ado._az_complaint(
+            "ERROR: The command failed with an unexpected error. Here is the traceback:\n  File x\nValueError: Unable to get authority configuration for https://login.microsoftonline.com/t-1\nTo check existing issues, visit"
+        )
+        == "ValueError: Unable to get authority configuration for https://login.microsoftonline.com/t-1"
+    )
+    assert (
+        ado._az_complaint("ERROR: Please run 'az login' to setup account.") == "Please run 'az login' to setup account."
+    )
+    assert ado._az_complaint("") == "az isn't installed or isn't signed in"
 
 
 def test_azure_devops_urls():
@@ -455,6 +503,15 @@ def test_gitlab_urls_and_nested_groups():
 # ---------------------------------------------------------------- the shared transport
 
 
+def test_error_summary_prefers_the_apis_message():
+    body = '{"$id":"1","innerException":null,"message":"TF400813: The user is not authorized to access this resource.","typeName":"X"}'
+    assert forges.error_summary(body) == "TF400813: The user is not authorized to access this resource."
+    assert forges.error_summary('{"error": "invalid_token", "error_description": "expired"}') == "expired"
+    assert forges.error_summary('{"error": "invalid_token"}') == "invalid_token"
+    assert forges.error_summary("\n<html>sign in</html>\n") == "<html>sign in</html>"
+    assert forges.error_summary('{"message": ""}') == '{"message": ""}' and forges.error_summary("") == ""
+
+
 def test_retry_after_prefers_the_forges_own_number():
     assert retry_after("30") == 30.0
     assert retry_after(None, str(1_700_000_060), now=1_700_000_000.0) == 60.0
@@ -526,11 +583,13 @@ def test_building_an_adapter_spawns_no_cli(monkeypatch):
         lambda cmd, **kw: calls.append(cmd) or (_ for _ in ()).throw(FileNotFoundError()),
     )
     monkeypatch.setattr("readthrough.forges._cli_tokens", {})
+    monkeypatch.setattr("readthrough.forges.azure_devops._tenants", {"o": None})  # the tenant probe is a network call
+    monkeypatch.setattr("readthrough.forges.azure_devops._az_notes", {})
     gitlab = GitLab("g/p", tuning=TUNING)
     ado = AzureDevOps("o/p/r", tuning=TUNING)
     assert gitlab.pr_url(1) and gitlab.pr_ref(1) and ado.pr_url(2) and ado.pr_ref(2)
     assert calls == []
-    assert gitlab.describe_auth() == "anonymous" and ado.describe_auth() == "anonymous"
+    assert gitlab.describe_auth() == "anonymous" and ado.describe_auth().startswith("anonymous; az has no token")
     assert [c[0].rsplit("-", 1)[1] for c in calls] == ["glab", "az"], (
         "asked once each, when the credential was first needed"
     )

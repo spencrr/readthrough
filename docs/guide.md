@@ -393,7 +393,15 @@ credential_env = "GITLAB_TOKEN"      # the variable to read a personal access to
 host = "codeberg.org"
 ```
 
-Two things to know. gitlab.com throttles anonymous API use per IP address quite hard, so a token (or `glab auth login`) makes a real difference there. And an `az` sign-in that the Azure DevOps organization doesn't recognize is set aside for anonymous access, with a note in the log, because public projects answer anonymous calls they refuse to an outsider's token.
+gitlab.com throttles anonymous API use per IP address quite hard, so a token (or `glab auth login`) makes a real difference there.
+
+On Azure DevOps, readthrough first asks the organization which Entra tenant it belongs to (an anonymous call the organization refuses, naming the tenant), then asks `az` for a token *in that tenant*. That matters when you're signed in to several: `az` holds a token for your default tenant, and an organization elsewhere would refuse it. `az account get-access-token` never prompts; when `az` has no sign-in for the tenant, readthrough continues anonymously (enough for a public project), `doctor` repeats what `az` said, and its fix line is a sign-in scoped to that one tenant:
+
+```sh
+az login --tenant <tenant id> --allow-no-subscriptions --scope 499b84ac-1321-427f-aa17-267ca6975798/.default
+```
+
+Use that form rather than a plain `az login`: with several accounts in Windows, a plain login visits every tenant you can reach and opens a sign-in window for each one that wants multi-factor authentication, most of which fail. The scoped form prompts once and also grants the Azure DevOps scope, so the token comes silently afterwards. A running server picks a new sign-in up within ten minutes. An `az` identity the organization refuses is set aside for anonymous access when that works (public projects answer anonymous calls they refuse to an outsider's token); when anonymous is refused too, the error says the same sign-in command.
 
 Not every forge can answer every question. What one can't supply (GitLab has no named required checks; author associations need a token on Forgejo) shows up as a warning on the dashboard and a *gap* signal on each affected PR, and the related signal or lane uses a neutral default. It's never quietly read as "nothing there".
 
