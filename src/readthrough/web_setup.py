@@ -113,6 +113,7 @@ class SetupService:
                 **_repo_view(cfg),
                 "cli_name": cli_name,
                 "configured": entry is not None,
+                "auth": forges.make(cfg).describe_auth(),  # resolves the credential once per process; no prompt
                 **self._profile_view(cfg),
             }
         return out
@@ -171,6 +172,7 @@ class SetupService:
             "full_name": name,
             "forge": forge_name,
             "forge_label": forge.label,
+            "auth": forge.describe_auth(),  # what Check access actually used, so the page can say so
             "slug": cfg.slug,
             "private": info.get("private", False),
             "default_branch": branch,
@@ -584,6 +586,8 @@ def _forge_view(name: str) -> dict[str, Any]:
         "pr_noun": adapter.pr_noun,
         "shape": adapter.shape,
         "accounts": "accounts" in adapter.capabilities,
+        "access": adapter.access,
+        "credentials": list(adapter.credentials),
     }
 
 

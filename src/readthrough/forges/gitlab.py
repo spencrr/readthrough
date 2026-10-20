@@ -82,6 +82,12 @@ class GitLab(Forge):
     files_tab = "/diffs"
     shape = "group/project (or group/subgroup/project)"
     capabilities = frozenset({"diffs", "default_branch_ci", "rate_limit"})
+    access = "the GitLab REST API over HTTPS"
+    credentials = (
+        "GITLAB_TOKEN if set",
+        "else glab, if signed in to this host",
+        "else anonymously (public projects; gitlab.com throttles this hard)",
+    )
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or GitLabOptions(), tuning, account=account)

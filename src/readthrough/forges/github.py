@@ -157,6 +157,8 @@ class GitHub(Forge):
     label = "GitHub"
     config_dir = ".github"
     capabilities = frozenset({"diffs", "required_checks", "default_branch_ci", "rate_limit", "memberships", "accounts"})
+    access = "the gh CLI (its GraphQL and REST calls), which carries your sign-in, SSO, and proxies"
+    credentials = ("the gh account you pick here, else gh's active account",)
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or GitHubOptions(), tuning, account=account)

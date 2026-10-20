@@ -12,6 +12,7 @@ nav.repos{display:flex;flex-direction:column;gap:4px}
 .card h2 .step.done{background:var(--good);border-color:var(--good);color:#fff}
 .card.dim{opacity:.55;pointer-events:none}
 .sub{color:var(--mut);font-size:13px;margin:0 0 10px}
+.access .cred{display:inline-block;padding:0 7px;margin:1px 2px;border-radius:999px;background:var(--inset);border:1px solid var(--line);color:var(--fg);font-size:12px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
 label.f{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--mut);min-width:180px}
 input[type=text],input[type=number],select,textarea{background:var(--panel);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:6px;font:inherit}

@@ -54,6 +54,8 @@ class Forgejo(Forge):
     label = "Forgejo"
     config_dir = ".forgejo"
     capabilities = frozenset({"diffs", "required_checks", "default_branch_ci"})
+    access = "the Forgejo/Gitea REST API over HTTPS"
+    credentials = ("FORGEJO_TOKEN if set", "else anonymously (public repos)")
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or ForgejoOptions(), tuning, account=account)

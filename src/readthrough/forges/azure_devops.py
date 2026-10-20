@@ -124,6 +124,12 @@ class AzureDevOps(Forge):
     shape = "organization/project/repository"
     capabilities = frozenset({"diffs", "required_checks", "default_branch_ci", "memberships"})  # diffs: from blobs
     files_tab = "?_a=files"
+    access = "the Azure DevOps REST API over HTTPS (dev.azure.com, plus vssps.dev.azure.com for identities)"
+    credentials = (
+        "AZURE_DEVOPS_EXT_PAT if set (a personal access token)",
+        "else az, asked for a token in the organization's own tenant (never prompts)",
+        "else anonymously (public projects)",
+    )
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or AzureDevOpsOptions(), tuning, account=account)

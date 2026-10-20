@@ -354,6 +354,10 @@ class Forge:
     capabilities: ClassVar[frozenset[str]] = frozenset()
     pr_noun: ClassVar[str] = "pull request"
     files_tab: ClassVar[str] = "/files"  # appended to a PR's URL to open its changed files (GitLab: /diffs)
+    # For the setup page and `doctor`: how this forge is read and where the credential comes from, in the
+    # order tried. ``access`` is one line; ``credentials`` are short phrases.
+    access: ClassVar[str] = ""
+    credentials: ClassVar[tuple[str, ...]] = ()
 
     def __init__(
         self, repo: str, options: Any, tuning: ForgeTuning | None = None, *, account: str | None = None

@@ -105,6 +105,11 @@
   single-tenant login (`az login --tenant … --allow-no-subscriptions --scope …`), which prompts once; a plain
   `az login` with many accounts in Windows opens a window per tenant and most fail. A failed token lookup is
   retried after ten minutes, so a sign-in made after `doctor`'s advice is picked up by a running server.
+- The setup page says how a repo is read before anything runs: for the forge picked, which CLI or API
+  (the `gh` CLI for GitHub; the REST API, with the identities host, for Azure DevOps; the REST API for
+  GitLab and Forgejo) and where the credential comes from, in the order tried, as each adapter declares
+  (`Forge.access`, `Forge.credentials`). After **Check access**, and on an onboarded repo's settings, it
+  says which credential is in use right now (`az (tenant …)`, `gh as <account>`, `anonymous`).
 - An organization that refuses both the `az` identity and anonymous access now fails with an error that
   says how to sign in, instead of a bare refusal after a log line claiming anonymous access was fine. The
   live server answers a forge refusal during setup with that message (HTTP 502) rather than a traceback on

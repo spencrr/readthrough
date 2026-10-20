@@ -68,6 +68,19 @@ def test_accept_needs_a_profile_that_passes(service):
     assert state["repo"]["slug"] == "github/o/app" and state["repo"]["cli_name"] == "o/app"
     assert [f["name"] for f in state["forges"]] == ["ado", "forgejo", "github", "gitlab"]
     assert next(f for f in state["forges"] if f["name"] == "github")["accounts"] is True
+    # The page says how each forge is read and which credential is tried first, before anything runs...
+    for view in state["forges"]:
+        assert view["access"] and view["credentials"], f"{view['name']} doesn't say how it's read"
+    github, ado = (next(f for f in state["forges"] if f["name"] == n) for n in ("github", "ado"))
+    assert github["access"].startswith("the gh CLI") and github["credentials"] == [
+        "the gh account you pick here, else gh's active account"
+    ]
+    assert ado["access"].startswith("the Azure DevOps REST API") and ado["credentials"][0].startswith(
+        "AZURE_DEVOPS_EXT_PAT"
+    )
+    assert "never prompts" in ado["credentials"][1]
+    # ...and, for an onboarded repo, which one is in use right now.
+    assert state["repo"]["auth"] == "gh (active account)"
 
 
 def test_settings_are_validated_and_version_checked(service):
@@ -149,6 +162,7 @@ def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkey
 
     result = svc.inspect({"repo": "o/app", "account": "me_corp"})
     assert result["full_name"] == "o/app" and result["slug"] == "github/o/app"
+    assert result["auth"] == "gh as me_corp", "Check access says which credential it used"
     assert result["private"] is True
     assert result["description"] == ""
     assert result["clone"] == str(guessed)

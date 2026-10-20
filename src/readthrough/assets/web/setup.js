@@ -68,14 +68,18 @@ function renderWizard(repo){
   const cli = `readthrough onboard ${w.repo || forge.shape.split(" ")[0]}${w.forge !== "github" ? ` --forge ${w.forge}` : ""}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
   const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? "✓" : n}</span>`;
   const info = w.info;
+  // How the chosen forge is read, and where its credential comes from, so nobody is surprised by a CLI or a
+  // token lookup. Written per adapter; after Check access the line says which credential was actually used.
+  const howRead = `<p class="sub access"><b>${esc(forge.label)}</b> is read through ${esc(forge.access || "its API")}${forge.credentials?.length ? `, as ${forge.credentials.map(c => `<span class="cred">${esc(c)}</span>`).join(" ")}` : ""}.
+    Nothing is written to the repo, and readthrough never stores a token${forge.accounts ? "" : " or prompts you to sign in"}.</p>`;
   $("main").innerHTML = `
   <div class="card"><h2>${step(1, !!info)}Which repo?</h2>
-    <p class="sub">GitHub is read through the gh CLI (pick the account that can see the repo if you're signed in to several). Other forges are read through their API with a token from their own CLI or an environment variable, or anonymously for public repos.</p>
+    ${howRead}
     <div class="row"><label class="f">Where<select id="w-forge">${forges.map(f => `<option value="${esc(f.name)}" ${w.forge === f.name ? "selected" : ""} title="${esc(f.summary)}">${esc(f.label)}</option>`).join("")}</select></label>
       <label class="f">Repo<input type="text" id="w-repo" placeholder="${esc(forge.shape.split(" ")[0])}" value="${esc(w.repo)}" autocomplete="off" spellcheck="false"></label>
       ${forge.accounts ? `<label class="f">Account<select id="w-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${w.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : ""}
       <button class="btn primary" data-act="inspect" style="align-self:flex-end">Check access</button></div>
-    ${info ? `<div class="msg ok">${icon("circle-check", "ico sm")}<b>${esc(info.full_name)}</b> on ${esc(info.forge_label)} · ${info.private ? "private" : "public"} · default branch <code>${esc(info.default_branch)}</code>${info.description ? ` · ${esc(info.description)}` : ""}</div>` : ""}
+    ${info ? `<div class="msg ok">${icon("circle-check", "ico sm")}<b>${esc(info.full_name)}</b> on ${esc(info.forge_label)} · ${info.private ? "private" : "public"} · default branch <code>${esc(info.default_branch)}</code>${info.description ? ` · ${esc(info.description)}` : ""}<br><span class="sub" style="margin:0">Read as <code>${esc(info.auth)}</code>.</span></div>` : ""}
     ${w.err1 ? `<div class="msg err">${esc(w.err1)}</div>` : ""}</div>
 
   <div class="card ${info ? "" : "dim"}"><h2>${step(2, w.cloneInfo?.ok)}Your local clone</h2>
@@ -163,6 +167,7 @@ function renderSettings(repo){
   <div class="card"><h2>${icon("git-pull-request")}${esc(repo.name)}${forgeTag(repo)} <span class="sub" style="margin:0;font-weight:400">onboarded ${new Date(repo.onboarded).toLocaleDateString()}</span>
     <span style="flex:1"></span><a class="btn" href="/r/${esc(encodeURI(repo.slug))}/">${icon("map", "ico sm")}Open dashboard</a></h2></div>
   <div class="card"><h2>${icon("terminal")}Where it comes from</h2>
+    <p class="sub access"><b>${esc(forge.label)}</b> is read through ${esc(forge.access || "its API")}${forge.credentials?.length ? `, as ${forge.credentials.map(c => `<span class="cred">${esc(c)}</span>`).join(" ")}` : ""}.${repo.auth ? ` Right now: <code>${esc(repo.auth)}</code>.` : ""}</p>
     <div class="row">${forge.accounts ? `<label class="f">gh account<select id="s-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${repo.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : `<label class="f">Forge<input type="text" value="${esc(forge.label)}" readonly style="min-width:120px"></label>`}
       <label class="f">Local clone<input type="text" class="wide" id="s-clone" value="${esc(repo.clone)}" spellcheck="false"></label>
       <label class="f">Remote<input type="text" id="s-remote" value="${esc(repo.remote || "")}" placeholder="detected" style="min-width:120px"></label></div>
