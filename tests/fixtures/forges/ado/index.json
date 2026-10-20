@@ -11,6 +11,11 @@
  },
  {
   "method": "GET",
+  "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/pullrequests?searchCriteria.creatorId=cc123e8d-2bf9-4d26-8478-1e8745dcae80&searchCriteria.status=completed&%24top=1&api-version=7.1",
+  "file": "92c5290eaff1.json"
+ },
+ {
+  "method": "GET",
   "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/diffs/commits?baseVersion=86c4fcab74a286f87d47901b6ec0f8c2d64a3def&baseVersionType=commit&targetVersion=9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837&targetVersionType=commit&%24top=1000&%24skip=0&api-version=7.1",
   "file": "03be324e4f9e.json"
  },

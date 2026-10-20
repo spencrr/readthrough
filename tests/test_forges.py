@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from readthrough import faults, forges
+from readthrough.faults import ForgeError
 from readthrough.forges import Response, Rest, retry_after
 from readthrough.forges.azure_devops import AzureDevOps
 from readthrough.forges.forgejo import Forgejo
@@ -155,7 +156,7 @@ def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     )
     assert [f.path for f in pr.files] == [".pipeline/feed-sync.yml"] and pr.files[0].change == "ADDED"
     assert pr.line_counts.kind == "unsupported" and pr.additions == pr.deletions == 0
-    assert pr.association.kind == "unsupported"
+    assert pr.association.known and pr.association.value == "FIRST_TIME_CONTRIBUTOR", "no completed PR by this author"
     assert pr.threads.known and pr.checks.known and pr.last_commit
     assert pr.updated >= pr.last_commit
 
@@ -230,6 +231,95 @@ def test_azure_devops_assembles_diffs_from_both_sides_of_each_file(monkeypatch):
     small = AzureDevOps("o/p/r", tuning=load_tuning({"forge": {"max_assembled_diff_files": 3, "retries": 0}}).forge)
     with pytest.raises(faults.TooLarge, match="more than 3 files"):
         small.fetch_diff(9)
+
+
+def test_azure_devops_tells_returning_authors_from_first_timers_and_checks_memberships(monkeypatch):
+    """Association from the completed-PR history (one query per author, cached), and memberships from the
+    organization's users and the identities API's recursive "member of" for a project team."""
+    forge = AzureDevOps("contoso/Delivery Team/Courier-ops", tuning=TUNING)
+    asked: list[str] = []
+    users_pages = [
+        (
+            {"value": [{"principalName": "Ann@contoso.com", "mailAddress": "ann@contoso.com"}]},
+            {"x-ms-continuationtoken": "p2"},
+        ),
+        ({"value": [{"principalName": "bob@contoso.com", "mailAddress": None}]}, {}),
+    ]
+    team_descriptor = "Microsoft.TeamFoundation.Identity;S-1-9-team"
+    member_of = {
+        "id-ann": [team_descriptor, "Microsoft.TeamFoundation.Identity;S-1-9-valid-users"],
+        "id-bob": ["Microsoft.TeamFoundation.Identity;S-1-9-valid-users"],
+    }
+
+    def call(self, method, path, *, params=None, headers=None, absent=()):
+        params = params or {}
+        asked.append(
+            path.split("_apis/")[-1]
+            + " "
+            + " ".join(f"{k}={v}" for k, v in sorted(params.items()) if k != "api-version")
+        )
+        if path.endswith("/pullrequests"):
+            return Response(
+                200,
+                {},
+                json.dumps(
+                    {"value": [{"pullRequestId": 1}] if params.get("searchCriteria.creatorId") == "old" else []}
+                ),
+            )
+        if path.endswith("/graph/users"):
+            page, hdrs = users_pages.pop(0)
+            return Response(200, hdrs, json.dumps(page))
+        if path.endswith("/teams"):
+            return Response(200, {}, json.dumps({"value": [{"id": "team-guid", "name": "Delivery Team"}]}))
+        if path.endswith("/identities"):
+            if params.get("identityIds") == "team-guid":
+                return Response(200, {}, json.dumps({"value": [{"id": "team-guid", "descriptor": team_descriptor}]}))
+            if params.get("queryMembership") == "ExpandedUp":
+                return Response(
+                    200,
+                    {},
+                    json.dumps(
+                        {"value": [{"id": params["identityIds"], "memberOf": member_of[params["identityIds"]]}]}
+                    ),
+                )
+            if params.get("searchFilter") == "General":  # a login not seen on any PR this build
+                found = (
+                    [{"id": "id-bob", "properties": {"Account": {"$value": "Bob@contoso.com"}}}]
+                    if params["filterValue"] == "bob@contoso.com"
+                    else []
+                )
+                return Response(200, {}, json.dumps({"value": found}))
+        raise AssertionError(path)
+
+    monkeypatch.setattr(Rest, "call", call)
+    forge._look_up_history({"old", "new"})
+    assert forge._association({"createdBy": {"id": "old"}}).value == "COLLABORATOR"
+    assert forge._association({"createdBy": {"id": "new"}}).value == "FIRST_TIME_CONTRIBUTOR"
+    assert not forge._association({"createdBy": {}}).known
+    assert sum("creatorId" in a for a in asked) == 2, "one history query per author"
+    forge._association({"createdBy": {"id": "old"}})
+    assert sum("creatorId" in a for a in asked) == 2, "cached"
+
+    assert forge.is_member("contoso", "ANN@contoso.com") and forge.is_member("CONTOSO", "bob@contoso.com")
+    assert not forge.is_member("contoso", "zed@contoso.com")
+    assert sum(a.startswith("graph/users") for a in asked) == 2, "both pages, once"
+
+    forge._login({"createdBy": {"id": "id-ann", "uniqueName": "Ann@contoso.com"}})  # as fetch_prs would
+    assert forge.is_member("contoso/Delivery Team", "ann@contoso.com") and forge.is_member(
+        "Delivery Team/delivery team", "ann@contoso.com"
+    )
+    assert not forge.is_member("contoso/Delivery Team", "bob@contoso.com"), "resolved by search, not in the team"
+    assert (
+        sum("identityIds=team-guid" in a for a in asked) == 1
+        and sum(a.endswith("/teams ") or "teams " in a for a in asked) == 1
+    ), "the team is resolved once"
+    assert sum("searchFilter=General" in a for a in asked) == 1
+    with pytest.raises(ForgeError, match="no identity found"):
+        forge.is_member("contoso/Delivery Team", "nobody@contoso.com")
+    with pytest.raises(ForgeError, match="no team named"):
+        forge.is_member("contoso/Nobody", "ann@contoso.com")
+    with pytest.raises(ForgeError, match="isn't this organization"):
+        forge.is_member("other-org", "ann@contoso.com")
 
 
 def test_assemble_diff_keeps_line_endings_honest():

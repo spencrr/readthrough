@@ -6,16 +6,19 @@ are anonymous, which works for public projects.
 
 Azure DevOps serves no unified diff and reports no line counts, so a PR's diff is assembled here from both
 versions of each changed file (two blob requests per file, capped by ``max_assembled_diff_files``), and the
-build counts lines from it. It has no author association or "closes issues" link readthrough can read, so
-those are reported as unsupported and authors are classified by the profile's login lists. Reviewer votes
-map to review states (10/5 approve, -5 wait, -10 reject), branch policies supply required build names, and
-the head commit's statuses are the checks.
+build counts lines from it. It has no author association either, so one is derived: everyone who opens a PR
+holds contribute rights (GitHub's COLLABORATOR), and the completed-PR history tells a returning author from
+a first-timer; the organization's users and a project team's members (through nested groups, via the
+identities API on the ``vssps`` host) back the ``memberships`` capability. There is no "closes issues" link
+readthrough can read. Reviewer votes map to review states (10/5 approve, -5 wait, -10 reject), branch
+policies supply required build names, and the head commit's statuses are the checks.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
@@ -86,7 +89,7 @@ class AzureDevOps(Forge):
     label = "Azure DevOps"
     config_dir = ".azuredevops"
     shape = "organization/project/repository"
-    capabilities = frozenset({"diffs", "required_checks", "default_branch_ci"})  # diffs are assembled from blobs
+    capabilities = frozenset({"diffs", "required_checks", "default_branch_ci", "memberships"})  # diffs: from blobs
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or AzureDevOpsOptions(), tuning, account=account)
@@ -100,9 +103,17 @@ class AzureDevOps(Forge):
             return cred if cred.token else credential(env="", cli=_az_token, cli_name="az")
 
         self.rest = Rest(f"https://{self.host}/{quote(self.org)}/", find, self.tuning)
+        # Identities and the graph live on another host, which gets the same credential (a Rest sends its
+        # Authorization header only to its own host) and follows when the main one steps aside to anonymous.
+        self.vssps = Rest(f"https://vssps.{self.host}/{quote(self.org)}/", lambda: self.rest.cred, self.tuning)
         self._default_branch: str | None = None
         self._repo_id: str | None = None
         self._merge_commits_of: dict[int, tuple[str, str]] = {}  # from fetch_prs, so fetch_diff needn't ask again
+        self._association_of: dict[str, Capability[str]] = {}  # per author id, from their completed-PR history
+        self._members_lock = threading.Lock()
+        self._org_logins: set[str] | None = None
+        self._team_descriptors: dict[str, str] = {}
+        self._id_of: dict[str, str] = {}  # login -> identity id, from the PRs' authors
 
     def retrying(self, what: str, call: Any) -> Any:
         """Like the base, but an ``az`` identity the organization refuses steps aside for anonymous access.
@@ -225,6 +236,7 @@ class AzureDevOps(Forge):
                 skip += len(page)
                 more = len(page) == 500
         raw.sort(key=lambda p: p.get("creationDate") or "", reverse=True)
+        self._look_up_history({a for p in raw if (a := (p.get("createdBy") or {}).get("id"))})
         viewer = ""
         if self.rest.cred.token:
             me = self.rest.call("GET", "_apis/connectionData", absent=(ForgeError,))  # organization-scoped
@@ -236,6 +248,104 @@ class AzureDevOps(Forge):
                     or ""
                 )
         return viewer, pool_map(self._complete, raw, self.tuning.concurrency), total
+
+    # ---- authors
+
+    def _look_up_history(self, author_ids: set[str]) -> None:
+        """Whether each author has had a PR completed in this repo before, one query per author.
+
+        Azure DevOps has no author association. What it can say is this: everyone who opens a PR holds
+        Contribute rights on the repo (GitHub's COLLABORATOR), and the completed-PR history tells a returning
+        author from one on their first PR here. Teams and the organization are checked through ``is_member``.
+        """
+
+        def landed(author_id: str) -> tuple[str, Capability[str]]:
+            try:
+                page = self._get(f"{self._p}/pullrequests", **{"searchCriteria.creatorId": author_id,
+                                                               "searchCriteria.status": "completed", "$top": 1})  # fmt: skip
+            except ForgeError as exc:
+                return author_id, unavailable(f"couldn't read the author's PR history: {exc.reason}")
+            return author_id, known("COLLABORATOR" if page.get("value") else "FIRST_TIME_CONTRIBUTOR")
+
+        wanted = [a for a in author_ids if a not in self._association_of]
+        self._association_of.update(pool_map(landed, wanted, self.tuning.concurrency))
+
+    def _association(self, pr: dict[str, Any]) -> Capability[str]:
+        author_id = (pr.get("createdBy") or {}).get("id")
+        if author_id is None:
+            return unavailable("the PR names no author")
+        if author_id not in self._association_of:
+            self._look_up_history({author_id})
+        return self._association_of[author_id]
+
+    def is_member(self, group: str, login: str) -> bool:
+        """``<organization>``: the author is one of the organization's users. ``<organization or project>/<team>``:
+        a member of that team in this repo's project, through any nesting of groups. Only a definite answer
+        is returned; a login or team that can't be resolved raises, so the check counts as failed, not as "no"."""
+        want = login.lower()
+        if group.lower() == self.org.lower():
+            return want in self._org_users()
+        scope, _, team = group.partition("/")
+        if not team or scope.lower() not in (self.org.lower(), self.project.lower()):
+            raise ForgeError(
+                f"{group!r} isn't this organization or one of its project's teams", what=f"members {group}"
+            )
+        # The identities API expands a user's containers recursively ("ExpandedUp"), so one call says whether
+        # the team is among them, however the team is composed (users, groups, groups of groups).
+        ident = self._identities(identityIds=self._identity_id(want), queryMembership="ExpandedUp")
+        return self._team_descriptor(team) in ((ident[0].get("memberOf") or []) if ident else [])
+
+    def _identities(self, **params: Any) -> list[dict[str, Any]]:
+        params.setdefault("api-version", API)
+        resp = self.retrying("GET identities", lambda: self.vssps.call("GET", "_apis/identities", params=params))
+        return ((resp.json() if resp else None) or {}).get("value") or []
+
+    def _identity_id(self, login: str) -> str:
+        """The identity id behind a login: remembered from the PRs fetched this build, else looked up."""
+        if login in self._id_of:
+            return self._id_of[login]
+        for ident in self._identities(searchFilter="General", filterValue=login):
+            names = {str(v).lower() for v in (
+                ((ident.get("properties") or {}).get("Account") or {}).get("$value"),
+                ((ident.get("properties") or {}).get("Mail") or {}).get("$value"),
+            ) if v}  # fmt: skip
+            if login in names and ident.get("id"):
+                self._id_of[login] = str(ident["id"])
+                return self._id_of[login]
+        raise ForgeError(f"no identity found for {login}", what=f"identity {login}")
+
+    def _team_descriptor(self, team: str) -> str:
+        with self._members_lock:
+            if team.lower() not in self._team_descriptors:
+                teams = self._get(f"_apis/projects/{quote(self.project)}/teams", **{"$top": 500}).get("value") or []
+                match = next((t for t in teams if (t.get("name") or "").lower() == team.lower()), None)
+                if match is None:
+                    raise ForgeError(f"no team named {team!r} in {self.project}", what=f"members {team}")
+                ident = self._identities(identityIds=match["id"])
+                if not ident or not ident[0].get("descriptor"):
+                    raise ForgeError(f"team {team!r} has no identity descriptor", what=f"members {team}")
+                self._team_descriptors[team.lower()] = str(ident[0]["descriptor"])
+            return self._team_descriptors[team.lower()]
+
+    def _org_users(self) -> set[str]:
+        with self._members_lock:
+            if self._org_logins is None:
+                logins: set[str] = set()
+                token: str | None = None
+                while True:
+                    params: dict[str, Any] = {"api-version": "7.1-preview.1", "subjectTypes": "aad,msa"}
+                    if token:
+                        params["continuationToken"] = token
+                    resp = self.retrying(
+                        "GET graph/users", lambda p=params: self.vssps.call("GET", "_apis/graph/users", params=p)
+                    )
+                    for user in ((resp.json() if resp else None) or {}).get("value") or []:
+                        logins |= {str(v).lower() for v in (user.get("principalName"), user.get("mailAddress")) if v}
+                    token = resp.headers.get("x-ms-continuationtoken") if resp else None
+                    if not token:
+                        break
+                self._org_logins = logins
+            return self._org_logins
 
     @staticmethod
     def _merge_commits(pr: dict[str, Any]) -> tuple[str, str] | None:
@@ -337,8 +447,7 @@ class AzureDevOps(Forge):
         mergeable = (
             "CONFLICTING" if merge_status == "conflicts" else "MERGEABLE" if merge_status == "succeeded" else "UNKNOWN"
         )
-        author = pr.get("createdBy") or {}
-        login = author.get("uniqueName") or author.get("displayName") or "ghost"
+        login = self._login(pr)
         return PullRequest(
             number=n, title=pr["title"], url=self.pr_url(n), body=pr.get("description") or "", draft=bool(pr.get("isDraft")),
             created=pr["creationDate"], updated=max([pr["creationDate"], *last_activity]),
@@ -348,7 +457,7 @@ class AzureDevOps(Forge):
             requested=[r.get("uniqueName") or r.get("displayName") or "?" for r in pr.get("reviewers") or [] if r.get("isRequired")],
             reviews=reviews, comments=len(threads.value or []) if threads.known else 0,
             last_commit=last_commit, issues=[],
-            association=unsupported("Azure DevOps has no author association; the profile's login lists decide"),
+            association=self._association(pr),
             decision=known(decision), mergeable=known(mergeable), threads=threads, checks=checks,
             line_counts=unsupported("Azure DevOps reports no per-file line counts; they are counted from the diff when one is fetched"),
             truncated=truncated,
@@ -359,13 +468,20 @@ class AzureDevOps(Forge):
             self._get(f"{self._p}/pullrequests", **{"searchCriteria.status": "completed", "$top": count}).get("value")
             or []
         )
+        self._look_up_history({a for p in raw if (a := (p.get("createdBy") or {}).get("id"))})
         merged = []
         for pr in raw:
             files, _ = self._changed_files(pr, 100)
-            author = pr.get("createdBy") or {}
-            merged.append(MergedPullRequest(pr["pullRequestId"], Author(author.get("uniqueName") or author.get("displayName") or "ghost"),
-                                            unsupported("no author association on Azure DevOps"), files))  # fmt: skip
+            merged.append(MergedPullRequest(pr["pullRequestId"], Author(self._login(pr)), self._association(pr), files))
         return self._branch(), merged
+
+    def _login(self, pr: dict[str, Any]) -> str:
+        """The author's login (their unique name, an email on Azure DevOps), remembering which identity it is."""
+        author = pr.get("createdBy") or {}
+        login = author.get("uniqueName") or author.get("displayName") or "ghost"
+        if author.get("id"):
+            self._id_of[login.lower()] = str(author["id"])
+        return login
 
     def fetch_diff(self, number: int) -> str:
         """A unified diff assembled from both versions of each changed file; Azure DevOps serves none itself.

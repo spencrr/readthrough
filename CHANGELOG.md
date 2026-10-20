@@ -36,6 +36,12 @@
   lines from it for any forge that reports none. Line heuristics now run on Azure DevOps, and the "no line
   counts" and "no API for whole-change diffs" warnings are gone; a PR over the cap, or a build with `--no-diffs`,
   keeps the line-counts gap and says so.
+- Azure DevOps authors get an association and membership checks. The platform has no association, so one is
+  derived: an author with a completed PR in the repo is `COLLABORATOR` (everyone who can open a PR there holds
+  contribute rights, GitHub's collaborator), one on their first PR here is `FIRST_TIME_CONTRIBUTOR`; nobody is
+  `MEMBER`. The profile's `internal_orgs` (the organization's users) and `internal_teams`
+  (`organization/team`, through any nesting of groups, via the identities API) now work with a sign-in, so
+  the "can't tell us the association" warning is gone and authors are classified the way they are on GitHub.
 - A token a CLI prints is used only if it looks like one (a line of printable characters). A stand-in that
   printed a banner used to end up in an `Authorization` header, which `urllib` rejects by crashing the call.
 - A study turn that ends in an error is written to the study log as a `failure` entry (by `readthrough`, naming

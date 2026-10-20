@@ -1,0 +1,9 @@
+{
+ "method": "GET",
+ "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/pullrequests?searchCriteria.creatorId=cc123e8d-2bf9-4d26-8478-1e8745dcae80&searchCriteria.status=completed&%24top=1&api-version=7.1",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json; charset=utf-8; api-version=7.1"
+ },
+ "text": "{\"value\":[],\"count\":0}"
+}
