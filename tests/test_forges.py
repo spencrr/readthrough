@@ -171,6 +171,28 @@ def test_azure_devops_reads_a_public_project(replay, monkeypatch):
         forge.fetch_diff(53)
 
 
+def test_azure_devops_repo_can_be_onboarded(replay, monkeypatch):
+    """The whole onboarding path on a repo whose locator has three segments: gather from the recorded forge, draft,
+    then parse and measure the draft the way ``onboard --accept`` does. The profile's ``repo`` is the forge's
+    path, not an ``owner/name`` assumption, and its title is the repository's own name."""
+    from readthrough import onboard
+
+    monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
+    monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda: None)
+    replay("ado")
+    forge = AzureDevOps("powershell/PowerShell/PSGallery-Cache-Repo", tuning=TUNING)
+
+    facts = onboard.gather(forge, sample=2)
+    assert facts.repo == "powershell/PowerShell/PSGallery-Cache-Repo" and facts.tree_complete
+    text = onboard.draft_profile(facts)
+    profile, cov = onboard.check_profile_text(text, facts)
+    assert profile.repo == facts.repo and profile.title == "PSGallery-Cache-Repo"
+    assert cov.problems() == [] and cov.basis.startswith("files in the repo"), (
+        "no merged PRs, so the tree is the yardstick"
+    )
+    assert profile.component_of("es-metadata.yml") is not None, "the one file the repo has is on the map"
+
+
 def test_azure_devops_steps_aside_when_the_org_refuses_the_az_identity(monkeypatch):
     from readthrough.faults import AuthError
 

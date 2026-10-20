@@ -513,7 +513,7 @@ def remote_for(clone: Path, repo: str) -> str | None:
 
 def guess_clone(repo: str) -> Path | None:
     """Look for an existing clone of ``repo`` in the usual places."""
-    name = repo.split("/")[1]
+    name = repo.rsplit("/", 1)[1]  # the repo's own name: the last segment on every forge
     for base in (Path.home() / "src", Path.home() / "source" / "repos", Path.home() / "code", Path.home()):
         for candidate in (base / name, base / name.lower()):
             if (candidate / ".git").exists() and remote_for(candidate, repo):

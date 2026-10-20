@@ -309,7 +309,7 @@ def draft_profile(facts: RepoFacts, *, title: str | None = None) -> str:
         "schema = 1",
         f"repo = {json.dumps(facts.repo)}",
         'drafted_by = "readthrough"',
-        f"title = {json.dumps(title or facts.repo.split('/')[1])}",
+        f"title = {json.dumps(title or facts.repo.rsplit('/', 1)[1])}",
         "",
     ]
     for lid in layer_ids:

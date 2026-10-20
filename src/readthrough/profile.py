@@ -460,8 +460,10 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
     if raw.get("drafted_by") not in (None, *DRAFTERS):
         raise fail(f"drafted_by must be one of {', '.join(DRAFTERS)}")
     repo = raw.get("repo")
-    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-        raise fail("repo must be 'owner/name'")
+    # The repo's path on its forge: owner/name on most, group/subgroup/project on GitLab, org/project/repo on
+    # Azure DevOps. Which forge is implied by where the profile was found, so it isn't repeated here.
+    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+(/[\w.-]+)+", repo):
+        raise fail("repo must be the repo's path on its forge, like 'owner/name'")
 
     layers = []
     for i, item in enumerate(raw.get("layers") or []):
@@ -574,7 +576,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
 
     return Profile(
         repo=repo,
-        title=raw.get("title") or repo.split("/")[1],
+        title=raw.get("title") or repo.rsplit("/", 1)[1],
         layers=layers,
         components=components,
         read_order=read_order,

@@ -4,8 +4,8 @@ A profile is a TOML file describing a repo's architecture. Top-level keys must c
 
 ```toml
 schema = 1                      # required
-repo = "owner/name"             # required
-title = "Name"                  # shown in the dashboard header
+repo = "owner/name"             # required: the repo's path on its forge (group/subgroup/project on GitLab, organization/project/repository on Azure DevOps)
+title = "Name"                  # shown in the dashboard header; defaults to the last segment of repo
 drafted_by = "copilot"          # optional: "readthrough" or "copilot", whoever wrote the first draft (shown on the map)
 read_order = ["api", "core"]    # optional: component ids in the order a reviewer should read them
 ```

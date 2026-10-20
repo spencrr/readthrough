@@ -256,3 +256,23 @@ def test_deleted_files_dont_count_toward_coverage():
     assert cov.total == 100 and cov.share == 1.0
     assert not any(p.startswith("requirements") for p, _ in cov.unmapped_top)
     assert cov.basis == "changed lines in recent PRs"
+
+
+@pytest.mark.parametrize(
+    ("repo", "title"),
+    [
+        ("o/app", "app"),
+        ("powershell/PowerShell/PSGallery-Cache-Repo", "PSGallery-Cache-Repo"),  # Azure DevOps: org/project/repo
+        ("gitlab-org/frontend/playground", "playground"),  # a GitLab project in a subgroup
+    ],
+)
+def test_drafts_are_valid_for_repos_whose_path_has_more_than_two_segments(repo, title):
+    """A repo's path is whatever its forge says it is; the drafter and the parser must agree on it."""
+    facts = onboard.RepoFacts(repo, "main", TREE, CHURN, AUTHORS)
+    profile, cov = onboard.check_profile_text(onboard.draft_profile(facts), facts)
+    assert profile.repo == repo and profile.title == title, "the title is the repo's own name, not the project's"
+    assert cov.problems() == []
+    with pytest.raises(ProfileError, match="repo must be"):
+        parse_profile({"schema": 1, "repo": "no-slash", "layers": [], "components": []})
+    with pytest.raises(ProfileError, match="repo must be"):
+        parse_profile({"schema": 1, "repo": "o//app", "layers": [], "components": []})

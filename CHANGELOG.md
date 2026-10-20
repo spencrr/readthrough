@@ -64,6 +64,13 @@
   study turn failing with "not a git repository".
 - The documentation images are WebP at 1.5× instead of PNG, a third of the size, and the logo is an SVG.
 
+### Fixed
+
+- A profile's `repo` is the repo's path on its forge, however many segments that has. The parser demanded
+  exactly `owner/name`, so onboarding an Azure DevOps repo (`organization/project/repository`) or a GitLab
+  project in a subgroup drafted a profile and then refused to load it. The default title, and the directory
+  `onboard` looks in for an existing clone, are the repo's own name (the last segment), not the project's.
+
 ### Removed
 
 - `github.py`. Its pieces are `forges/github.py` (the adapter), `process.py` (running programs, secrets), and
