@@ -140,6 +140,11 @@ def test_study_endpoints(live):
     assert (
         _request(port, R + "/api/study/999", method="POST", body={"kind": "note", "text": "x"}, headers=token)[0] == 400
     )
+    # Azure DevOps numbers PRs per organization; an eight-digit id must reach the handler, not fall off the router.
+    status, body = _request(port, R + "/api/study/17185872")
+    assert status == 200 and json.loads(body)["entries"] == []
+    assert json.loads(_request(port, R + "/api/brief/17185872")[1])["error"] == "No brief for #17185872"
+    assert _request(port, R + "/api/brief/1234567890")[0] == 404, "ten digits is past any forge's numbering"
 
     study.append(dashboard.cfg, 7, "question", by="copilot", question="Why?", expected_points=["secret"])
     state = json.loads(_request(port, R + "/api/study/7")[1])

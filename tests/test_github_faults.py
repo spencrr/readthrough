@@ -377,6 +377,7 @@ def test_a_build_degrades_instead_of_failing(make_pr, tmp_path: Path, fake_forge
 class NoDiffForge(FakeForge):
     capabilities = FakeForge.capabilities - {"diffs", "memberships"}
     label = "Azure DevOps"
+    files_tab = "?_a=files"
 
 
 def test_unsupported_capabilities_are_said_not_assumed(make_pr, tmp_path: Path, fake_forge):
@@ -398,9 +399,16 @@ def test_unsupported_capabilities_are_said_not_assumed(make_pr, tmp_path: Path, 
     assert {"diffs", "members"} <= codes
     assert snap.diff_problems == {3: "unsupported"} and snap.diffs == {}
     assert any("Azure DevOps can't answer" in d for w in snap.warnings for d in w["details"])
-    item = analyze_snapshot(snap, profile)["items"][0]
+    result = analyze_snapshot(snap, profile, forge=NoDiffForge("o/r"))
+    item = result["items"][0]
     assert any(f["id"] == "diff-unsupported" for f in item["flags"])
     assert item["smells"] == []
+    brief = result["briefs"][3]
+    assert "[Open on Azure DevOps](https://github.com/octo/courier/pull/100)" in brief, "the brief names the PR's forge"
+    assert "[Files](https://github.com/octo/courier/pull/100?_a=files)" in brief, (
+        "and links the files the way that forge does"
+    )
+    assert "[Open on GitHub]" in analyze_snapshot(snap, profile)["briefs"][3], "GitHub when no forge is given"
 
 
 class NoCountsForge(FakeForge):

@@ -22,6 +22,9 @@ T = TypeVar("T")
 # called "Delivery Team", so single spaces between words are allowed; every forge's own rule is stricter.
 PATH_SEGMENT = r"[\w.-]+(?: [\w.-]+)*"
 REPO_PATH_RE = re.compile(rf"{PATH_SEGMENT}(?:/{PATH_SEGMENT})+")
+# A PR number as it may appear in a URL or a marker. GitHub numbers per repo (six digits on the busiest);
+# Azure DevOps numbers per organization, and a big one is past 17 million. Bounded so inputs stay strict.
+PR_NUMBER = r"\d{1,9}"
 
 
 @dataclass(frozen=True)

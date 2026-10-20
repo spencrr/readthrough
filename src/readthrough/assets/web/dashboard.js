@@ -539,7 +539,7 @@ function overviewTab(n){
     return `<div><b>${esc(k.label)}</b> <span class="muted">(${k.layer}, ${l} lines)</span>${contract ? `<div class="contract">${esc(contract.replace(/\*\*/g, ""))}</div>` : ""}</div>`;
   }).join("");
   const files = [...p.files].sort((a,b) => (b.add+b.del)-(a.add+a.del)).map(f => `<div><span class="mono" title="${esc(comps[f.comp].label)}">${esc(f.path)}</span><span class="mono"><span class="add">+${f.add}</span> <span class="del">-${f.del}</span></span></div>`).join("");
-  const smells = p.smells.map(s => `<div class="smell"><span class="flag ${s.kind}" title="${esc(ruleTip(s.id))}">${ruleIcon(s.id)}${s.kind}</span> <a href="${p.url}/files" target="_blank" rel="noopener">${esc(s.path)}:${s.line}</a>: ${esc(s.msg)}<code>${esc(s.code)}</code></div>`).join("");
+  const smells = p.smells.map(s => `<div class="smell"><span class="flag ${s.kind}" title="${esc(ruleTip(s.id))}">${ruleIcon(s.id)}${s.kind}</span> <a href="${p.url}${FORGE.files_tab || "/files"}" target="_blank" rel="noopener">${esc(s.path)}:${s.line}</a>: ${esc(s.msg)}<code>${esc(s.code)}</code></div>`).join("");
   const threads = p.unresolved.map(t => `<div class="smell"><b>@${esc(t.author)}</b> on <span class="muted mono">${esc(t.path)}:${t.line ?? "?"}${t.outdated ? " (outdated)" : ""}</span><div class="md desc" style="max-height:220px;margin-top:4px">${t.body_html ? safeHtml(t.body_html) : md(t.body)}</div></div>`).join("");
   const related = (p.related || []).map(r => byNum[r] ? chip(byNum[r]) : "").join("");
   const rules = p.rules.map(r => { const ins = DATA.instructions.find(i => i.name === r); return `<a href="${ins?.url}" target="_blank" rel="noopener">${esc(r)}</a>`; }).join(" · ");

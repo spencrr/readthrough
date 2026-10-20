@@ -91,6 +91,12 @@
   (`https://…/org/Delivery%20Team/_git/repo`, or `v3/org/project/repo` over SSH) is recognised by `onboard`,
   the setup page, and `doctor`; before, only the GitHub-shaped `…/owner/name(.git)` ending was.
 - Login lists edited in the browser accept the email addresses Azure DevOps and GitLab use as logins.
+- Pull requests with eight-digit numbers work in the dashboard. Azure DevOps numbers PRs per organization, and
+  a big one is past 17 million, but every PR route in the live server, the `readthrough://` URL, and the marker
+  that links agent sessions to PRs stopped at seven digits, so the Study and Brief tabs answered "not found".
+  The bound is now nine digits, in one place.
+- A PR's brief says "Open on Azure DevOps" (or GitLab, or Forgejo) rather than "Open on GitHub" for every
+  forge, and its Files link, like the ones under each signal, opens the files tab the way that forge spells it.
 
 ### Removed
 

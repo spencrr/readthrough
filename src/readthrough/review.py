@@ -27,7 +27,7 @@ from readthrough import agents, forges
 from readthrough.agents import Agent, SessionInfo
 from readthrough.config import Config
 from readthrough.faults import ForgeError
-from readthrough.model import PATH_SEGMENT
+from readthrough.model import PATH_SEGMENT, PR_NUMBER
 from readthrough.process import run
 from readthrough.tuning import default_tuning
 
@@ -37,7 +37,7 @@ URL_SCHEME = "readthrough"
 URL_ACTIONS = ("review", "refresh", "open")
 _SEGMENT_RE = re.compile(rf"^{PATH_SEGMENT}$")
 
-MARKER_RE = re.compile(rf"\[readthrough:({PATH_SEGMENT}(?:/{PATH_SEGMENT})+)#(\d{{1,7}})\]")
+MARKER_RE = re.compile(rf"\[readthrough:({PATH_SEGMENT}(?:/{PATH_SEGMENT})+)#({PR_NUMBER})\]")
 
 
 def pr_marker(slug: str, number: int) -> str:
@@ -282,7 +282,7 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
         raise ValueError("Unexpected characters in the path")
     number: int | None = None
     if action == "review":
-        if len(segments) < 3 or not re.fullmatch(r"\d{1,7}", segments[-1]):
+        if len(segments) < 3 or not re.fullmatch(PR_NUMBER, segments[-1]):
             raise ValueError(f"review needs a repo and a PR number, e.g. {URL_SCHEME}://review/github/owner/name/1234")
         number = int(segments.pop())
     if len(segments) < 2:

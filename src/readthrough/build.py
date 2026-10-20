@@ -285,9 +285,9 @@ def fetch_members(
 
 def analyze_snapshot(
     snap: Snapshot, profile: Profile, *, budget: int = 60, ledger_entries: dict[str, Any] | None = None,
-    tuning: Tuning | None = None,
+    tuning: Tuning | None = None, forge: Forge | None = None,
 ) -> dict[str, Any]:  # fmt: skip
-    """Lanes, signals, overlaps, the burn-down plan, and a brief per PR."""
+    """Lanes, signals, overlaps, the burn-down plan, and a brief per PR (which names the forge, GitHub by default)."""
     ledger_entries = ledger_entries or {}
     items = [
         analyze(
@@ -324,7 +324,8 @@ def analyze_snapshot(
         it["related"] = [n for n, _ in related]
         briefs[it["number"]] = build_brief(
             it, profile=profile, contracts=snap.contracts, instructions=by_name, related=related, titles=titles,
-            ledger_entry=ledger_entries.get(str(it["number"])),
+            ledger_entry=ledger_entries.get(str(it["number"])), forge_label=forge.label if forge else "GitHub",
+            files_tab=forge.files_tab if forge else "/files",
         )  # fmt: skip
     return {
         "items": items,
@@ -408,7 +409,9 @@ def _build(
     snap = fetch_snapshot(cfg, profile, with_diffs=with_diffs, forge=forge, steps=steps)
     with steps.step("analyzing"):
         entries = ledger.load(cfg.ledger_path)
-        result = analyze_snapshot(snap, profile, budget=cfg.session_minutes, ledger_entries=entries, tuning=cfg.tuning)
+        result = analyze_snapshot(
+            snap, profile, budget=cfg.session_minutes, ledger_entries=entries, tuning=cfg.tuning, forge=forge
+        )
     items = result["items"]
     previous = _load_json(cfg.seen_path) or _load_json(cfg.data_path)
 
@@ -437,7 +440,13 @@ def _build(
         "version": __version__,
         "repo": cfg.repo,
         "slug": cfg.slug,
-        "forge": {"name": forge.name, "label": forge.label, "pr_noun": forge.pr_noun, "url": forge.web_url()},
+        "forge": {
+            "name": forge.name,
+            "label": forge.label,
+            "pr_noun": forge.pr_noun,
+            "url": forge.web_url(),
+            "files_tab": forge.files_tab,
+        },
         "viewer": snap.viewer,
         "generated": snap.now.isoformat(),
         "profile": {**profile.to_payload(), "onboarded": cfg.onboarded},

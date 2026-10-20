@@ -27,12 +27,14 @@ def build_brief(
     related: list[tuple[int, list[str]]],
     titles: dict[int, str],
     ledger_entry: dict[str, Any] | None,
+    forge_label: str = "GitHub",
+    files_tab: str = "/files",
 ) -> str:
     out: list[str] = []
     w = out.append
     w(f"# #{it['number']} {it['title']}\n")
     w(
-        f"[Open on GitHub]({it['url']}) · [Files]({it['url']}/files) · author **@{it['author']}** ({_author_label(profile, it)}) · lane **{it['lane']}** · "
+        f"[Open on {forge_label}]({it['url']}) · [Files]({it['url']}{files_tab}) · author **@{it['author']}** ({_author_label(profile, it)}) · lane **{it['lane']}** · "
         f"+{it['additions']}/-{it['deletions']} in {it['changed_files']} files · opened {int(it['age_days'])}d ago · "
         f"idle {int(it['idle_days'])}d · CI **{STATE_LABELS.get(it.get('ci_state', ''), 'unknown')}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
     )

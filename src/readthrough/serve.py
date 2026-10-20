@@ -46,6 +46,7 @@ from readthrough.config import DEFAULT_HOME, Config, load_settings
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.files import mtime
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
+from readthrough.model import PR_NUMBER
 from readthrough.web_setup import Conflict, SetupError, SetupService
 
 log = logging.getLogger(__name__)
@@ -453,9 +454,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             return self._events(dashboard)
         try:
-            if m := re.fullmatch(r"/api/study/(\d{1,7})", path):
+            if m := re.fullmatch(rf"/api/study/({PR_NUMBER})", path):
                 return self._json(dashboard.study_state(int(m.group(1))))
-            if m := re.fullmatch(r"/api/brief/(\d{1,7})", path):
+            if m := re.fullmatch(rf"/api/brief/({PR_NUMBER})", path):
                 return self._json({"markdown": dashboard.brief(int(m.group(1)))})
         except ValueError as exc:
             return self._error(HTTPStatus.NOT_FOUND, str(exc))
@@ -540,19 +541,19 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/refresh":
                 dashboard.request_refresh(f"requested from {self.headers.get('User-Agent', '?')[:60]}")
                 return self._json({"ok": True})
-            if m := re.fullmatch(r"/api/review/(\d{1,7})", path):
+            if m := re.fullmatch(rf"/api/review/({PR_NUMBER})", path):
                 sid = body.get("session")
                 if sid is not None and not (isinstance(sid, str) and re.fullmatch(r"[0-9a-f-]{36}", sid)):
                     return self._error(HTTPStatus.BAD_REQUEST, "bad session id")
                 return self._json(dashboard.launch_review(int(m.group(1)), sid))
-            if m := re.fullmatch(r"/api/ledger/(\d{1,7})", path):
+            if m := re.fullmatch(rf"/api/ledger/({PR_NUMBER})", path):
                 status = body.get("status")
                 if status is not None and status not in ledger.STATUSES:
                     return self._error(HTTPStatus.BAD_REQUEST, "unknown status")
                 return self._json(dashboard.set_status(int(m.group(1)), status))
-            if m := re.fullmatch(r"/api/study/(\d{1,7})", path):
+            if m := re.fullmatch(rf"/api/study/({PR_NUMBER})", path):
                 return self._json(dashboard.add_study(int(m.group(1)), body))
-            if m := re.fullmatch(r"/api/study/(\d{1,7})/ask", path):
+            if m := re.fullmatch(rf"/api/study/({PR_NUMBER})/ask", path):
                 dashboard.ask(int(m.group(1)), body)
                 return self._json({"ok": True}, HTTPStatus.ACCEPTED)
         except Busy as exc:

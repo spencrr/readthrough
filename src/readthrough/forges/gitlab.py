@@ -79,6 +79,7 @@ class GitLab(Forge):
     label = "GitLab"
     config_dir = ".gitlab"
     pr_noun = "merge request"
+    files_tab = "/diffs"
     shape = "group/project (or group/subgroup/project)"
     capabilities = frozenset({"diffs", "default_branch_ci", "rate_limit"})
 

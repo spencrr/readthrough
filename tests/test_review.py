@@ -40,6 +40,12 @@ def test_ledger_session_overrides_default(tmp_path: Path):
         ("readthrough://open/o/r", "open", "github/o/r", None),
         ("readthrough://review/gitlab/g/sub/p/5", "review", "gitlab/g/sub/p", 5),
         (
+            "readthrough://review/ado/contoso/Delivery%20Team/Courier-Ops/17185872",
+            "review",
+            "ado/contoso/Delivery Team/Courier-Ops",
+            17185872,
+        ),
+        (
             "readthrough://review/ado/contoso/Delivery%20Team/Courier-Ops/9",
             "review",
             "ado/contoso/Delivery Team/Courier-Ops",
@@ -66,7 +72,7 @@ def test_parse_readthrough_url_accepts(url, action, repo, number):
         "readthrough://review/o/r",
         "readthrough://review/o/r/1/2",
         "readthrough://refresh/o/r/1",
-        "readthrough://review/o/r/12345678",
+        "readthrough://review/o/r/1234567890",
         "readthrough://review/o",
         "readthrough://review/ado/contoso/Delivery%09Team/Courier-Ops/9",  # only spaces are allowed between words
     ],
@@ -208,8 +214,8 @@ def test_review_prompt_starts_with_the_marker(tmp_path: Path):
     assert match is not None and match.groups() == ("github/o/r", "7")
     ado = review.MARKER_RE.search(review.pr_marker("ado/org/proj/repo", 12))
     assert ado is not None and ado.groups() == ("ado/org/proj/repo", "12")
-    spaced = review.MARKER_RE.search("see [readthrough:ado/contoso/Delivery Team/Courier-Ops#9] please")
-    assert spaced is not None and spaced.groups() == ("ado/contoso/Delivery Team/Courier-Ops", "9")
+    spaced = review.MARKER_RE.search("see [readthrough:ado/contoso/Delivery Team/Courier-Ops#17185872] please")
+    assert spaced is not None and spaced.groups() == ("ado/contoso/Delivery Team/Courier-Ops", "17185872")
     assert (
         review.review_url("ado/contoso/Delivery Team/Courier-Ops", 9)
         == "readthrough://review/ado/contoso/Delivery%20Team/Courier-Ops/9"

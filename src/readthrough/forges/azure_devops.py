@@ -90,6 +90,7 @@ class AzureDevOps(Forge):
     config_dir = ".azuredevops"
     shape = "organization/project/repository"
     capabilities = frozenset({"diffs", "required_checks", "default_branch_ci", "memberships"})  # diffs: from blobs
+    files_tab = "?_a=files"
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or AzureDevOpsOptions(), tuning, account=account)

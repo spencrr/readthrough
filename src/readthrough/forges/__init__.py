@@ -331,6 +331,7 @@ class Forge:
     shape: ClassVar[str] = "owner/name"  # what a repo locator looks like here, for messages and the setup page
     capabilities: ClassVar[frozenset[str]] = frozenset()
     pr_noun: ClassVar[str] = "pull request"
+    files_tab: ClassVar[str] = "/files"  # appended to a PR's URL to open its changed files (GitLab: /diffs)
 
     def __init__(
         self, repo: str, options: Any, tuning: ForgeTuning | None = None, *, account: str | None = None
