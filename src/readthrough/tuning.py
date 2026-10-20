@@ -43,6 +43,7 @@ class ForgeTuning:
     max_checks_per_pr: int = _r(100, 5000)
     max_review_threads_per_pr: int = _r(100, 5000)
     max_tree_files: int = _r(1000, 1_000_000)
+    max_assembled_diff_files: int = _r(1, 3000)
     diff_cache_days: float = _r(0, 3650)
 
 

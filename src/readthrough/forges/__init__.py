@@ -12,6 +12,7 @@ Credentials never live in ``config.toml``; the ``[forges.<name>]`` tables hold h
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -98,15 +99,28 @@ class Credential:
         return f"{self.scheme} {value}"
 
 
+_TOKEN_RE = re.compile(r"^[\x21-\x7e]{8,4096}$")  # one line of printable ASCII: what every forge's tokens are
+
+
 def credential(*, env: str, cli: Callable[[], str | None] | None, cli_name: str, scheme: str = "Bearer") -> Credential:
-    """An explicit variable wins, then the platform's CLI if it's signed in, else anonymous."""
+    """An explicit variable wins, then the platform's CLI if it's signed in, else anonymous.
+
+    Whatever a CLI prints is only a token if it looks like one. A CLI that answers with a banner or an error
+    on stdout (a wrapper, a stand-in, a prompt to sign in) would otherwise become an Authorization header,
+    and urllib refuses header values with newlines by crashing the call rather than failing it.
+    """
     value = os.environ.get(env, "").strip() if env else ""
     if value:
-        return Credential(f"env {env}", remember(Secret(value)), scheme)
+        if not _TOKEN_RE.match(value):
+            log.warning("%s is set but doesn't look like a token; calling anonymously", env)
+        else:
+            return Credential(f"env {env}", remember(Secret(value)), scheme)
     if cli is not None:
         found = (cli() or "").strip()
-        if found:
+        if found and _TOKEN_RE.match(found):
             return Credential(cli_name, remember(Secret(found)), scheme)
+        if found:
+            log.warning("%s printed something that isn't a token; calling anonymously", cli_name)
     return Credential("anonymous", None, scheme)
 
 
@@ -130,9 +144,14 @@ class Response:
     status: int
     headers: dict[str, str]  # lower-cased names
     text: str
+    body: bytes = b""  # the raw bytes, for blobs; recorded responses carry only text
 
     def json(self) -> Any:
         return json.loads(self.text) if self.text.strip() else None
+
+    @property
+    def content(self) -> bytes:
+        return self.body or self.text.encode("utf-8")
 
 
 class Rest:
@@ -186,7 +205,8 @@ class Rest:
         started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=self.tuning.timeout_seconds) as resp:  # noqa: S310 - https API URLs
-                text = resp.read().decode("utf-8", errors="replace")
+                raw = resp.read()
+                text = raw.decode("utf-8", errors="replace")
                 status, resp_headers = resp.status, {k.lower(): v for k, v in resp.headers.items()}
         except urllib.error.HTTPError as exc:
             text = redact(exc.read().decode("utf-8", errors="replace"))
@@ -214,7 +234,7 @@ class Rest:
                 what=what,
                 stderr="HTTP 203 sign-in page",
             )
-        return Response(status, resp_headers, text)
+        return Response(status, resp_headers, text, raw)
 
 
 def retry_after(header: str | None, reset: str | None = None, *, now: float | None = None) -> float | None:
@@ -232,6 +252,57 @@ def link_next(headers: dict[str, str]) -> str | None:
         if 'rel="next"' in part:
             return part.split(";")[0].strip().strip("<>")
     return None
+
+
+@dataclass(frozen=True)
+class FilePair:
+    """Both versions of one changed file, for a forge that serves files but no diff. ``None`` means no such side."""
+
+    old_path: str | None
+    new_path: str | None
+    old: bytes | None
+    new: bytes | None
+
+
+def _is_binary(data: bytes) -> bool:
+    return b"\0" in data[:8000]  # git's own rule: a NUL in the first 8 KB
+
+
+def assemble_diff(pairs: list[FilePair]) -> str:
+    """A unified diff in git's layout from file pairs, for forges with no diff endpoint (Azure DevOps).
+
+    Each file gets ``diff --git`` and ``---``/``+++`` headers with ``a/``, ``b/`` prefixes (``/dev/null`` for an
+    added or deleted side), so everything that reads git's diffs reads this one. Binary files are noted the
+    way git notes them. Undecodable bytes are replaced rather than failing the whole diff.
+    """
+    out: list[str] = []
+    for pair in pairs:
+        old_path, new_path = pair.old_path or pair.new_path or "?", pair.new_path or pair.old_path or "?"
+        old, new = pair.old or b"", pair.new or b""
+        out.append(f"diff --git a/{old_path} b/{new_path}")
+        if pair.old is None:
+            out.append("new file mode 100644")
+        elif pair.new is None:
+            out.append("deleted file mode 100644")
+        elif old_path != new_path:
+            out += [f"rename from {old_path}", f"rename to {new_path}"]
+        if _is_binary(old) or _is_binary(new):
+            out.append(f"Binary files a/{old_path} and b/{new_path} differ")
+            continue
+        a = old.decode("utf-8", "replace").splitlines(keepends=True)
+        b = new.decode("utf-8", "replace").splitlines(keepends=True)
+        if a == b:
+            continue  # a pure rename, or a mode change: nothing to show
+        header_a = "/dev/null" if pair.old is None else f"a/{old_path}"
+        header_b = "/dev/null" if pair.new is None else f"b/{new_path}"
+        for i, line in enumerate(difflib.unified_diff(a, b, header_a, header_b, n=3, lineterm="")):
+            if i < 2 or line.startswith("@@"):  # the two file headers, then hunk headers; content never starts "@@"
+                out.append(line)
+                continue
+            out.append(line.rstrip("\r\n"))
+            if not line.endswith("\n"):
+                out.append("\\ No newline at end of file")
+    return "\n".join(out) + ("\n" if out else "")
 
 
 # ---------------------------------------------------------------- the adapter contract

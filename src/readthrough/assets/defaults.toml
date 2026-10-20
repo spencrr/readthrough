@@ -40,6 +40,10 @@ max_review_threads_per_pr = 300
 # The most files onboarding lists from a repo's tree through an API that pages it (GitLab, Forgejo), which would
 # otherwise take minutes on a big repo. GitHub sends the whole tree in one call, and a local clone has no limit.
 max_tree_files = 20000
+# A forge that serves no unified diff (Azure DevOps) gets one assembled from both versions of each changed file,
+# two requests per file. PRs changing more files than this are treated as too large to diff, like a diff GitHub
+# refuses to serve; their files are still placed on the map, only the line heuristics are skipped.
+max_assembled_diff_files = 300
 # Days to keep cached diffs of PRs that are no longer in the fetched list (closed, merged, or past `limit`).
 diff_cache_days = 14
 

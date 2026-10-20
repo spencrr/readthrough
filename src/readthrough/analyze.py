@@ -87,6 +87,32 @@ def parse_diff(text: str) -> dict[str, list[tuple[int, str]]]:
     return files
 
 
+def count_lines(text: str) -> dict[str, tuple[int, int]]:
+    """Added and deleted lines per file in a unified diff, keyed by the file's path after the change (a deleted
+    file by its old path). What ``git diff --numstat`` would say, for forges that report no counts."""
+    counts: dict[str, tuple[int, int]] = {}
+    path: str | None = None
+    in_hunk = False
+    for raw in text.splitlines():
+        if raw.startswith("diff --git "):
+            path, in_hunk = None, False
+        elif raw.startswith("--- ") and not in_hunk:
+            old = raw[4:].strip()
+            path = old[2:] if old.startswith("a/") else None
+        elif raw.startswith("+++ ") and not in_hunk:
+            new = raw[4:].strip()
+            if new.startswith("b/"):
+                path = new[2:]
+            if path is not None:
+                counts.setdefault(path, (0, 0))
+        elif raw.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and path is not None and raw and raw[0] in "+-":
+            add, delete = counts[path]
+            counts[path] = (add + 1, delete) if raw[0] == "+" else (add, delete + 1)
+    return counts
+
+
 def strip_brackets(text: str) -> str:
     """Drop nested ``[...]`` so commas inside hints like ``dict[str, Any]`` don't look like parameters."""
     previous = None

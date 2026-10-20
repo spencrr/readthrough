@@ -30,6 +30,14 @@
   panel says which agent each one ran in. `readthrough install skill` installs the skill for every agent
   found (`--agent` for one). Claude Code leaves no trace of an open session, so for its sessions the panel
   shows when they were last written rather than claiming they're closed.
+- Azure DevOps pull requests get a diff and line counts. The platform serves neither, so the adapter assembles
+  a unified diff from both versions of each changed file (two blob requests per file, cached by head commit
+  like every diff, capped by `[tuning.forge] max_assembled_diff_files`), and the build counts added and deleted
+  lines from it for any forge that reports none. Line heuristics now run on Azure DevOps, and the "no line
+  counts" and "no API for whole-change diffs" warnings are gone; a PR over the cap, or a build with `--no-diffs`,
+  keeps the line-counts gap and says so.
+- A token a CLI prints is used only if it looks like one (a line of printable characters). A stand-in that
+  printed a banner used to end up in an `Authorization` header, which `urllib` rejects by crashing the call.
 - A study turn that ends in an error is written to the study log as a `failure` entry (by `readthrough`, naming
   the assistant and the error), so a "Quiz me" with no reply is never read as one you abandoned. The Study tab
   shows it as a line in the transcript.

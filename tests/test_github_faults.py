@@ -25,7 +25,7 @@ from readthrough.faults import (
 )
 from readthrough.forges import github
 from readthrough.forges.github import GitHub
-from readthrough.model import known
+from readthrough.model import ChangedFile, known, unsupported
 from readthrough.process import Secret, describe
 from readthrough.tuning import default_tuning, load_tuning
 
@@ -401,6 +401,65 @@ def test_unsupported_capabilities_are_said_not_assumed(make_pr, tmp_path: Path, 
     item = analyze_snapshot(snap, profile)["items"][0]
     assert any(f["id"] == "diff-unsupported" for f in item["flags"])
     assert item["smells"] == []
+
+
+class NoCountsForge(FakeForge):
+    """Serves diffs but, like Azure DevOps, reports no line counts with the PR."""
+
+    label = "Azure DevOps"
+
+    def fetch_prs(self, limit: int):
+        viewer, prs, total = super().fetch_prs(limit)
+        for pr in prs:
+            pr.files = [ChangedFile(f.path, 0, 0, f.change) for f in pr.files]
+            pr.additions = pr.deletions = 0
+            pr.line_counts = unsupported("no counts here")
+        return viewer, prs, total
+
+
+def test_line_counts_are_taken_from_the_diff_when_the_forge_has_none(make_pr, tmp_path: Path, fake_forge):
+    from conftest import PROFILE
+
+    from readthrough.build import fetch_snapshot
+    from readthrough.config import Config
+
+    fake_forge.prs = [make_pr(number=3), make_pr(number=4)]
+    fake_forge.diff_texts = {
+        3: "diff --git a/courier/transports/smtp.py b/courier/transports/smtp.py\n--- a/courier/transports/smtp.py\n"
+        "+++ b/courier/transports/smtp.py\n@@ -1,2 +1,3 @@\n a\n-b\n+B\n+c\n"
+        "diff --git a/tests/unit/transports/test_smtp.py b/tests/unit/transports/test_smtp.py\n"
+        "--- a/tests/unit/transports/test_smtp.py\n+++ b/tests/unit/transports/test_smtp.py\n@@ -1 +1 @@\n-x\n+y\n",
+    }
+    fake_forge.diff_error = None
+    cfg = Config(home=tmp_path, repo="o/r")
+
+    snap = fetch_snapshot(cfg, PROFILE, forge=NoCountsForge("o/r"))
+    three, four = {p.number: p for p in snap.prs}[3], {p.number: p for p in snap.prs}[4]
+    assert three.line_counts.known and (three.additions, three.deletions) == (3, 2)
+    assert {f.path: (f.additions, f.deletions) for f in three.files}["courier/transports/smtp.py"] == (2, 1)
+    assert not four.line_counts.known, "#4's diff wasn't served, so its gap stays"
+    assert any(w["code"] == "gap-line_counts" for w in snap.warnings)
+
+    fake_forge.diff_texts[4] = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
+    snap = fetch_snapshot(cfg, PROFILE, forge=NoCountsForge("o/r"))
+    assert all(p.line_counts.known for p in snap.prs)
+    assert not any(w["code"] == "gap-line_counts" for w in snap.warnings), "every count filled: no gap to report"
+
+    snap = fetch_snapshot(cfg, PROFILE, forge=NoCountsForge("o/r"), with_diffs=False)
+    assert all(not p.line_counts.known for p in snap.prs), "without diffs there is nothing to count from"
+
+
+def test_count_lines_matches_numstat():
+    from readthrough.analyze import count_lines
+
+    text = (
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+        "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x\n-y\n"
+        "diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\n@@ -0,0 +1 @@\n+--- not a header\n"
+        "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n"
+        "diff --git a/was.md b/is.md\nrename from was.md\nrename to is.md\n"
+    )
+    assert count_lines(text) == {"a.py": (1, 1), "gone.txt": (0, 2), "new.md": (1, 0)}
 
 
 def test_a_local_profile_means_the_repo_file_is_not_fetched(tmp_path: Path):

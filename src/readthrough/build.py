@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from readthrough import __version__, forges, ledger, logs, review, study
-from readthrough.analyze import analyze, compute_overlaps, plan_sessions, rule_descriptions, whats_new
+from readthrough.analyze import analyze, compute_overlaps, count_lines, plan_sessions, rule_descriptions, whats_new
 from readthrough.brief import build_brief
 from readthrough.config import Config
 from readthrough.faults import ForgeError, TooLarge
@@ -21,7 +21,7 @@ from readthrough.files import write_atomic
 from readthrough.forges import Forge
 from readthrough.logs import pool_map
 from readthrough.membership import internal_members
-from readthrough.model import Capability, PullRequest, unavailable
+from readthrough.model import Capability, ChangedFile, PullRequest, known, unavailable
 from readthrough.profile import Profile, resolve_profile
 from readthrough.rules import Contract, Instruction, contracts_for, parse_instruction
 from readthrough.system import registered_protocol_command
@@ -107,7 +107,6 @@ def fetch_snapshot(
             f"{len(capped)} {forge.pr_noun}s are too big to fetch completely, so their map placement and checks are partial",
             capped,
         )
-    _gap_warnings(warnings, prs, forge)
 
     with steps.step("fetching CI context"):
         try:
@@ -151,6 +150,14 @@ def fetch_snapshot(
                     f"Couldn't fetch {len(errors)} diffs; their line heuristics are missing until the next refresh",
                     errors,
                 )
+            counted = count_from_diffs(prs, diffs)
+            if counted:
+                log.info(
+                    "Counted changed lines from the diffs of %d %ss the forge gave no counts for",
+                    counted,
+                    forge.pr_noun,
+                )
+    _gap_warnings(warnings, prs, forge)  # after the diffs: they may have filled the line counts
     with steps.step("checking memberships"):
         members, failed = fetch_members(
             forge, profile, prs, cfg.cache_dir / "members.json", cfg.tuning.authors.membership_cache_days
@@ -176,6 +183,26 @@ def fetch_snapshot(
         diff_problems,
         stats,
     )
+
+
+def count_from_diffs(prs: list[PullRequest], diffs: dict[int, str]) -> int:
+    """Fill in per-file and per-PR line counts from the fetched diffs for PRs whose forge reported none.
+
+    Azure DevOps has no count anywhere in its API, but its diff is assembled from the files themselves, so the
+    counts fall out of it. Returns how many PRs were filled; the rest keep their ``line_counts`` gap.
+    """
+    filled = 0
+    for pr in prs:
+        text = diffs.get(pr.number)
+        if pr.line_counts.known or text is None:
+            continue
+        counts = count_lines(text)
+        pr.files = [ChangedFile(f.path, *counts.get(f.path, (0, 0)), f.change) for f in pr.files]
+        pr.additions = sum(f.additions for f in pr.files)
+        pr.deletions = sum(f.deletions for f in pr.files)
+        pr.line_counts = known(True)
+        filled += 1
+    return filled
 
 
 def _gap_warnings(warnings: Warnings, prs: list[PullRequest], forge: Forge) -> None:

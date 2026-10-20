@@ -11,6 +11,7 @@ same session can be replayed offline by the adapter tests (see tests/test_forges
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import re
@@ -70,13 +71,10 @@ def record_to(directory: Path) -> None:
         else:
             if resp is not None:
                 headers = {k: v for k, v in resp.headers.items() if k in KEPT_HEADERS}
-                (directory / f"{key}.json").write_text(
-                    json.dumps(
-                        {"method": method, "url": url, "status": resp.status, "headers": headers, "text": resp.text},
-                        indent=1,
-                    ),
-                    encoding="utf-8",
-                )
+                data = {"method": method, "url": url, "status": resp.status, "headers": headers, "text": resp.text}
+                if resp.body and resp.body != resp.text.encode("utf-8"):  # a blob that isn't UTF-8 text
+                    data["body_b64"] = base64.b64encode(resp.body).decode("ascii")
+                (directory / f"{key}.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
                 entry["file"] = f"{key}.json"
             return resp
         finally:

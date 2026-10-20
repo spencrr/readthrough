@@ -55,16 +55,6 @@
   "file": null,
   "error": {
    "type": "AuthError",
-   "message": "GET /powershell/PowerShell/_apis/policy/configurations failed: HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequ",
-   "stderr": "HTTP 401 {\"$id\":\"1\",\"innerException\":null,\"message\":\"TF400813: The user '<id>' is not authorized to access this resource.\",\"typeName\":\"Microsoft.TeamFoundation.Framework.Server.UnauthorizedRequestException, Microsoft.TeamFoundation.Framework.Server\",\"typeKey\":\"UnauthorizedRequestException\",\"errorCode\":0,\"eventId\":3000}"
-  }
- },
- {
-  "method": "GET",
-  "url": "https://dev.azure.com/powershell/PowerShell/_apis/policy/configurations?%24top=500&api-version=7.1",
-  "file": null,
-  "error": {
-   "type": "AuthError",
    "message": "GET /powershell/PowerShell/_apis/policy/configurations needs sign-in (the forge answered with its sign-in page)",
    "stderr": "HTTP 203 sign-in page"
   }
@@ -78,5 +68,15 @@
   "method": "GET",
   "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/commits/86c4fcab74a286f87d47901b6ec0f8c2d64a3def/statuses?api-version=7.1",
   "file": "fc6b5e815e82.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/diffs/commits?baseVersion=86c4fcab74a286f87d47901b6ec0f8c2d64a3def&baseVersionType=commit&targetVersion=9d53eb2ecf14d63b63ebce32ff1cc2b2c8986837&targetVersionType=commit&%24top=301&%24skip=0&api-version=7.1",
+  "file": "f3509478d4d7.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/blobs/a864794cc3543614dc55ba4e83f2777218a75346?api-version=7.1&%24format=octetStream",
+  "file": "23c144c8cae2.json"
  }
 ]

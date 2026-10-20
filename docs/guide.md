@@ -395,7 +395,9 @@ host = "codeberg.org"
 
 Two things to know. gitlab.com throttles anonymous API use per IP address quite hard, so a token (or `glab auth login`) makes a real difference there. And an `az` sign-in that the Azure DevOps organization doesn't recognize is set aside for anonymous access, with a note in the log, because public projects answer anonymous calls they refuse to an outsider's token.
 
-Not every forge can answer every question. What one can't supply (Azure DevOps has no diffs and no per-file line counts; GitLab has no named required checks; author associations need a token on Forgejo) shows up as a warning on the dashboard and a *gap* signal on each affected PR, and the related signal or lane uses a neutral default. It's never quietly read as "nothing there".
+Not every forge can answer every question. What one can't supply (GitLab has no named required checks; author associations need a token on Forgejo and don't exist on Azure DevOps) shows up as a warning on the dashboard and a *gap* signal on each affected PR, and the related signal or lane uses a neutral default. It's never quietly read as "nothing there".
+
+Azure DevOps serves no diff and reports no line counts, so readthrough assembles each PR's diff itself from both versions of every changed file (two requests per file, cached by head commit like any diff) and counts the lines from that. A PR changing more than `max_assembled_diff_files` files (300 by default) is treated like a diff GitHub refuses to serve: it's still placed on the map by its paths, but its line heuristics and counts are skipped, and the PR says so.
 
 ### Tuning
 

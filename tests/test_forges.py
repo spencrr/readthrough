@@ -8,6 +8,7 @@ never saw fails loudly rather than returning something made up.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -16,7 +17,6 @@ from typing import Any
 import pytest
 
 from readthrough import faults, forges
-from readthrough.faults import ForgeError
 from readthrough.forges import Response, Rest, retry_after
 from readthrough.forges.azure_devops import AzureDevOps
 from readthrough.forges.forgejo import Forgejo
@@ -52,7 +52,8 @@ def replay(monkeypatch: pytest.MonkeyPatch):
                 return None
             data = json.loads((directory / entry["file"]).read_text("utf-8"))
             assert hashlib.sha1(f"{method} {url}".encode()).hexdigest()[:12] == entry["file"][:-5]  # noqa: S324 - a key, not security
-            return Response(data["status"], data["headers"], data["text"])
+            body = base64.b64decode(data["body_b64"]) if data.get("body_b64") else b""
+            return Response(data["status"], data["headers"], data["text"], body)
 
         monkeypatch.setattr(Rest, "call", call)
         return asked
@@ -137,10 +138,10 @@ def test_forgejo_urls_and_refs():
 def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
     monkeypatch.setattr("readthrough.forges.azure_devops._az_token", lambda: None)
-    replay("ado")
+    asked = replay("ado")
     forge = AzureDevOps("powershell/PowerShell/PSGallery-Cache-Repo", tuning=TUNING)
     assert forge.describe_auth() == "anonymous"
-    assert "diffs" not in forge.capabilities
+    assert "diffs" in forge.capabilities, "assembled from blobs"
     info = forge.repo_info()
     assert info["full_name"] == "powershell/PowerShell/PSGallery-Cache-Repo" and info["default_branch"] == "main"
 
@@ -167,8 +168,80 @@ def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     # Branch policies need sign-in on Azure DevOps: unavailable, with the reason, never an empty set.
     assert not context.required["main"].known and "sign-in" in context.required["main"].reason
     assert context.main_failing.known
-    with pytest.raises(ForgeError, match="no unified diff"):
-        forge.fetch_diff(53)
+    # The diff is assembled from the blobs: this PR adds one file, so one blob fetch and a new-file header.
+    diff = forge.fetch_diff(53)
+    assert diff.startswith(
+        "diff --git a/.pipeline/feed-sync.yml b/.pipeline/feed-sync.yml\nnew file mode 100644\n--- /dev/null\n+++ b/.pipeline/feed-sync.yml\n"
+    )
+    assert "\n+trigger:" in diff or "\n+" in diff
+    assert sum(1 for a in asked if "/blobs/" in a) == 1
+
+
+def test_azure_devops_assembles_diffs_from_both_sides_of_each_file(monkeypatch):
+    """Edits, adds, deletes, renames, and binaries, through a scripted transport; and the cap on files."""
+    forge = AzureDevOps("o/p/r", tuning=TUNING)
+    blobs = {"old1": b"a\nb\nc\n", "new1": b"a\nB\nc\n", "new2": b"fresh\n", "old3": b"gone\n", "same": b"moved\n",
+             "bin0": b"\x89PNG\0\0", "bin1": b"\x89PNG\0\1"}  # fmt: skip
+    changes = [
+        {"changeType": "edit", "item": {"path": "/src/a.py", "objectId": "new1", "originalObjectId": "old1", "gitObjectType": "blob"}},
+        {"changeType": "add", "item": {"path": "/docs/new.md", "objectId": "new2", "gitObjectType": "blob"}},
+        {"changeType": "delete", "originalPath": "/old.txt", "item": {"path": None, "originalObjectId": "old3", "gitObjectType": "blob"}},
+        {"changeType": "rename", "originalPath": "/was.md", "item": {"path": "/is.md", "objectId": "same", "originalObjectId": "same", "gitObjectType": "blob"}},
+        {"changeType": "edit", "item": {"path": "/img.png", "objectId": "bin1", "originalObjectId": "bin0", "gitObjectType": "blob"}},
+        {"changeType": "edit", "item": {"path": "/src", "isFolder": True, "gitObjectType": "tree"}},
+    ]  # fmt: skip
+    pr = {
+        "pullRequestId": 9,
+        "lastMergeTargetCommit": {"commitId": "b" * 40},
+        "lastMergeSourceCommit": {"commitId": "h" * 40},
+    }
+
+    def call(self, method, path, *, params=None, headers=None, absent=()):
+        if path.endswith("/pullrequests/9"):
+            return Response(200, {}, json.dumps(pr))
+        if path.endswith("/diffs/commits"):
+            return Response(200, {}, json.dumps({"changes": changes, "allChangesIncluded": True}))
+        if "/blobs/" in path:
+            return Response(200, {}, "", blobs[path.rsplit("/", 1)[1]])
+        raise AssertionError(path)
+
+    monkeypatch.setattr(Rest, "call", call)
+    diff = forge.fetch_diff(9)
+    assert "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n" in diff
+    assert (
+        "diff --git a/docs/new.md b/docs/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/new.md\n@@ -0,0 +1 @@\n+fresh\n"
+        in diff
+    )
+    assert (
+        "diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n"
+        in diff
+    )
+    assert "diff --git a/was.md b/is.md\nrename from was.md\nrename to is.md\ndiff --git" in diff, (
+        "a pure rename shows no hunk"
+    )
+    assert "Binary files a/img.png and b/img.png differ\n" in diff
+    assert "a/src b/src" not in diff, "folders aren't files"
+    assert diff.endswith("\n")
+    # What the analysis reads out of it: added lines per file, by the +++ b/ header.
+    from readthrough.analyze import parse_diff
+
+    assert parse_diff(diff) == {"src/a.py": [(2, "B")], "docs/new.md": [(1, "fresh")]}
+
+    small = AzureDevOps("o/p/r", tuning=load_tuning({"forge": {"max_assembled_diff_files": 3, "retries": 0}}).forge)
+    with pytest.raises(faults.TooLarge, match="more than 3 files"):
+        small.fetch_diff(9)
+
+
+def test_assemble_diff_keeps_line_endings_honest():
+    """CRLF files and a missing final newline come out the way git prints them, and content starting with --- isn't a header."""
+    pairs = [
+        forges.FilePair("a.sql", "a.sql", b"-- one\r\n-- two\r\n", b"-- one\r\n-- three\r\n"),
+        forges.FilePair("b.txt", "b.txt", b"x\ny", b"x\nz"),
+    ]
+    out = forges.assemble_diff(pairs)
+    assert "@@ -1,2 +1,2 @@\n -- one\n--- two\n+-- three\n" in out
+    assert "@@ -1,2 +1,2 @@\n x\n-y\n\\ No newline at end of file\n+z\n\\ No newline at end of file\n" in out
+    assert forges.assemble_diff([]) == ""
 
 
 def test_azure_devops_repo_can_be_onboarded(replay, monkeypatch):
@@ -320,6 +393,22 @@ def test_glab_token_is_read_from_its_status_report():
     assert parse_glab_token(report) == "glpat-abc123"
     assert parse_glab_token(report.replace("glpat-abc123", "**************************")) is None
     assert parse_glab_token("No GitLab instance has been authenticated with glab.") is None
+
+
+def test_only_things_that_look_like_tokens_become_credentials(monkeypatch, caplog):
+    """A CLI stand-in that prints a banner, or a variable set to prose, must not end up in an Authorization header."""
+    monkeypatch.setenv("T", "glpat-abcdefghijklmnop")
+    assert forges.credential(env="T", cli=None, cli_name="x").source == "env T"
+    monkeypatch.setenv("T", "Microsoft Windows [Version 10]\n(c) Microsoft Corporation.")
+    with caplog.at_level("WARNING"):
+        assert (
+            forges.credential(env="T", cli=lambda: "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.token", cli_name="az").source
+            == "az"
+        )
+    assert "doesn't look like a token" in caplog.text
+    assert forges.credential(env="", cli=lambda: "please run az login", cli_name="az").source == "anonymous"
+    assert forges.credential(env="", cli=lambda: "short", cli_name="az").source == "anonymous"
+    assert forges.credential(env="", cli=lambda: None, cli_name="az").source == "anonymous"
 
 
 def test_quiet_output_can_include_stderr(monkeypatch):

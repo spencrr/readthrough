@@ -4,10 +4,12 @@ The token comes from ``AZURE_DEVOPS_EXT_PAT`` if set (the variable the ``az devo
 else from a signed-in ``az`` CLI (``az account get-access-token`` for the Azure DevOps resource), else calls
 are anonymous, which works for public projects.
 
-Azure DevOps has no author association, no unified diff endpoint, and no "closes issues" link readthrough
-can read, so those are reported as unsupported: PRs get no line heuristics and authors are classified by
-the profile's login lists only. Reviewer votes map to review states (10/5 approve, -5 wait, -10 reject),
-branch policies supply required build names, and the head commit's statuses are the checks.
+Azure DevOps serves no unified diff and reports no line counts, so a PR's diff is assembled here from both
+versions of each changed file (two blob requests per file, capped by ``max_assembled_diff_files``), and the
+build counts lines from it. It has no author association or "closes issues" link readthrough can read, so
+those are reported as unsupported and authors are classified by the profile's login lists. Reviewer votes
+map to review states (10/5 approve, -5 wait, -10 reject), branch policies supply required build names, and
+the head commit's statuses are the checks.
 """
 
 from __future__ import annotations
@@ -18,8 +20,18 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
 
-from readthrough.faults import AuthError, ForgeError, NotFound
-from readthrough.forges import FORGES, CiContext, Credential, Forge, Rest, cached_cli_token, credential
+from readthrough.faults import AuthError, ForgeError, NotFound, TooLarge
+from readthrough.forges import (
+    FORGES,
+    CiContext,
+    Credential,
+    FilePair,
+    Forge,
+    Rest,
+    assemble_diff,
+    cached_cli_token,
+    credential,
+)
 from readthrough.logs import pool_map
 from readthrough.model import (
     PATH_SEGMENT,
@@ -74,7 +86,7 @@ class AzureDevOps(Forge):
     label = "Azure DevOps"
     config_dir = ".azuredevops"
     shape = "organization/project/repository"
-    capabilities = frozenset({"required_checks", "default_branch_ci"})  # no unified diff endpoint
+    capabilities = frozenset({"diffs", "required_checks", "default_branch_ci"})  # diffs are assembled from blobs
 
     def __init__(self, repo: str, options: Any = None, tuning: Any = None, *, account: str | None = None) -> None:
         super().__init__(repo, options or AzureDevOpsOptions(), tuning, account=account)
@@ -90,6 +102,7 @@ class AzureDevOps(Forge):
         self.rest = Rest(f"https://{self.host}/{quote(self.org)}/", find, self.tuning)
         self._default_branch: str | None = None
         self._repo_id: str | None = None
+        self._merge_commits_of: dict[int, tuple[str, str]] = {}  # from fetch_prs, so fetch_diff needn't ask again
 
     def retrying(self, what: str, call: Any) -> Any:
         """Like the base, but an ``az`` identity the organization refuses steps aside for anonymous access.
@@ -224,36 +237,65 @@ class AzureDevOps(Forge):
                 )
         return viewer, pool_map(self._complete, raw, self.tuning.concurrency), total
 
-    def _changed_files(self, pr: dict[str, Any], limit: int) -> tuple[list[ChangedFile], bool]:
-        """The paths a PR changes, from the diff between its last merge base and head commits.
-
-        This is the one changes listing a public project serves without sign-in (iterations need it).
-        Azure DevOps reports no line counts anywhere, so additions and deletions stay 0 and the record says so.
-        """
+    @staticmethod
+    def _merge_commits(pr: dict[str, Any]) -> tuple[str, str] | None:
+        """The commits a PR's changes are the difference between: its last merge base and its head."""
         base = (pr.get("lastMergeTargetCommit") or {}).get("commitId")
         head = (pr.get("lastMergeSourceCommit") or {}).get("commitId")
-        if not (base and head):
-            return [], True
-        files: list[ChangedFile] = []
+        return (base, head) if base and head else None
+
+    def _changes(self, base: str, head: str, limit: int) -> tuple[list[dict[str, Any]], bool]:
+        """The blob changes between two commits, as Azure DevOps lists them (path, change type, object ids).
+
+        This is the one changes listing a public project serves without sign-in (iterations need it).
+        """
+        blobs: list[dict[str, Any]] = []
         skip, complete = 0, True
         while True:
             data = self._get(f"{self._p}/diffs/commits", baseVersion=base, baseVersionType="commit", targetVersion=head,
                              targetVersionType="commit", **{"$top": min(1000, limit), "$skip": skip})  # fmt: skip
             changes = data.get("changes") or []
-            files += [ChangedFile((c.get("item") or {}).get("path", "/").lstrip("/"), 0, 0,
-                                  {"add": "ADDED", "delete": "DELETED", "rename": "RENAMED"}.get(str(c.get("changeType", "")).split(",")[0], "MODIFIED"))
-                      for c in changes if not (c.get("item") or {}).get("isFolder") and (c.get("item") or {}).get("gitObjectType", "blob") == "blob"]  # fmt: skip
+            blobs += [c for c in changes if not (c.get("item") or {}).get("isFolder")
+                      and (c.get("item") or {}).get("gitObjectType", "blob") == "blob"]  # fmt: skip
             if data.get("allChangesIncluded", True) or not changes:
                 break
             skip += len(changes)
-            if len(files) >= limit:
+            if len(blobs) >= limit:
                 complete = False
                 break
-        return files[:limit], complete
+        return blobs[:limit], complete
+
+    @staticmethod
+    def _paths(change: dict[str, Any]) -> tuple[str | None, str | None]:
+        """(old path, new path) of a change; a deletion has no new path and an addition no old one."""
+        kind = str(change.get("changeType", "")).split(",")[0].strip()
+        new = ((change.get("item") or {}).get("path") or "").lstrip("/") or None
+        old = (change.get("originalPath") or "").lstrip("/") or None
+        if kind == "delete":
+            return old or new, None
+        if kind == "add":
+            return None, new
+        return old or new, new
+
+    def _changed_files(self, pr: dict[str, Any], limit: int) -> tuple[list[ChangedFile], bool]:
+        """The paths a PR changes. Azure DevOps reports no line counts anywhere, so additions and deletions stay 0
+        here and the record says so; the build counts them from the assembled diff when it has one."""
+        commits = self._merge_commits(pr)
+        if commits is None:
+            return [], True
+        changes, complete = self._changes(*commits, limit)
+        files = []
+        for c in changes:
+            kind = str(c.get("changeType", "")).split(",")[0].strip()
+            old, new = self._paths(c)
+            files.append(ChangedFile(new or old or "", 0, 0, {"add": "ADDED", "delete": "DELETED", "rename": "RENAMED"}.get(kind, "MODIFIED")))  # fmt: skip
+        return files, complete
 
     def _complete(self, pr: dict[str, Any]) -> PullRequest:
         n = pr["pullRequestId"]
         base = f"{self._p}/pullrequests/{n}"
+        if commits := self._merge_commits(pr):
+            self._merge_commits_of[n] = commits
         files, complete = self._changed_files(pr, self.tuning.max_files_per_pr)
         truncated = {} if complete else {"files": (len(files), len(files) + 1)}
         reviews = [Review(r.get("uniqueName") or r.get("displayName") or "?", VOTES.get(int(r.get("vote") or 0), "COMMENTED"), None)
@@ -308,7 +350,8 @@ class AzureDevOps(Forge):
             last_commit=last_commit, issues=[],
             association=unsupported("Azure DevOps has no author association; the profile's login lists decide"),
             decision=known(decision), mergeable=known(mergeable), threads=threads, checks=checks,
-            line_counts=unsupported("Azure DevOps reports no per-file line counts"), truncated=truncated,
+            line_counts=unsupported("Azure DevOps reports no per-file line counts; they are counted from the diff when one is fetched"),
+            truncated=truncated,
         )  # fmt: skip
 
     def merged_prs(self, count: int) -> tuple[str, list[MergedPullRequest]]:
@@ -325,7 +368,39 @@ class AzureDevOps(Forge):
         return self._branch(), merged
 
     def fetch_diff(self, number: int) -> str:
-        raise ForgeError("Azure DevOps serves no unified diff", what=f"pr diff #{number}")
+        """A unified diff assembled from both versions of each changed file; Azure DevOps serves none itself.
+
+        Two blob requests per file, so a PR changing more than ``max_assembled_diff_files`` files is treated as
+        too large, the way a diff GitHub refuses is: its files still place it on the map, only the line
+        heuristics are skipped for it.
+        """
+        what = f"pr diff #{number}"
+        commits = self._merge_commits_of.get(number) or self._merge_commits(
+            self._get(f"{self._p}/pullrequests/{number}")
+        )
+        if commits is None:
+            return ""  # no merge base yet: nothing to diff against
+        cap = self.tuning.max_assembled_diff_files
+        changes, complete = self._changes(*commits, cap + 1)
+        if not complete or len(changes) > cap:
+            raise TooLarge(f"{what}: changes more than {cap} files, the most assembled from blobs", what=what)
+
+        def blob(object_id: str | None) -> bytes | None:
+            if not object_id:
+                return None
+            resp = self.retrying(f"GET blob {object_id[:12]}", lambda: self.rest.call(
+                "GET", f"{self._p}/blobs/{object_id}", params={"api-version": API, "$format": "octetStream"},
+                headers={"Accept": "application/octet-stream"},
+            ))  # fmt: skip
+            return resp.content if resp else b""
+
+        def pair(change: dict[str, Any]) -> FilePair:
+            old_path, new_path = self._paths(change)
+            item = change.get("item") or {}
+            return FilePair(old_path, new_path, blob(item.get("originalObjectId")) if old_path else None,
+                            blob(item.get("objectId")) if new_path else None)  # fmt: skip
+
+        return assemble_diff(pool_map(pair, changes, self.tuning.concurrency))
 
     # ---- CI
 
