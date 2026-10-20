@@ -161,7 +161,7 @@ function renderSettings(repo){
   const accounts = S.state.accounts, forge = forgeOf(repo.forge);
   $("main").innerHTML = `
   <div class="card"><h2>${icon("git-pull-request")}${esc(repo.name)}${forgeTag(repo)} <span class="sub" style="margin:0;font-weight:400">onboarded ${new Date(repo.onboarded).toLocaleDateString()}</span>
-    <span style="flex:1"></span><a class="btn" href="/r/${esc(repo.slug)}/">${icon("map", "ico sm")}Open dashboard</a></h2></div>
+    <span style="flex:1"></span><a class="btn" href="/r/${esc(encodeURI(repo.slug))}/">${icon("map", "ico sm")}Open dashboard</a></h2></div>
   <div class="card"><h2>${icon("terminal")}Where it comes from</h2>
     <div class="row">${forge.accounts ? `<label class="f">gh account<select id="s-account"><option value="">gh's active account</option>${accounts.map(a => `<option ${repo.account === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : `<label class="f">Forge<input type="text" value="${esc(forge.label)}" readonly style="min-width:120px"></label>`}
       <label class="f">Local clone<input type="text" class="wide" id="s-clone" value="${esc(repo.clone)}" spellcheck="false"></label>

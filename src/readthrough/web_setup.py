@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from readthrough import forges, onboard, review
 from readthrough.config import Config, ConfigError, Settings, guess_clone, remote_for
@@ -158,7 +159,7 @@ class SetupService:
             ) from exc
         name = info.get("full_name") or repo
         entry = settings.entry(name, forge_name) or {}
-        clone = entry.get("clone") or guess_clone(name)
+        clone = entry.get("clone") or guess_clone(name, forge_name)
         if name.lower() != repo.lower():  # the forge's own spelling of the name
             cfg = settings.config_for(name, forge=forge_name)
             if account:
@@ -183,7 +184,7 @@ class SetupService:
         }
 
     def check_clone(self, body: dict[str, Any]) -> dict[str, Any]:
-        _, repo = _locator(body.get("repo"), body.get("forge"))
+        forge, repo = _locator(body.get("repo"), body.get("forge"))
         clone = _clone_path(body.get("clone"))
         if clone is None:
             return {"ok": False, "message": "No clone: reviews and worktrees need one, but the map works without it."}
@@ -192,15 +193,14 @@ class SetupService:
             parts = line.split()
             if len(parts) >= 2 and parts[0] not in (r["name"] for r in remotes):
                 remotes.append({"name": parts[0], "url": parts[1]})
-        detected = remote_for(clone, repo)
-        points = any(r["name"] == detected and repo.lower() in r["url"].lower() for r in remotes)
+        detected = remote_for(clone, repo, forge)
         return {
             "ok": True,
             "remotes": remotes,
             "detected": detected,
             "message": f"Git repo; remote '{detected}' points at {repo}."
-            if points
-            else f"Git repo, but no remote points at {repo}; reviews fetch PRs through '{detected}'.",
+            if detected
+            else f"Git repo, but no remote points at {repo}; reviews would fetch PRs through 'origin'.",
         }
 
     # ---------------------------------------------------------------- drafting and checking
@@ -329,7 +329,7 @@ class SetupService:
                 settings.default_repo = cfg.repo
             settings.save()
         self.on_change()
-        return {"onboarded": True, "url": f"/r/{cfg.slug}/"}
+        return {"onboarded": True, "url": f"/r/{quote(cfg.slug)}/"}
 
     def save_settings(self, body: dict[str, Any]) -> dict[str, Any]:
         values = body.get("values") or {}
@@ -391,7 +391,7 @@ class SetupService:
                 values["account"] = account
             if clone:
                 values["clone"] = clone
-                values["remote"] = remote or remote_for(clone, repo)
+                values["remote"] = remote or remote_for(clone, repo, forge)
             if settings.entry(repo, forge) is None or values:
                 settings.upsert(repo, forge=forge, **values)
                 settings.save()
@@ -556,7 +556,7 @@ def _clean_repo_values(values: dict[str, Any], repo: str, forge: str = "github")
         else:
             raise SetupError(f"{key} can't be changed from the browser")
     if out.get("clone") and "remote" not in out:
-        out["remote"] = remote_for(out["clone"], repo)
+        out["remote"] = remote_for(out["clone"], repo, forge)
     return out
 
 

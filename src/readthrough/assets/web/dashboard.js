@@ -779,7 +779,7 @@ document.addEventListener("click", e => {
 document.addEventListener("input", e => { const d = e.target.dataset?.draft; if (d && state.sel) { state.drafts[`${state.sel}:${d}`] = e.target.value; saveDrafts(); } });
 document.addEventListener("change", e => {
   const t = e.target;
-  if (t.id === "repoSwitch") { location.href = t.value === "__setup" ? "/setup" : `/r/${t.value}/`; return; }
+  if (t.id === "repoSwitch") { location.href = t.value === "__setup" ? "/setup" : `/r/${encodeURI(t.value)}/`; return; }
   if (t.id === "srcOnly") { state.srcOnly = t.checked; return render(); }
   if (t.id === "overlapOnly") { state.overlapOnly = t.checked; return render(); }
   if (t.id === "greenFirst") { state.greenFirst = t.checked; localStorage.setItem("readthrough:green-first", t.checked ? "1" : "0"); return render(); }

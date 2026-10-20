@@ -15,8 +15,9 @@ MAX_REQUEST_BYTES = 250_000
 MAX_DISCARD_BYTES = 8_000_000
 # The longest text field kept in a study-log entry (an answer, a note, a model's assessment).
 MAX_STUDY_TEXT = 8000
-# A GitHub login. Enterprise managed users look like shortcode_suffix, so underscores are allowed.
-LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,60})(?:\[bot\])?$")
+# A login as the browser may send it: a GitHub login (enterprise managed users look like shortcode_suffix, so
+# underscores are allowed), or the email address Azure DevOps and GitLab use as a unique name.
+LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.+-]{0,60})(?:@[A-Za-z0-9.-]{1,120})?(?:\[bot\])?$")
 # A Copilot model name as accepted from the browser's settings page.
 MODEL_RE = re.compile(r"^[\w.:-]{1,80}$")
 # Bounds on per-repo settings the browser may change.

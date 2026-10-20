@@ -21,12 +21,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from readthrough import agents, forges
 from readthrough.agents import Agent, SessionInfo
 from readthrough.config import Config
 from readthrough.faults import ForgeError
+from readthrough.model import PATH_SEGMENT
 from readthrough.process import run
 from readthrough.tuning import default_tuning
 
@@ -34,9 +35,9 @@ log = logging.getLogger(__name__)
 
 URL_SCHEME = "readthrough"
 URL_ACTIONS = ("review", "refresh", "open")
-_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SEGMENT_RE = re.compile(rf"^{PATH_SEGMENT}$")
 
-MARKER_RE = re.compile(r"\[readthrough:([\w.-]+(?:/[\w.-]+)+)#(\d{1,7})\]")
+MARKER_RE = re.compile(rf"\[readthrough:({PATH_SEGMENT}(?:/{PATH_SEGMENT})+)#(\d{{1,7}})\]")
 
 
 def pr_marker(slug: str, number: int) -> str:
@@ -274,7 +275,7 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
         raise ValueError(f"Unknown action {action!r}")
     if parts.query or parts.fragment:
         raise ValueError("Unexpected query or fragment")
-    segments = [s for s in parts.path.split("/") if s]
+    segments = [unquote(s) for s in parts.path.split("/") if s]  # a project called "Delivery Team" travels as %20
     if action == "open" and not segments:
         return ReadthroughUrl(action)
     if not all(_SEGMENT_RE.match(s) for s in segments):
@@ -294,7 +295,7 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
 
 
 def review_url(slug: str, number: int) -> str:
-    return f"{URL_SCHEME}://review/{slug}/{number}"
+    return f"{URL_SCHEME}://review/{quote(slug)}/{number}"
 
 
 def vscode_new_session_url(prompt: str, workspace: Path | None) -> str:
@@ -316,7 +317,7 @@ def repo_remote(cfg: Config) -> str:
         return cfg.remote
     from readthrough.config import remote_for
 
-    return (remote_for(cfg.clone, cfg.repo) if cfg.clone else None) or "origin"
+    return (remote_for(cfg.clone, cfg.repo, cfg.forge) if cfg.clone else None) or "origin"
 
 
 def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Path, str, str]:

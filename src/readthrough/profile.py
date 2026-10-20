@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from readthrough.config import portable_path
-from readthrough.model import ChangedFile
+from readthrough.model import REPO_PATH_RE, ChangedFile
 from readthrough.registry import Registry
 from readthrough.rules import glob_to_regex
 
@@ -462,7 +462,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
     repo = raw.get("repo")
     # The repo's path on its forge: owner/name on most, group/subgroup/project on GitLab, org/project/repo on
     # Azure DevOps. Which forge is implied by where the profile was found, so it isn't repeated here.
-    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+(/[\w.-]+)+", repo):
+    if not isinstance(repo, str) or not REPO_PATH_RE.fullmatch(repo):
         raise fail("repo must be the repo's path on its forge, like 'owner/name'")
 
     layers = []

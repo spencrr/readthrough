@@ -222,6 +222,30 @@ def test_azure_devops_urls():
     assert AzureDevOps.validate_repo("o/r") and AzureDevOps.validate_repo("o/p/r") is None
 
 
+def test_azure_devops_project_names_may_have_spaces():
+    """Projects are often called things like "Delivery Team"; the locator keeps the literal name and URLs encode it."""
+    assert AzureDevOps.validate_repo("contoso/Delivery Team/Courier-Ops") is None
+    assert AzureDevOps.validate_repo("my org/p/r"), "organizations can't"
+    assert AzureDevOps.validate_repo("o/p /r") and AzureDevOps.validate_repo("o/a  b/r"), (
+        "only single spaces between words"
+    )
+    forge = AzureDevOps("contoso/Delivery Team/Courier-Ops", tuning=TUNING)
+    assert forge.pr_url(7) == "https://dev.azure.com/contoso/Delivery%20Team/_git/Courier-Ops/pullrequest/7"
+    assert forge.slug("contoso/Delivery Team/Courier-Ops") == "ado/contoso/Delivery Team/Courier-Ops"
+
+
+def test_remote_urls_are_recognised_per_forge():
+    repo = "contoso/Delivery Team/Courier-Ops"
+    assert AzureDevOps.remote_matches("https://contoso@dev.azure.com/contoso/Delivery%20Team/_git/Courier-ops", repo)
+    assert AzureDevOps.remote_matches("git@ssh.dev.azure.com:v3/contoso/Delivery%20Team/Courier-Ops", repo)
+    assert not AzureDevOps.remote_matches("https://dev.azure.com/contoso/Other/_git/Courier-Ops", repo)
+    assert not AzureDevOps.remote_matches("https://github.com/contoso/Courier-Ops.git", repo)
+    # The default rule: the repo's path ends the URL, with or without .git, over https or ssh.
+    assert Forgejo.remote_matches("git@codeberg.org:forgejo/forgejo.git", "forgejo/forgejo")
+    assert GitLab.remote_matches("https://gitlab.com/gitlab-org/frontend/playground", "gitlab-org/frontend/playground")
+    assert not GitLab.remote_matches("https://gitlab.com/other/playground", "gitlab-org/frontend/playground")
+
+
 # ---------------------------------------------------------------- GitLab, recorded from gitlab.com/gitlab-org/cli
 
 

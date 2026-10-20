@@ -379,6 +379,19 @@ def test_config_sync_adds_removes_and_reload_watch(monkeypatch, tmp_path: Path):
         assert stopped == ["o/a"]
         assert started[-1] == ("o/b", {"build_now": True})
 
+        # An Azure DevOps project with spaces in its name: the browser sends them percent-encoded.
+        ado = Settings(
+            home=tmp_path, repos=[{"name": "contoso/Delivery Team/Courier-Ops", "forge": "ado", "onboarded": "now"}]
+        )
+        httpd.sync(ado)
+        dashboard = httpd.dashboard_for("ado/contoso/Delivery Team/Courier-Ops")
+        assert (
+            dashboard is not None
+            and dashboard.cfg.repo_dir == tmp_path / "repos" / "ado" / "contoso" / "Delivery Team" / "Courier-Ops"
+        )
+        assert httpd.route("/r/ado/contoso/Delivery%20Team/Courier-Ops/api/data") == (dashboard, "/api/data")
+        assert httpd.route("/r/ado/contoso/Delivery Team/Courier-Ops/") == (dashboard, "/")
+
         second.save()
         current_settings[0] = second
         reloaded = []

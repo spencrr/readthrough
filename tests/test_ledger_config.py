@@ -109,3 +109,20 @@ def test_mark_seen_is_a_whats_new_baseline(tmp_path: Path):
     news = whats_new(seen, [pr, {**pr, "number": 2}], {}, "me")
     assert news["since"] == "g1"
     assert news["opened"] == [2]
+
+
+def test_remote_for_asks_the_forge_what_its_urls_look_like(monkeypatch, tmp_path: Path):
+    from readthrough import config
+
+    remotes = {
+        tmp_path
+        / "courier-ops": "origin\thttps://contoso@dev.azure.com/contoso/Delivery%20Team/_git/Courier-ops (fetch)\n",
+        tmp_path
+        / "vscode": "upstream\tgit@github.com:microsoft/vscode.git (fetch)\norigin\tgit@github.com:me/vscode.git (fetch)\n",
+    }
+    monkeypatch.setattr(config, "_git", lambda args: remotes.get(Path(args[1]), ""))
+    assert config.remote_for(tmp_path / "courier-ops", "contoso/Delivery Team/Courier-Ops", "ado") == "origin"
+    assert config.remote_for(tmp_path / "courier-ops", "contoso/Delivery Team/Courier-Ops") is None, "not a GitHub URL"
+    assert config.remote_for(tmp_path / "vscode", "microsoft/vscode") == "upstream"
+    assert config.remote_for(tmp_path / "vscode", "me/vscode", "github") == "origin"
+    assert config.remote_for(tmp_path / "vscode", "someone/vscode") is None

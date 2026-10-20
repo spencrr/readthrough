@@ -7,7 +7,7 @@ import pytest
 from readthrough import review
 from readthrough.config import Config
 
-ALLOWED = ["github/Octo/Courier", "github/o/r", "gitlab/g/sub/p"]
+ALLOWED = ["github/Octo/Courier", "github/o/r", "gitlab/g/sub/p", "ado/contoso/Delivery Team/Courier-Ops"]
 
 
 def _cfg(tmp_path: Path, repo: str = "o/r", **kw) -> Config:
@@ -39,6 +39,12 @@ def test_ledger_session_overrides_default(tmp_path: Path):
         ("readthrough://refresh/github/Octo/Courier", "refresh", "github/Octo/Courier", None),
         ("readthrough://open/o/r", "open", "github/o/r", None),
         ("readthrough://review/gitlab/g/sub/p/5", "review", "gitlab/g/sub/p", 5),
+        (
+            "readthrough://review/ado/contoso/Delivery%20Team/Courier-Ops/9",
+            "review",
+            "ado/contoso/Delivery Team/Courier-Ops",
+            9,
+        ),
         ("readthrough://open", "open", None, None),
     ],
 )
@@ -62,6 +68,7 @@ def test_parse_readthrough_url_accepts(url, action, repo, number):
         "readthrough://refresh/o/r/1",
         "readthrough://review/o/r/12345678",
         "readthrough://review/o",
+        "readthrough://review/ado/contoso/Delivery%09Team/Courier-Ops/9",  # only spaces are allowed between words
     ],
 )
 def test_parse_readthrough_url_rejects(url):
@@ -201,6 +208,12 @@ def test_review_prompt_starts_with_the_marker(tmp_path: Path):
     assert match is not None and match.groups() == ("github/o/r", "7")
     ado = review.MARKER_RE.search(review.pr_marker("ado/org/proj/repo", 12))
     assert ado is not None and ado.groups() == ("ado/org/proj/repo", "12")
+    spaced = review.MARKER_RE.search("see [readthrough:ado/contoso/Delivery Team/Courier-Ops#9] please")
+    assert spaced is not None and spaced.groups() == ("ado/contoso/Delivery Team/Courier-Ops", "9")
+    assert (
+        review.review_url("ado/contoso/Delivery Team/Courier-Ops", 9)
+        == "readthrough://review/ado/contoso/Delivery%20Team/Courier-Ops/9"
+    )
 
 
 def test_ensure_worktree_replaces_one_whose_clone_moved(tmp_path: Path, monkeypatch, fake_forge):

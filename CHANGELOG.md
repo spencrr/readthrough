@@ -70,6 +70,13 @@
   exactly `owner/name`, so onboarding an Azure DevOps repo (`organization/project/repository`) or a GitLab
   project in a subgroup drafted a profile and then refused to load it. The default title, and the directory
   `onboard` looks in for an existing clone, are the repo's own name (the last segment), not the project's.
+- Azure DevOps projects called things like `Delivery Team` can be onboarded: a repo path's segments may have
+  spaces between words. The slug keeps the literal name (so does the data directory); dashboard and
+  `readthrough://` URLs carry it percent-encoded, and the marker in agent prompts carries it as written.
+- A clone's remote is matched the way its forge writes URLs, so an Azure DevOps clone
+  (`https://…/org/Delivery%20Team/_git/repo`, or `v3/org/project/repo` over SSH) is recognised by `onboard`,
+  the setup page, and `doctor`; before, only the GitHub-shaped `…/owner/name(.git)` ending was.
+- Login lists edited in the browser accept the email addresses Azure DevOps and GitLab use as logins.
 
 ### Removed
 

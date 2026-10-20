@@ -13,14 +13,16 @@ branch policies supply required build names, and the head commit's statuses are 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from readthrough.faults import AuthError, ForgeError, NotFound
 from readthrough.forges import FORGES, CiContext, Credential, Forge, Rest, cached_cli_token, credential
 from readthrough.logs import pool_map
 from readthrough.model import (
+    PATH_SEGMENT,
     Author,
     Capability,
     ChangedFile,
@@ -106,8 +108,19 @@ class AzureDevOps(Forge):
 
     @classmethod
     def validate_repo(cls, repo: str) -> str | None:
+        # Project and repository names may contain spaces ("Delivery Team"); organizations may not.
         parts = repo.split("/")
-        return None if len(parts) == 3 and all(parts) else f"{repo!r} isn't organization/project/repository"
+        if len(parts) != 3 or not all(re.fullmatch(PATH_SEGMENT, p) for p in parts) or " " in parts[0]:
+            return f"{repo!r} isn't organization/project/repository"
+        return None
+
+    @classmethod
+    def remote_matches(cls, url: str, repo: str) -> bool:
+        """``https://<org>@dev.azure.com/<org>/<project>/_git/<repo>`` or ``git@ssh.dev.azure.com:v3/<org>/<project>/<repo>``,
+        with the project percent-encoded in the https form ("Delivery%20Team")."""
+        org, project, name = (p.lower() for p in repo.split("/"))
+        path = unquote(url).lower().rstrip("/")
+        return path.endswith((f"/{org}/{project}/_git/{name}", f"v3/{org}/{project}/{name}"))
 
     def web_url(self) -> str:
         return f"https://{self.host}/{quote(self.org)}/{quote(self.project)}/_git/{quote(self.repo_name)}"

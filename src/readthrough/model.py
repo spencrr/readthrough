@@ -12,10 +12,16 @@ answer is never read as "none".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
+
+# One segment of a repo's path on its forge: owner, group, project, or name. Azure DevOps projects may be
+# called "Delivery Team", so single spaces between words are allowed; every forge's own rule is stricter.
+PATH_SEGMENT = r"[\w.-]+(?: [\w.-]+)*"
+REPO_PATH_RE = re.compile(rf"{PATH_SEGMENT}(?:/{PATH_SEGMENT})+")
 
 
 @dataclass(frozen=True)

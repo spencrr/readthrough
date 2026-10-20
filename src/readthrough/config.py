@@ -17,7 +17,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import re
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -501,21 +500,26 @@ def _git(args: list[str]) -> str:
         return ""
 
 
-def remote_for(clone: Path, repo: str) -> str | None:
-    """The name of the remote in ``clone`` that points at ``repo`` (https or ssh, any host alias)."""
-    want = repo.lower()
+def remote_for(clone: Path, repo: str, forge: str = "github") -> str | None:
+    """The name of the remote in ``clone`` that points at ``repo`` (https or ssh, any host alias).
+
+    What a remote URL for ``repo`` looks like is the forge's to say (``Forge.remote_matches``).
+    """
+    from readthrough.forges import adapter
+
+    matches = adapter(forge).remote_matches
     for line in _git(["-C", str(clone), "remote", "-v"]).splitlines():
         parts = line.split()
-        if len(parts) >= 2 and re.search(rf"[:/]{re.escape(want)}(?:\.git)?/?$", parts[1].lower()):
+        if len(parts) >= 2 and matches(parts[1], repo):
             return parts[0]
     return None
 
 
-def guess_clone(repo: str) -> Path | None:
+def guess_clone(repo: str, forge: str = "github") -> Path | None:
     """Look for an existing clone of ``repo`` in the usual places."""
     name = repo.rsplit("/", 1)[1]  # the repo's own name: the last segment on every forge
     for base in (Path.home() / "src", Path.home() / "source" / "repos", Path.home() / "code", Path.home()):
         for candidate in (base / name, base / name.lower()):
-            if (candidate / ".git").exists() and remote_for(candidate, repo):
+            if (candidate / ".git").exists() and remote_for(candidate, repo, forge):
                 return candidate
     return None

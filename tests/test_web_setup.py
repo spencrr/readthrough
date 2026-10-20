@@ -142,7 +142,7 @@ def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkey
     svc, _home = service
     fake_forge.files = {".github/readthrough.toml": "remote .github/readthrough.toml"}
     guessed = tmp_path / "guessed"
-    monkeypatch.setattr(web_setup, "guess_clone", lambda repo: guessed)
+    monkeypatch.setattr(web_setup, "guess_clone", lambda repo, forge: guessed)
     assert svc.get("/api/setup/state", {})["accounts"] == ["me", "me_corp"]
     with pytest.raises(LookupError):
         svc.get("/api/setup/jobs/" + "0" * 32, {})
@@ -163,7 +163,7 @@ def test_setup_get_inspect_clone_and_source_text(service, tmp_path: Path, monkey
     clone = tmp_path / "clone"
     (clone / ".git").mkdir(parents=True)
     monkeypatch.setattr(web_setup, "run", lambda *args, **kwargs: "origin https://github.com/o/app (fetch)\n")
-    monkeypatch.setattr(web_setup, "remote_for", lambda clone, repo: "origin")
+    monkeypatch.setattr(web_setup, "remote_for", lambda clone, repo, forge: "origin")
     ok = svc.check_clone({"repo": "o/app", "clone": str(clone)})
     assert ok["ok"] is True and ok["detected"] == "origin" and "points at o/app" in ok["message"]
 

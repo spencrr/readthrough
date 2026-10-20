@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -280,6 +281,15 @@ class Forge:
     def slug(cls, repo: str) -> str:
         """Path segments for URLs and the data directory: ``<forge>/<repo path>``."""
         return f"{cls.name}/{repo}"
+
+    @classmethod
+    def remote_matches(cls, url: str, repo: str) -> bool:
+        """Whether a git remote URL (https or ssh, any host alias) points at ``repo``.
+
+        Most forges put the repo's path at the end of the URL, with or without ``.git``; a forge whose URLs
+        are shaped differently (Azure DevOps) overrides this.
+        """
+        return re.search(rf"[:/]{re.escape(repo.lower())}(?:\.git)?/?$", url.lower()) is not None
 
     def web_url(self) -> str:
         raise NotImplementedError

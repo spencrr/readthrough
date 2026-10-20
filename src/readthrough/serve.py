@@ -466,7 +466,7 @@ class Handler(BaseHTTPRequestHandler):
         if names:
             target = self.app.default_repo() or names[0]["slug"]
             self.send_response(HTTPStatus.FOUND)
-            self.send_header("Location", f"/r/{target}/")
+            self.send_header("Location", f"/r/{urllib.parse.quote(target)}/")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -499,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
         live = {
             "token": self.app.token,
             "instance": self.app.instance,
-            "base": f"/r/{dashboard.cfg.slug}",
+            "base": f"/r/{urllib.parse.quote(dashboard.cfg.slug)}",
             "repos": self.app.repo_names(),
             "refresh_minutes": dashboard.cfg.refresh_minutes,
             "status": dashboard.status,
@@ -657,6 +657,7 @@ class DashboardServer(ThreadingHTTPServer):
         """
         if not path.startswith("/r/"):
             return None, path
+        path = urllib.parse.unquote(path)  # the browser sends "Delivery Team" as Delivery%20Team
         lower = path.lower()
         with self._lock:
             slugs = sorted(self.dashboards, key=len, reverse=True)

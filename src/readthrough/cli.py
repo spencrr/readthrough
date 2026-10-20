@@ -299,7 +299,7 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
     clone = (
         Path(args.clone).expanduser()
         if args.clone
-        else (Path(existing["clone"]) if existing.get("clone") else guess_clone(repo))
+        else (Path(existing["clone"]) if existing.get("clone") else guess_clone(repo, forge_name or "github"))
     )
     account = args.account or existing.get("account")
     cfg = settings.config_for(repo, forge=forge_name)
@@ -318,7 +318,7 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
         log.error("%s now lives at %s. Remove it and onboard the new name.", repo, full_name)
         return 1
     repo = full_name
-    remote = args.remote or existing.get("remote") or (remote_for(clone, repo) if clone else None)
+    remote = args.remote or existing.get("remote") or (remote_for(clone, repo, forge.name) if clone else None)
     settings.upsert(repo, forge=forge.name, clone=clone, account=account, remote=remote)
     cfg = settings.config_for(repo, forge=forge.name)
     forge = forges.make(cfg)
@@ -687,7 +687,7 @@ def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, A
     )
     if clone_ok and cfg.clone is not None:
         remotes = run(["git", "-C", str(cfg.clone), "remote"], check=False).split()
-        remote = cfg.remote or remote_for(cfg.clone, cfg.repo)
+        remote = cfg.remote or remote_for(cfg.clone, cfg.repo, cfg.forge)
         check(
             remote in remotes,
             "remote",
