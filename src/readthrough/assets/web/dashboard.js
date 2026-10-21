@@ -606,7 +606,9 @@ function loadStudy(n){
   if (!LIVE || study[n]?.loading) return;
   study[n] = {...(study[n] || {}), loading: true};
   api(`/api/study/${n}`, null, "GET").then(r => {
-    study[n] = {...r, pending: study[n]?.pending || null};
+    // The server says whether a turn is running. A reply bubble kept from before the fetch is only kept when it
+    // is: a `done` missed during a reconnect would otherwise leave the composer disabled for good.
+    study[n] = {...r, pending: r.engine.busy ? (study[n]?.pending || {text: "", tools: []}) : null};
     if (byNum[n]) byNum[n].study = r.summary;
     if (state.sel === n && state.dtab === "study") renderDrawer();
   }).catch(err => { study[n] = {error: err.message}; renderDrawer(); });
@@ -826,17 +828,25 @@ async function startReview(n, button){
   finally { button.disabled = false; }
 }
 // Live mode: the server pushes changes. Re-render in place so tabs, filters, drafts, and the open panel survive.
+// Events are notifications, not state (see contract.py): after any gap the page fetches everything it holds
+// again rather than reasoning about what it missed.
 function connectLive(){
   const es = new EventSource((LIVE.base || "") + "/api/events");
   // A restarted server has a new token; reload so the buttons keep working. Drafts survive in sessionStorage.
   es.addEventListener("hello", e => { if (JSON.parse(e.data).instance !== LIVE.instance) { es.close(); location.reload(); } });
-  es.onopen = () => { if (LIVE.disconnected) { LIVE.disconnected = false; reloadData(); } header(); };
+  es.onopen = () => { if (LIVE.disconnected) { LIVE.disconnected = false; resync(); } header(); };
   es.onerror = () => { LIVE.disconnected = true; header(); };
+  es.addEventListener("resync", () => resync());
   es.addEventListener("status", e => { LIVE.status = JSON.parse(e.data); header(); });
   es.addEventListener("data", () => reloadData(true));
   es.addEventListener("ledger", e => { DATA.ledger = JSON.parse(e.data); loadProgress(); render(); });
   es.addEventListener("sessions", e => { for (const [n, info] of Object.entries(JSON.parse(e.data))) if (byNum[n]) Object.assign(byNum[n], info); render(); });
   es.addEventListener("study", e => onStudyEvent(JSON.parse(e.data)));
+}
+// Everything the page holds, fetched afresh: the payload, and the study log of every PR it has looked at.
+async function resync(){
+  await reloadData();
+  for (const n of Object.keys(study).map(Number)) { delete study[n].loading; loadStudy(n); }
 }
 async function reloadData(announce){
   const resp = await fetch((LIVE.base || "") + "/api/data", {cache: "no-store"});

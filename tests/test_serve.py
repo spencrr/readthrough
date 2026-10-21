@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from readthrough import agents, review
+from readthrough import agents, review, study
 from readthrough import serve as serve_mod
 from readthrough.config import Config, Settings
 from readthrough.limits import MAX_REQUEST_BYTES
@@ -370,11 +371,20 @@ def test_server_alive_handles_good_bad_and_unreachable(monkeypatch):
 
 def test_dashboard_rebuild_success_generic_failure_and_full_client_queue(live, monkeypatch):
     dashboard, _ = live
+    # A page that fell behind (a hundred queued events) isn't dropped in silence: what it missed is replaced by
+    # one `resync`, and it stays subscribed, so it fetches everything again instead of showing a stale page.
     full = dashboard.subscribe()
     for i in range(100):
         full.put_nowait(("old", i))
     dashboard.broadcast("data", {"generated": "new"})
-    assert full not in dashboard._clients
+    assert full in dashboard._clients
+    queued = []
+    while not full.empty():
+        queued.append(full.get_nowait())
+    assert [e for e, _ in queued] == ["resync"] and "fell behind" in queued[0][1]["reason"]
+    with pytest.raises(ValueError, match="not an event the page knows"):
+        dashboard.broadcast("bogus", {})
+    dashboard.unsubscribe(full)
 
     def build_success(cfg, **kwargs):
         cfg.data_path.write_text(
@@ -465,6 +475,52 @@ def test_config_sync_adds_removes_and_reload_watch(monkeypatch, tmp_path: Path):
         assert reloaded == [second]
     finally:
         httpd.server_close()
+
+
+def test_two_syncs_for_one_change_start_one_dashboard(monkeypatch, tmp_path: Path):
+    """Saving from the setup page syncs and rewrites config.toml, which the config watcher then notices: two
+    syncs within seconds. Unserialized, both find the repo missing and each start a dashboard; the orphan
+    keeps building and broadcasting with nothing able to stop it."""
+    started = []
+    gate = threading.Barrier(2, timeout=1)  # the first sync waits here this long for a second that must not come
+
+    def slow_load(self):
+        with contextlib.suppress(threading.BrokenBarrierError):
+            gate.wait()  # hold both syncs here, if the second one got in
+        return True
+
+    monkeypatch.setattr(Dashboard, "load", slow_load)
+    monkeypatch.setattr(Dashboard, "start", lambda self, **kwargs: started.append(self.cfg.repo))
+    settings = Settings(home=tmp_path, repos=[{"name": "o/a", "onboarded": "now"}])
+    httpd = DashboardServer([], 0, settings_loader=lambda: settings, with_diffs=False)
+    try:
+        threads = [threading.Thread(target=httpd.sync, args=(settings,)) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert started == ["o/a"], f"started {started}"
+        assert len(httpd.dashboards) == 1
+    finally:
+        gate.abort()
+        httpd.server_close()
+
+
+def test_the_study_watcher_notices_an_append_within_the_same_timestamp(live):
+    """Two appends can land within one mtime tick (coarse filesystem clocks); the watcher compares size too."""
+    dashboard, _ = live
+    events = dashboard.subscribe()
+    path = study.log_path(dashboard.cfg, 7)
+    study.append(dashboard.cfg, 7, "note", by="you", text="first")
+    dashboard._watch_once()  # first look at the file: remembered, not announced
+    before = path.stat()
+    study.append(dashboard.cfg, 7, "note", by="you", text="second")
+    os.utime(path, (before.st_atime, before.st_mtime))  # same mtime as before: only the size differs
+    dashboard._watch_once()
+    kinds = []
+    while not events.empty():
+        kinds.append(events.get_nowait())
+    assert any(e == "study" and d["type"] == "reload" and d["pr"] == 7 for e, d in kinds), kinds
 
 
 @pytest.mark.parametrize("content", ['{"schema": 99, "prs": []}', "{not json"])

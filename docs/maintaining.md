@@ -111,7 +111,7 @@ Make a value tunable when someone could reasonably want a different one: network
 
 ### File formats
 
-`config.toml` has `schema = 1`, and `data.json` has `"schema": 1` (`build.DATA_SCHEMA`). Bump a schema only when a field changes meaning or goes away; adding a field doesn't need it. A config with an unknown schema is refused with a message to upgrade. A `data.json` with a different schema, or one that doesn't parse, is ignored by the server and rebuilt. The ledger and study logs are append-friendly JSON files without a schema field, so change them only by adding fields.
+`config.toml` has `schema = 2`, and `data.json` has `"schema": 2` (`build.DATA_SCHEMA`; its shape is declared in `contract.py`). Bump a schema only when a field changes meaning or goes away; adding a field doesn't need it. A config with an unknown schema is refused with a message to upgrade. A `data.json` with a different schema, or one that doesn't parse, is ignored by the server and rebuilt. The ledger and study logs are append-friendly JSON files without a schema field, so change them only by adding fields.
 
 ## The pages
 
@@ -122,6 +122,12 @@ The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`,
 - Escape everything else you interpolate with `esc()`.
 - Third-party JavaScript is vendored under `assets/vendor/` with its license, and listed in `build.VENDOR_SCRIPTS`. The page makes no requests to other sites.
 - Check both themes. New colors go in `theme.css` as tokens if both pages use them, otherwise at the top of the page's CSS.
+
+### The contract with the server
+
+`contract.py` declares everything that crosses between the page and the server, and `test_contract.py` holds both sides to it: a build with every optional part populated must have exactly the declared shapes (an added or dropped field fails the test until the contract says so), and the page's scripts must read only declared fields, listen only for declared events, handle every study event the server can send, and call only routes it serves. So a new field is three edits, in `analyze.py` or `build.py`, in `contract.py`, and in the page, and the test tells you which one you forgot.
+
+The rules the contract states, in short: events are notifications and a GET is the truth, so after any gap (a reconnect, a client that fell behind and was sent `resync`, a server restart seen on `hello`) the page fetches everything it holds again rather than reasoning about what it missed; study entries have per-PR ids that only ever grow, so the page de-duplicates by id and a repeated event is harmless; one assistant turn runs per PR, and a second request gets 409. The shared files behind the API (the study logs, the ledger) are read and written under `files.locked`, a file lock that also covers another process, since a review agent's terminal writes to the same log as the server.
 
 ## Plugins
 

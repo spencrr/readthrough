@@ -75,6 +75,13 @@
 
 ### Changed
 
+- What crosses between the page and the server is written down in one place, `contract.py`: the payload's
+  shape (every record in `data.json`), the Server-Sent Events and what each carries, and the study API, with
+  the rules they cross under (events are notifications and a GET is the truth; after any gap the page
+  re-fetches what it holds; study entry ids only grow; one turn per PR). `test_contract.py` checks both sides:
+  a build with every optional part populated has exactly the declared shapes, and the page's scripts read only
+  declared fields, listen only for declared events, handle every study event, and call only served routes.
+  The server refuses to broadcast an event the contract doesn't name.
 - The study assistant that reads the code is named for what it is, a **model**, not for GitHub Copilot, which
   is now one of three runtimes it can run on. `assistant = "model"` in `config.toml` (the old `"copilot"` is
   refused with the list of names); the log's `by` is `model`, and every entry the model writes also records
@@ -114,6 +121,19 @@
 
 ### Fixed
 
+- A page that fell behind the server's events (a long streamed reply, a throttled background tab) was quietly
+  unsubscribed and kept showing a stale page over a connection that looked healthy. It's now sent one `resync`
+  and fetches everything it holds again; the same happens after a reconnect, which used to refresh the PR list
+  but not the open study log, so a `done` missed during the gap left the Study tab's composer disabled until
+  a reload.
+- Two writers could corrupt the shared files: a review agent's terminal recording a finding while the server's
+  assistant wrote to the same study log produced duplicate entry ids and dropped lines (measured: 5 of 80
+  entries lost), and two tabs or the server and `readthrough ledger` could each load the ledger and the slower
+  one's write undo the other's. Both are now read and written under a file lock that holds across processes.
+  The config watcher and the setup page could also both start a dashboard for a freshly onboarded repo, one of
+  them an orphan that kept building; syncs are serialized. The watcher that picks up study-log appends made
+  from a terminal compares the file's size as well as its timestamp, so two appends within one clock tick
+  aren't missed.
 - The live dashboard took two to four seconds to answer a page request on a repo with a hundred PRs. The
   watcher thread recomputed every PR's agent sessions every three seconds while holding the payload lock, and
   for each PR it searched PATH for the agents again (several milliseconds per lookup on Windows), so every page

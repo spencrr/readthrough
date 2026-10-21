@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from readthrough.config import Config
+from readthrough.files import locked
 from readthrough.limits import MAX_STUDY_TEXT
 
 MARKER = "<!-- readthrough:study-log -->"
@@ -107,7 +108,12 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
     if kind == "finding" and fields["severity"] not in SEVERITIES:
         raise ValueError(f"severity must be one of {', '.join(SEVERITIES)}")
 
-    with _lock:
+    # Ids and question numbers come from what's already in the file, so reading and appending must be one step
+    # for every writer: this process's threads (the lock) and other processes, such as a review agent's
+    # terminal recording a finding while the server's assistant writes (the file lock).
+    path = log_path(cfg, number)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _lock, locked(path):
         entries = load(cfg, number)
         if (
             kind in ("answer", "assessment", "reflection")
@@ -126,8 +132,6 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             "by": by,
             **fields,
         }
-        path = log_path(cfg, number)
-        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry) + "\n")
     return entry

@@ -38,6 +38,29 @@ def test_append_validates_kind_writer_and_fields(cfg):
         study.append(cfg, 5, "assessment", by="model", qid=q["qid"], verdict="great", feedback="f")
 
 
+def test_appends_from_two_processes_never_share_an_id(cfg):
+    """A review agent's terminal (`readthrough study N --finding`) and the server's assistant can write to one
+    log at the same moment. Ids come from the file's length, so the read and the append must be one step across
+    processes, not only across this process's threads."""
+    import subprocess
+
+    script = (
+        "import sys; from pathlib import Path; from readthrough import study; from readthrough.config import Config\n"
+        f"cfg = Config(home=Path({str(cfg.home)!r}), repo='o/r')\n"
+        "for i in range(40): study.append(cfg, 5, 'note', by='you', text=f'other process {i}')\n"
+    )
+    other = subprocess.Popen([sys.executable, "-c", script])
+    try:
+        for i in range(40):
+            study.append(cfg, 5, "note", by="you", text=f"this process {i}")
+    finally:
+        assert other.wait(timeout=60) == 0
+    entries = study.load(cfg, 5)
+    assert len(entries) == 80
+    assert [e["id"] for e in entries] == list(range(1, 81)), "every id unique and in file order"
+    assert sum(e["text"].startswith("other") for e in entries) == 40
+
+
 def test_older_logs_read_as_the_model_without_a_guessed_runtime(cfg):
     """Older logs say `by: copilot`, the assistant's former name. They're read as `model`; the runtime stays
     unrecorded (the same name was written through other runtimes for a while, so inferring one would be a

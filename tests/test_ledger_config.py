@@ -16,6 +16,33 @@ def test_ledger_round_trip(tmp_path: Path):
     assert entry["note"] == "learned X"
 
 
+def test_concurrent_ledger_writes_lose_nothing(tmp_path: Path):
+    """Two tabs, or the server and a terminal, recording at the same moment: each read-modify-write holds the
+    file lock, so the slower writer doesn't overwrite the faster one's change."""
+    import threading
+
+    path = tmp_path / "ledger.json"
+    errors: list[BaseException] = []
+
+    def mark(numbers: range) -> None:
+        try:
+            for n in numbers:
+                ledger.record(path, n, status="reviewed", head=f"h{n}")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=mark, args=(range(start, start + 25),)) for start in (1, 101, 201)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    saved = ledger.load(path)
+    assert len(saved) == 75 and all(
+        saved[str(n)]["head"] == f"h{n}" for n in [*range(1, 26), *range(101, 126), *range(201, 226)]
+    )
+
+
 def test_ledger_rejects_unknown_status(tmp_path: Path):
     with pytest.raises(ValueError):
         ledger.record(tmp_path / "l.json", 1, status="lgtm")

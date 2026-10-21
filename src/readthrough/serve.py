@@ -41,7 +41,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from readthrough import __version__, ledger, logs, review, study
+from readthrough import __version__, contract, ledger, logs, review, study
 from readthrough.build import (
     DATA_SCHEMA,
     BuildFailed,
@@ -56,7 +56,7 @@ from readthrough.build import (
 from readthrough.config import DEFAULT_HOME, Config, load_settings
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.faults import ForgeError
-from readthrough.files import mtime
+from readthrough.files import mtime, stamp
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
 from readthrough.web_setup import Conflict, SetupError, SetupService
@@ -125,7 +125,7 @@ class Dashboard:
             "last_success": None, "consecutive_failures": 0, "warnings": 0,
         }  # fmt: skip
         self._seen = {"data": 0.0, "ledger": 0.0}
-        self._study_seen: dict[str, float] = {}
+        self._study_seen: dict[str, tuple[float, int]] = {}  # per log file: (mtime, size) last seen
         self._wake_reason = "scheduled"
         self._start_delay = 0.0
         self.engine = StudyEngine(cfg, self._engine_event, self.pr_info, lambda: self.snapshot().get("components", []))
@@ -142,7 +142,7 @@ class Dashboard:
             info = self.pr_info(data["pr"])
             if info is not None:
                 info["study"] = data["summary"]
-            self._study_seen[f"pr-{data['pr']}.jsonl"] = mtime(study.log_path(self.cfg, data["pr"]))
+            self._study_seen[f"pr-{data['pr']}.jsonl"] = stamp(study.log_path(self.cfg, data["pr"]))
         self.broadcast(event, data)
 
     # ---- state
@@ -184,13 +184,22 @@ class Dashboard:
             self._clients.discard(q)
 
     def broadcast(self, event: str, data: Any) -> None:
+        """Queue an event for every connected page. A page that can't keep up (a long streamed reply, a
+        throttled tab) loses what was queued and is told so with one ``resync``, so it fetches everything again
+        rather than quietly showing a stale page while its connection looks healthy."""
+        if event not in contract.EVENTS:
+            raise ValueError(f"{event!r} is not an event the page knows (contract.EVENTS)")
         with self._lock:
             clients = list(self._clients)
         for q in clients:
             try:
                 q.put_nowait((event, data))
             except queue.Full:
-                self.unsubscribe(q)
+                with contextlib.suppress(queue.Empty):
+                    while True:
+                        q.get_nowait()
+                with contextlib.suppress(queue.Full):
+                    q.put_nowait(("resync", {"reason": "this page fell behind the server's events"}))
 
     def _set_status(self, **changes: Any) -> None:
         self.status.update(changes)
@@ -299,11 +308,11 @@ class Dashboard:
         if not folder.is_dir():
             return
         for path in folder.glob("pr-*.jsonl"):
-            stamp = mtime(path)
-            if self._study_seen.get(path.name) == stamp:
+            seen = stamp(path)
+            if self._study_seen.get(path.name) == seen:
                 continue
             first_look = path.name not in self._study_seen
-            self._study_seen[path.name] = stamp
+            self._study_seen[path.name] = seen
             if not first_look:
                 self._study_changed(int(path.stem.split("-")[1]), reload=True)
 
@@ -314,7 +323,7 @@ class Dashboard:
             info["study"] = summary
         if reload:
             self.broadcast("study", {"pr": number, "type": "reload", "summary": summary})
-        self._study_seen[f"pr-{number}.jsonl"] = mtime(study.log_path(self.cfg, number))
+        self._study_seen[f"pr-{number}.jsonl"] = stamp(study.log_path(self.cfg, number))
         return summary
 
     def start(self, *, build_now: bool = False, delay: float = 0.0) -> None:
@@ -346,7 +355,7 @@ class Dashboard:
     def add_study(self, number: int, body: dict[str, Any]) -> dict[str, Any]:
         """Entries the learner writes directly, without asking the assistant anything."""
         kind = body.get("kind")
-        if kind not in ("prediction", "teachback", "reflection", "note", "finding"):
+        if kind not in contract.STUDY_ADD_KINDS:
             raise ValueError("you can add a prediction, teachback, reflection, note, or finding")
         if self.pr_info(number) is None:
             raise ValueError(f"#{number} isn't an open PR in the current data")
@@ -659,6 +668,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.instance = secrets.token_hex(6)
         self.dashboards: dict[str, Dashboard] = {}
         self._lock = threading.Lock()
+        self._sync_lock = threading.Lock()  # one sync at a time: the setup page and the config watcher both call it
         home = dashboards[0].cfg.home if dashboards else DEFAULT_HOME
         self._settings_loader = settings_loader
         self._with_diffs = with_diffs
@@ -730,25 +740,32 @@ class DashboardServer(ThreadingHTTPServer):
             return {r.cfg.slug: {k: r.status.get(k) for k in keys} for r in self.dashboards.values()}
 
     def sync(self, settings: Any) -> None:
-        """Add dashboards for newly onboarded repos and stop those that were removed."""
-        self._default = settings.default_repo
-        wanted = {c.slug.lower(): c for c in settings.all() if c.onboarded}
-        with self._lock:
-            current = dict(self.dashboards)
-        for key, dashboard in current.items():
-            if key not in wanted:
-                log.info("No longer serving %s", dashboard.cfg.repo)
-                dashboard.stop()
-                with self._lock:
-                    self.dashboards.pop(key, None)
-        for key, cfg in wanted.items():
-            if key not in current:
-                log.info("Now serving %s", cfg.repo)
-                dashboard = Dashboard(cfg, with_diffs=self._with_diffs)
-                self._add(dashboard)
-                dashboard.start(build_now=not dashboard.load())
-            else:
-                current[key].reconfigure(cfg)
+        """Add dashboards for newly onboarded repos and stop those that were removed.
+
+        Serialized: saving from the setup page calls this and also rewrites config.toml, which the config
+        watcher then notices, so two syncs for the same change arrive within seconds of each other. Without
+        the lock both could find a repo missing and each start a dashboard for it, one of them an orphan that
+        keeps building and broadcasting with no way to stop it.
+        """
+        with self._sync_lock:
+            self._default = settings.default_repo
+            wanted = {c.slug.lower(): c for c in settings.all() if c.onboarded}
+            with self._lock:
+                current = dict(self.dashboards)
+            for key, dashboard in current.items():
+                if key not in wanted:
+                    log.info("No longer serving %s", dashboard.cfg.repo)
+                    dashboard.stop()
+                    with self._lock:
+                        self.dashboards.pop(key, None)
+            for key, cfg in wanted.items():
+                if key not in current:
+                    log.info("Now serving %s", cfg.repo)
+                    dashboard = Dashboard(cfg, with_diffs=self._with_diffs)
+                    self._add(dashboard)
+                    dashboard.start(build_now=not dashboard.load())
+                else:
+                    current[key].reconfigure(cfg)
 
     def watch_config(self, stop: threading.Event) -> None:
         if self._settings_loader is None:

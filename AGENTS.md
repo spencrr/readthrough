@@ -77,6 +77,11 @@ would fail there except for the browser tests, which skip when no Chromium-famil
   `build.page_source` inlines them, every script carries a per-render nonce, and the CSP runs nothing else.
   No inline `onclick=`; third-party HTML goes through DOMPurify. Vendored JS lives in `assets/vendor/` with
   its license and is listed in `build.VENDOR_SCRIPTS`.
+- **What crosses between page and server is declared in `contract.py`** (the payload, the SSE events, the
+  study API) and `test_contract.py` checks both sides: a build has exactly those shapes, the page reads nothing
+  else. Events are notifications; a GET is the truth, and after any gap (`hello` with a new instance, `resync`,
+  a reconnect) the page re-fetches what it holds. Shared files (study logs, the ledger) are read and written
+  under `files.locked`, which also holds against another process.
 - **Lint is `ruff` with `select = ["ALL"]`** and an ignore list that states each reason in `pyproject.toml`.
   Suppress per file (with a reason) rather than per line where a whole file legitimately differs. Types are
   checked by `ty`, pinned exactly; bump it deliberately.

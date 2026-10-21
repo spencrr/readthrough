@@ -5,6 +5,7 @@ Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't a
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import PROFILE_PATH, REPO, SLUG
@@ -60,9 +61,13 @@ def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
     httpd = DashboardServer([dashboard], 0)
     dashboard.token = httpd.token
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    server_fixture.cfg = cfg  # for tests that write behind the page's back
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
     httpd.server_close()
+
+
+server_fixture = SimpleNamespace(cfg=None)  # what the server fixture built, for the page fixture to hand on
 
 
 def _seed_study_log(cfg: Config) -> None:
@@ -105,6 +110,7 @@ def page(browser, server):
     page.on("console", lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None)
     page.errors = errors  # type: ignore[attr-defined]
     page.base = server  # type: ignore[attr-defined]
+    page.cfg = server_fixture.cfg  # type: ignore[attr-defined]
     yield page
     context.close()
 
@@ -209,4 +215,51 @@ def test_study_tab_shows_failed_turns_and_takes_a_reflection(page):
     assert "I never looked up the limit." in page.inner_text(".transcript")
     assert page.evaluate("document.querySelector('#drawer textarea').value") == ""
     assert page.query_selector('[data-study-add="reflection"]') is not None, "another note is still possible"
+    assert page.errors == []
+
+
+def _open_study(page, number: int) -> None:
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    page.click(f'#v-table [data-open="{number}"]')
+    page.wait_for_selector("body.drawer-open")
+    page.click('[data-dtab="study"]')
+    page.wait_for_selector(".transcript")
+
+
+def test_after_a_gap_the_page_fetches_what_it_holds_again(page, server):
+    """Events are notifications: whatever the page missed while its stream was down (or overflowed), a resync
+    brings the open study log up to date and clears a reply bubble whose `done` never arrived, so the composer
+    isn't left disabled for good."""
+    _open_study(page, 2)
+    cfg = page.cfg  # type: ignore[attr-defined]
+    # Written behind the page's back, as a terminal would; and a bubble left over from an interrupted stream.
+    study.append(cfg, 2, "note", by="you", text="Appended while the stream was down.")
+    page.evaluate("study[2].pending = {text: 'half a reply', tools: []}; renderDrawer();")
+    assert page.is_disabled('[data-ask="quiz"]'), "a pending reply disables the composer"
+    page.evaluate("resync()")
+    page.wait_for_selector(".event:has-text('Appended while the stream was down.')")
+    assert page.evaluate("study[2].pending") is None, "the server says no turn is running, so nothing is pending"
+    assert not page.is_disabled('[data-ask="quiz"]')
+    assert page.errors == []
+
+
+def test_a_failed_stream_clears_the_reply_bubble_and_says_why(page):
+    _open_study(page, 2)
+    page.evaluate("onStudyEvent({pr: 2, type: 'start', action: 'quiz', assistant: 'model'})")
+    page.evaluate("onStudyEvent({pr: 2, type: 'delta', text: 'Let me look'})")
+    assert "Let me look" in page.inner_text("#pending")
+    page.evaluate("onStudyEvent({pr: 2, type: 'error', message: 'the provider timed out'})")
+    assert page.query_selector("#pending") is None
+    assert "the provider timed out" in page.inner_text("#toast")
+    assert page.errors == []
+
+
+def test_the_open_pr_vanishing_from_a_reload_closes_the_panel_cleanly(page):
+    """A PR merged between builds disappears from the payload; a panel open on it closes instead of erroring."""
+    _open_study(page, 2)
+    page.evaluate("setData({...DATA, prs: DATA.prs.filter(p => p.number !== 2)}); render();")
+    assert page.evaluate("document.body.classList.contains('drawer-open')") is False
+    assert page.evaluate("state.sel") is None
+    assert sorted(rows(page)) == [1, 3]
     assert page.errors == []
