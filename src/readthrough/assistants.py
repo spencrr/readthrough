@@ -386,12 +386,16 @@ class ModelAssistant:
 
     def __init__(self, harness: Harness, options: Any) -> None:
         self.h = harness
-        self.cfg = harness.cfg
-        self.runtime: runtimes.Runtime = runtimes.make(self.cfg.runtime, self.cfg.runtime_options)
+        self.runtime: runtimes.Runtime = runtimes.make(harness.cfg.runtime, harness.cfg.runtime_options)
         self._sessions: dict[int, runtimes.Session] = {}
-        self._worktrees: dict[int, tuple[Path, str]] = {}
+        self._worktrees: dict[int, tuple[str, Path, str]] = {}  # per PR: (head it was made for, path, merge base)
         self._model_in_use: dict[int, str] = {}  # per PR, the model the runtime last reported using
         self._pending: dict[int, list[str]] = {}  # per PR, reply text not yet written to the log
+
+    @property
+    def cfg(self) -> Config:
+        """Always the harness's current Config: the clone or model may have been set since the first turn."""
+        return self.h.cfg
 
     async def stop(self) -> None:
         await self.runtime.stop()
@@ -477,13 +481,18 @@ class ModelAssistant:
             self.h.broadcast("study", {"pr": number, "type": "usage", "entry": entry})
 
     async def _worktree(self, number: int) -> tuple[Path, str]:
-        if number not in self._worktrees:
-            info = self.h.pr_info(number) or {}
+        """The PR's checkout, moved along when the PR gets a new head between turns so the tools read what the
+        learner sees. Nothing is cached before the clone exists, so a clone added after a failed turn is used."""
+        info = self.h.pr_info(number) or {}
+        head = str(info.get("head") or "")
+        cached = self._worktrees.get(number)
+        if cached is None or cached[0] != head:
             path, merge_base, _ = await asyncio.to_thread(
                 review.ensure_worktree, self.cfg, number, base=info.get("base", "main")
             )
-            self._worktrees[number] = (path, merge_base)
-        return self._worktrees[number]
+            self._worktrees[number] = (head, path, merge_base)
+        _, path, merge_base = self._worktrees[number]
+        return path, merge_base
 
     def _study_guidance(self) -> str:
         from readthrough.profile import ProfileError, resolve_profile

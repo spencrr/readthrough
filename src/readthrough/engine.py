@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 
 Broadcast = Callable[[str, Any], None]
 ACTIONS = ("chat", "quiz", "brief", "answer", "teachback", "hint")
+BUILT_FROM = (
+    "assistant",
+    "assistant_options",
+    "runtime",
+    "runtime_options",
+)  # the Config fields an assistant is made from
 
 
 class Busy(RuntimeError):
@@ -43,9 +49,34 @@ class StudyEngine:
         self._components = components or (list)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._busy: set[int] = set()
+        self._busy_lock = threading.Lock()
         self._assistant: assistants.Assistant | None = None
+        self._retired: list[assistants.Assistant] = []  # replaced while a turn was running; stopped once it isn't
 
     # ---- the assistant
+
+    def reconfigure(self, cfg: Config) -> None:
+        """Take a fresh Config for the same repo: config.toml changed under the server (a clone added after the
+        first study turn failed for want of one, say). An assistant reads the clone, model, and tuning through
+        ``harness.cfg`` on every turn, so it stays unless what it was built from changed; then it's replaced,
+        and the old one is stopped once no turn is using it."""
+        old, self.cfg = self.cfg, cfg
+        with self._busy_lock:
+            assistant = self._assistant
+            if assistant is None or all(getattr(old, f) == getattr(cfg, f) for f in BUILT_FROM):
+                return
+            self._assistant = None
+            self._retired.append(assistant)
+            retiring = self._retiring()
+        for stale in retiring:
+            asyncio.run_coroutine_threadsafe(stale.stop(), self._ensure_loop())
+
+    def _retiring(self) -> list[assistants.Assistant]:
+        """Under the busy lock: the replaced assistants that can be stopped now that no turn is running."""
+        if self._busy:
+            return []
+        retiring, self._retired = self._retired, []
+        return retiring
 
     @property
     def resolved(self) -> assistants.Resolved:
@@ -74,11 +105,12 @@ class StudyEngine:
     def stop(self) -> None:
         if self._loop is None:
             return
-        if self._assistant is not None:
+        for assistant in [*self._retired, *([self._assistant] if self._assistant else [])]:
             try:
-                asyncio.run_coroutine_threadsafe(self._assistant.stop(), self._loop).result(timeout=15)
+                asyncio.run_coroutine_threadsafe(assistant.stop(), self._loop).result(timeout=15)
             except Exception:
                 log.exception("Study engine shutdown failed")
+        self._retired.clear()
         self._loop.call_soon_threadsafe(self._loop.stop)
 
     def busy(self, number: int) -> bool:
@@ -95,10 +127,12 @@ class StudyEngine:
             raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
         if self.pr_info(number) is None:
             raise ValueError(f"#{number} isn't an open PR in the current data")
-        if number in self._busy:
-            raise Busy(f"The assistant is still working on #{number}")
-        prompt = self._record_and_prompt(number, action, text.strip(), qid)
-        self._busy.add(number)
+        # Handler threads call this concurrently (a double-click, two tabs), so claiming the PR must be atomic.
+        with self._busy_lock:
+            if number in self._busy:
+                raise Busy(f"The assistant is still working on #{number}")
+            prompt = self._record_and_prompt(number, action, text.strip(), qid)
+            self._busy.add(number)
         self.broadcast("study", {"pr": number, "type": "start", "action": action, "assistant": resolved.name})
         turn = assistants.Turn(number, action, text.strip(), qid, prompt)
         asyncio.run_coroutine_threadsafe(self._turn(turn), self._ensure_loop())
@@ -148,7 +182,8 @@ class StudyEngine:
 
     async def _turn(self, turn: assistants.Turn) -> None:
         try:
-            await self.assistant.turn(turn)
+            assistant = self.assistant
+            await assistant.turn(turn)
             self.broadcast("study", {"pr": turn.number, "type": "done"})
         except Exception as exc:
             log.exception("Study turn for #%d failed", turn.number)
@@ -157,7 +192,11 @@ class StudyEngine:
             self.append(turn.number, "failure", by=study.TOOL, assistant=self.resolved.name, text=message)
             self.broadcast("study", {"pr": turn.number, "type": "error", "message": message})
         finally:
-            self._busy.discard(turn.number)
+            with self._busy_lock:
+                self._busy.discard(turn.number)
+                retiring = self._retiring()
+            for stale in retiring:
+                await stale.stop()
 
 
 def public_entry(entry: dict[str, Any], entries: list[dict[str, Any]]) -> dict[str, Any]:

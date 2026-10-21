@@ -404,6 +404,17 @@ def test_config_sync_adds_removes_and_reload_watch(monkeypatch, tmp_path: Path):
         assert httpd.route("/r/GitHub/o/a") == (httpd.dashboard_for("github/o/a"), "/")
         assert httpd.route("/r/o/a/api/data") == (None, "/r/o/a/api/data"), "routes need the full slug"
 
+        # The same repo with a clone added (the setup page saved it): the running dashboard and its study
+        # engine take the new Config rather than a restart, since the first study turn failed for want of it.
+        dashboard = httpd.dashboard_for("github/o/a")
+        assert dashboard is not None and dashboard.engine.cfg.clone is None
+        with_clone = Settings(
+            home=tmp_path, default_repo="o/a", repos=[{"name": "o/a", "onboarded": "now", "clone": str(tmp_path)}]
+        )
+        httpd.sync(with_clone)
+        assert httpd.dashboard_for("github/o/a") is dashboard and not stopped
+        assert dashboard.cfg.clone == tmp_path and dashboard.engine.cfg.clone == tmp_path
+
         second = Settings(home=tmp_path, default_repo="o/b", repos=[{"name": "o/b", "onboarded": "now"}])
         httpd.sync(second)
         assert httpd.repo_names() == [{"slug": "github/o/b", "name": "o/b"}]

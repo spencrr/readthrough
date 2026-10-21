@@ -453,6 +453,30 @@ def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkey
     assert tools["ask_quiz_question"].terminal and not tools["assess_answer"].terminal
 
 
+def test_the_worktree_follows_the_pr_head_and_the_current_clone(harness, monkeypatch):
+    """The checkout is made once per head, not once per process: a push to the PR between turns must reach
+    the tools, and a clone configured after a failed first turn must be the one used."""
+    made = []
+
+    def fake_ensure(cfg, number, base):
+        made.append((cfg.clone, number))
+        return Path(f"wt-{len(made)}"), "base", None
+
+    monkeypatch.setattr(assistants.review, "ensure_worktree", fake_ensure)
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
+    assistant = ModelAssistant(harness, None)
+    harness.items[7]["head"] = "aaa"
+    assert asyncio.run(assistant._worktree(7)) == (Path("wt-1"), "base")
+    assert asyncio.run(assistant._worktree(7)) == (Path("wt-1"), "base"), "same head: no second checkout"
+    harness.items[7]["head"] = "bbb"
+    assert asyncio.run(assistant._worktree(7)) == (Path("wt-2"), "base"), "new head: checked out again"
+
+    harness.cfg = replace(harness.cfg, clone=Path("new-clone"))
+    harness.items[7]["head"] = "ccc"
+    asyncio.run(assistant._worktree(7))
+    assert made[-1] == (Path("new-clone"), 7), "the assistant reads the clone through the harness, not a copy"
+
+
 def test_stop_stops_the_runtime(harness, fake_runtime, monkeypatch):
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     assistant = ModelAssistant(harness, None)

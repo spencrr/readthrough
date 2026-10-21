@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -172,6 +174,53 @@ def tool_schema(spec: ToolSpec) -> dict[str, Any]:
     schema.setdefault("type", "object")
     schema.setdefault("properties", {})
     return schema
+
+
+RETRY_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})  # 529 is Anthropic's "overloaded"
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = 2.0
+RETRY_MAX_WAIT_SECONDS = 30.0
+JITTER_MAX = 0.25
+jitter = random.Random()  # noqa: S311 - timing jitter, not security; its own generator so tests can seed it
+
+
+def retry_wait(attempt: int, retry_after: str | None, rng: random.Random | None = None) -> float:
+    """Seconds before retry ``attempt`` (from 1): what the provider asked for in ``Retry-After`` when it did,
+    else exponential with jitter; never more than ``RETRY_MAX_WAIT_SECONDS``, so a turn can't stall on a bad
+    header."""
+    if retry_after:
+        try:
+            return min(RETRY_MAX_WAIT_SECONDS, max(0.0, float(retry_after)))
+        except ValueError:
+            pass  # an HTTP-date: fall back to backoff rather than parse clocks
+    base = RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1)
+    return min(RETRY_MAX_WAIT_SECONDS, base * (1 + (rng or jitter).uniform(0, JITTER_MAX)))
+
+
+def with_retries(
+    what: str, call: Callable[[], Any], *, sleep: Callable[[float], None] | None = None, attempts: int = RETRY_ATTEMPTS
+) -> Any:
+    """Run one HTTP call, retrying the failures a provider says are temporary: rate limits, overload, gateway
+    errors, and a dropped connection. Anything else (a bad key, a bad request) is raised at once; so is the
+    last attempt, as the ``Retryable`` the caller turns into a message."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return call()
+        except Retryable as exc:
+            if attempt == attempts:
+                raise
+            wait = retry_wait(attempt, exc.retry_after)
+            log.info("%s: %s; retrying in %.1fs (%d/%d)", what, exc, wait, attempt, attempts - 1)
+            (sleep or time.sleep)(wait)
+    raise AssertionError("unreachable")
+
+
+class Retryable(RuntimeError):
+    """A provider answered in a way that says "try again": the status and any ``Retry-After`` it sent."""
+
+    def __init__(self, message: str, *, retry_after: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def parse_arguments(raw: Any) -> dict[str, Any]:

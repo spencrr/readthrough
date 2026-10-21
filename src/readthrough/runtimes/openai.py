@@ -23,7 +23,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from readthrough.process import Secret, quiet_output, redact, remember
-from readthrough.runtimes import RUNTIMES, Conversation, Event, Usage, parse_arguments, tool_schema
+from readthrough.runtimes import (
+    RETRY_ATTEMPTS,
+    RETRY_STATUSES,
+    RUNTIMES,
+    Conversation,
+    Event,
+    Retryable,
+    Usage,
+    parse_arguments,
+    tool_schema,
+    with_retries,
+)
 from readthrough.tuning import default_tuning
 
 log = logging.getLogger(__name__)
@@ -208,16 +219,24 @@ class OpenAISession:
         else:
             req.add_unredirected_header("Authorization", f"Bearer {self.options.key().reveal()}")
         timeout = default_tuning().study.turn_timeout_seconds
+
+        def once() -> tuple[str, list[dict[str, Any]], Usage, str | None]:
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                    return self._read_stream(resp)
+            except urllib.error.HTTPError as exc:
+                text = redact(exc.read().decode("utf-8", "replace"))
+                message = f"the model endpoint refused the call: {_error_message(text) or f'HTTP {exc.code}'}"
+                if exc.code in RETRY_STATUSES:
+                    raise Retryable(message, retry_after=exc.headers.get("retry-after")) from exc
+                raise RuntimeError(message) from exc
+            except urllib.error.URLError as exc:
+                raise Retryable(f"couldn't reach {self.options.base_url}: {exc.reason}") from exc
+
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                return self._read_stream(resp)
-        except urllib.error.HTTPError as exc:
-            text = redact(exc.read().decode("utf-8", "replace"))
-            raise RuntimeError(
-                f"the model endpoint refused the call: {_error_message(text) or f'HTTP {exc.code}'}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"couldn't reach {self.options.base_url}: {exc.reason}") from exc
+            return with_retries("the model endpoint", once)
+        except Retryable as exc:
+            raise RuntimeError(f"{exc} (gave up after {RETRY_ATTEMPTS} attempts)") from exc
 
     def _read_stream(self, resp: Any) -> tuple[str, list[dict[str, Any]], Usage, str | None]:
         text: list[str] = []

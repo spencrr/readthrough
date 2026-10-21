@@ -99,6 +99,18 @@
 
 ### Fixed
 
+- A clone (or a model, or a runtime) set in config.toml or on the setup page now reaches a running study
+  session. The server reloaded the repo's settings but the study engine and its assistant kept the Config they
+  were built with, so a repo onboarded without a clone kept failing "No local clone configured" after one was
+  added, until a restart; and a PR's checkout was made once per process, so a push to the PR between turns was
+  invisible to the assistant's tools. The engine now takes the new Config in place, the assistant reads it on
+  every turn, and the checkout follows the PR's head. Two further races closed on the way: two browser tabs (or
+  a double-click) could start two turns on one PR, since the busy check wasn't atomic across handler threads;
+  and the study assistant and a deep review launched from the page could `git worktree add` the same path at
+  once, now serialized per worktree.
+- The `anthropic` and `openai` runtimes retry what the provider calls temporary (429, 529 overloaded, 5xx, a
+  dropped connection), waiting what `Retry-After` asks for or an exponential backoff with jitter, four attempts
+  at most; a bad key or a bad request still fails at once with the provider's message.
 - A profile's `repo` is the repo's path on its forge, however many segments that has. The parser demanded
   exactly `owner/name`, so onboarding an Azure DevOps repo (`organization/project/repository`) or a GitLab
   project in a subgroup drafted a profile and then refused to load it. The default title, and the directory

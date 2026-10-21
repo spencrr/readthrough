@@ -320,10 +320,27 @@ def repo_remote(cfg: Config) -> str:
     return (remote_for(cfg.clone, cfg.repo, cfg.forge) if cfg.clone else None) or "origin"
 
 
+_worktree_locks: dict[Path, threading.Lock] = {}
+
+
+def _worktree_lock(path: Path) -> threading.Lock:
+    with _indexes_lock:
+        return _worktree_locks.setdefault(path, threading.Lock())
+
+
 def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Path, str, str]:
-    """Check out the PR's current head in its own worktree. Returns (path, merge_base, head_sha)."""
+    """Check out the PR's current head in its own worktree. Returns (path, merge_base, head_sha).
+
+    One at a time per worktree: the study assistant's tools and a deep review launched from the page can ask
+    for the same PR within a second of each other, and two `git worktree add`s of one path can't both win.
+    """
     if cfg.clone is None:
         raise RuntimeError(f"No local clone of {cfg.repo} configured.")
+    with _worktree_lock(worktree_path(cfg, number)):
+        return _ensure_worktree(cfg, number, base)
+
+
+def _ensure_worktree(cfg: Config, number: int, base: str) -> tuple[Path, str, str]:
     clone, ref, remote = str(cfg.clone), f"refs/remotes/readthrough/pr-{number}", repo_remote(cfg)
     run(["git", "-C", clone, "fetch", "--quiet", remote, f"+{forges.make(cfg).pr_ref(number)}:{ref}", base])
     path = worktree_path(cfg, number)

@@ -23,7 +23,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from readthrough.process import Secret, redact, remember
-from readthrough.runtimes import RUNTIMES, Conversation, Event, Usage, parse_arguments, tool_schema
+from readthrough.runtimes import (
+    RETRY_ATTEMPTS,
+    RETRY_STATUSES,
+    RUNTIMES,
+    Conversation,
+    Event,
+    Retryable,
+    Usage,
+    parse_arguments,
+    tool_schema,
+    with_retries,
+)
 from readthrough.tuning import default_tuning
 
 log = logging.getLogger(__name__)
@@ -168,16 +179,25 @@ class AnthropicSession:
         )
         req.add_unredirected_header("x-api-key", self.options.key().reveal())
         timeout = default_tuning().study.turn_timeout_seconds
+
+        def once() -> tuple[str, list[dict[str, Any]], Usage]:
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                    request_id = resp.headers.get("request-id")
+                    return self._read_stream(resp, request_id)
+            except urllib.error.HTTPError as exc:
+                text = redact(exc.read().decode("utf-8", "replace"))
+                message = f"Anthropic refused the call: {_error_message(text) or f'HTTP {exc.code}'}"
+                if exc.code in RETRY_STATUSES:
+                    raise Retryable(message, retry_after=exc.headers.get("retry-after")) from exc
+                raise RuntimeError(message) from exc
+            except urllib.error.URLError as exc:
+                raise Retryable(f"couldn't reach {self.options.base_url}: {exc.reason}") from exc
+
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                request_id = resp.headers.get("request-id")
-                return self._read_stream(resp, request_id)
-        except urllib.error.HTTPError as exc:
-            text = redact(exc.read().decode("utf-8", "replace"))
-            message = _error_message(text) or f"HTTP {exc.code}"
-            raise RuntimeError(f"Anthropic refused the call: {message}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"couldn't reach {self.options.base_url}: {exc.reason}") from exc
+            return with_retries("Anthropic", once)
+        except Retryable as exc:
+            raise RuntimeError(f"{exc} (gave up after {RETRY_ATTEMPTS} attempts)") from exc
 
     def _read_stream(self, resp: Any, request_id: str | None) -> tuple[str, list[dict[str, Any]], Usage]:
         text: list[str] = []

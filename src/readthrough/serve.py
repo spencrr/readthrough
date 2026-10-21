@@ -120,6 +120,12 @@ class Dashboard:
         self._start_delay = 0.0
         self.engine = StudyEngine(cfg, self._engine_event, self.pr_info, lambda: self.snapshot().get("components", []))
 
+    def reconfigure(self, cfg: Config) -> None:
+        """A fresh Config for the same repo after config.toml changed: the threads read ``self.cfg`` on each
+        pass, and the study engine (and through it the assistant) must see the same one."""
+        self.cfg = cfg
+        self.engine.reconfigure(cfg)
+
     def _engine_event(self, event: str, data: Any) -> None:
         # Keep the payload's per-PR summary current so a page reload shows the latest progress.
         if event == "study" and data.get("type") == "entry":
@@ -731,7 +737,7 @@ class DashboardServer(ThreadingHTTPServer):
                 self._add(dashboard)
                 dashboard.start(build_now=not dashboard.load())
             else:
-                current[key].cfg = cfg
+                current[key].reconfigure(cfg)
 
     def watch_config(self, stop: threading.Event) -> None:
         if self._settings_loader is None:

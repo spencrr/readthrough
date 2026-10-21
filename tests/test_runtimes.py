@@ -120,6 +120,36 @@ def test_registry_lists_the_runtimes_and_resolves_auto(monkeypatch: pytest.Monke
     )
 
 
+def test_retry_waits_are_bounded_jittered_and_honour_retry_after():
+    """Seeded: the jitter has its own generator, so the distribution is checked with a stated margin."""
+    import random
+    import statistics
+
+    rng = random.Random(7)
+    waits = [runtimes.retry_wait(1, None, rng) for _ in range(2000)]
+    assert all(2.0 <= w <= 2.5 for w in waits), "first wait: the backoff plus up to a quarter of itself"
+    assert abs(statistics.mean(waits) - 2.25) < 0.02, "uniform jitter: the mean sits at the middle"
+    assert runtimes.retry_wait(2, None, rng) >= 4.0 and runtimes.retry_wait(9, None, rng) == 30.0
+    assert runtimes.retry_wait(1, "12", rng) == 12.0 and runtimes.retry_wait(1, "9999", rng) == 30.0
+    assert 2.0 <= runtimes.retry_wait(1, "Wed, 21 Oct 2026 07:28:00 GMT", rng) <= 2.5, "an HTTP-date: backoff"
+    assert runtimes.retry_wait(1, "-3", rng) == 0.0
+
+    attempts: list[int] = []
+    slept: list[float] = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise runtimes.Retryable("busy", retry_after="1")
+        return "ok"
+
+    assert runtimes.with_retries("x", flaky, sleep=slept.append) == "ok" and slept == [1.0, 1.0]
+    attempts.clear()
+    with pytest.raises(runtimes.Retryable, match="busy"):
+        runtimes.with_retries("x", flaky, sleep=slept.append, attempts=2)
+    assert len(slept) == 3, "the last attempt is raised, not slept on"
+
+
 # ---------------------------------------------------------------- anthropic
 
 
@@ -254,8 +284,13 @@ def test_anthropic_tool_failures_go_back_to_the_model_and_refusals_end_the_turn(
         (200, {}, _anthropic_turn(None, [("toolu_1", "get_diff", {"path": "../x"}), ("toolu_2", "nope", {})])),
         (200, {}, _anthropic_turn("Fine.", [])),
         (429, {"retry-after": "7"}, []),
+        (529, {}, []),
+        (200, {}, _anthropic_turn("Back.", [])),
+        (401, {}, []),
     ])  # fmt: skip
     monkeypatch.setattr("readthrough.runtimes.anthropic.urllib.request.urlopen", http)
+    slept: list[float] = []
+    monkeypatch.setattr(runtimes.time, "sleep", slept.append)
     runtime = AnthropicRuntime(AnthropicOptions())
     session = asyncio.run(runtime.open(_conversation(_tools([]))))
     events = asyncio.run(_collect(session, "go"))
@@ -266,8 +301,14 @@ def test_anthropic_tool_failures_go_back_to_the_model_and_refusals_end_the_turn(
     )
     assert events[-1] == Event("done", text="Fine.")
 
+    # A rate limit and an overload are retried, waiting what the provider asked for when it said; a bad key
+    # is not: there is no point asking again, and the learner should see why at once.
     events = asyncio.run(_collect(session, "again"))
+    assert events[-1] == Event("done", text="Back.") and len(http.requests) == 5
+    assert slept[0] == 7.0 and 4.0 <= slept[1] <= 5.0
+    events = asyncio.run(_collect(session, "once more"))
     assert events == [Event("error", text="Anthropic refused the call: rate_limit_error: slow down")]
+    assert len(http.requests) == 6 and len(slept) == 2
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     assert AnthropicOptions().can_run() == (False, "the anthropic runtime needs an API key in ANTHROPIC_API_KEY")
 
@@ -425,6 +466,7 @@ def test_openai_on_azure_uses_the_deployment_and_entra_or_key(monkeypatch: pytes
     assert http.requests[1][1]["api-key"] == "k-secret" and "authorization" not in http.requests[1][1]
     events = asyncio.run(_collect(session, "again"))
     assert events[0].kind == "error" and "refused the call" in events[0].text
+    assert len(http.requests) == 3, "a 404 is not retried"
     with pytest.raises(ValueError, match="Azure endpoints only"):
         OpenAIOptions(entra=True)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

@@ -174,6 +174,54 @@ def test_the_assistant_is_built_from_config(cfg):
     assert engine.resolved == assistants.Resolved("rules", True, "")
 
 
+def test_reconfigure_keeps_the_assistant_unless_it_was_built_differently(cfg, tmp_path: Path):
+    """config.toml changing under the server: a clone added after the first turn failed for want of one must
+    reach the assistant without a restart; a different assistant or runtime replaces it, but not mid-turn."""
+    assistant = RecordingAssistant()
+    engine = _engine(cfg, None, assistant)
+    assert engine.assistant is assistant and engine.cfg.clone == tmp_path / "clone"
+
+    with_clone = Config(home=cfg.home, repo="o/r", clone=tmp_path / "elsewhere", assistant="rules")
+    engine.reconfigure(with_clone)
+    assert engine.assistant is assistant, "the assistant reads the clone through the engine"
+    assert assistant.harness is engine and engine.cfg.clone == tmp_path / "elsewhere"
+
+    engine._busy.add(7)  # a turn is running on the old one
+    other = Config(home=cfg.home, repo="o/r", clone=tmp_path / "elsewhere", assistant="rules", runtime="openai")
+    engine.reconfigure(other)
+    assert engine._assistant is None and not assistant.stopped, "replaced, but not stopped under a running turn"
+    asyncio.run(engine._turn(assistants.Turn(7, "chat", "hello", None, "hello")))
+    assert assistant.stopped, "stopped once the turn ended"
+    assert isinstance(engine.assistant, assistants.RulesAssistant) and engine.assistant is not assistant
+
+
+def test_submit_claims_a_pr_atomically(cfg, monkeypatch: pytest.MonkeyPatch):
+    """Two handler threads (a double-click, two tabs) must not both start a turn on one PR."""
+    import threading
+
+    engine = _engine(cfg, [], RecordingAssistant(), pr_info=lambda n: {"number": n})
+    monkeypatch.setattr(engine_mod.asyncio, "run_coroutine_threadsafe", lambda coro, loop: coro.close())
+    monkeypatch.setattr(engine, "_ensure_loop", lambda: None)
+    gate = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def go():
+        gate.wait()
+        try:
+            engine.submit(7, "chat", "hello")
+            outcomes.append("started")
+        except Busy:
+            outcomes.append("busy")
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["busy", "started"]
+    assert sum(e["kind"] == "chat" for e in study.load(cfg, 7)) == 1, "the loser's message was not logged"
+
+
 def test_public_entry_hides_question_answers():
     question = {"kind": "question", "qid": "Q1", "question": "Why?", "expected_points": ["secret"]}
     assert "expected_points" not in public_entry(question, [])
