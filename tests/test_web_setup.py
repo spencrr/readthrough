@@ -78,6 +78,9 @@ def test_accept_needs_a_profile_that_passes(service):
     assert ado["access"].startswith("the Azure DevOps REST API") and ado["credentials"][0].startswith(
         "AZURE_DEVOPS_EXT_PAT"
     )
+    # ...and which model runtime would draft and study, so "Draft with a model" names it or says why it can't.
+    assert set(state["runtime"]) == {"name", "available", "reason", "describe"}
+    assert state["runtime"]["available"] == bool(state["runtime"]["describe"])
     assert "never prompts" in ado["credentials"][1]
     # ...and, for an onboarded repo, which one is in use right now.
     assert state["repo"]["auth"] == "gh (active account)"
@@ -197,11 +200,18 @@ def test_setup_jobs_cover_draft_preview_and_errors(service, monkeypatch):
     source_job = svc.post("/api/setup/draft", {"repo": "o/app", "mode": "source"})["job"]
     assert svc.job(source_job)["result"]["toml"] == job["result"]["toml"]
 
-    from readthrough import onboard_copilot
+    from readthrough import onboard_model, runtimes
 
-    monkeypatch.setattr(onboard_copilot, "copilot_draft", lambda cfg, forge, facts, on_progress: job["result"]["toml"])
-    copilot_job = svc.start_draft({"repo": "o/app", "mode": "copilot"})["job"]
-    assert svc.job(copilot_job)["log"][0] == "Copilot is reading the repo. This takes a few minutes."
+    monkeypatch.setattr(onboard_model, "model_draft", lambda cfg, forge, facts, on_progress: job["result"]["toml"])
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("anthropic", False, "no key"))
+    failed = svc.start_draft({"repo": "o/app", "mode": "model"})["job"]
+    assert svc.job(failed)["error"] == "Drafting with a model needs a model runtime: no key."
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("anthropic", True, ""))
+    model_job = svc.start_draft({"repo": "o/app", "mode": "model"})["job"]
+    assert svc.job(model_job)["log"][0] == (
+        "The model is reading the repo (Anthropic Messages API at https://api.anthropic.com (claude-sonnet-5-5)). "
+        "This takes a few minutes."
+    ), "the page says which model reads the repo before it starts"
 
     with pytest.raises(SetupError, match="mode must be"):
         svc.start_draft({"repo": "o/app", "mode": "unknown"})

@@ -52,7 +52,7 @@ diff_cache_days = 14
 timeout_seconds = 300
 
 [server]
-# Seconds between checks for changes made outside the server (CLI builds, ledger edits, Copilot sessions).
+# Seconds between checks for changes made outside the server (CLI builds, ledger edits, agent sessions).
 watch_seconds = 3.0
 # Seconds between keep-alive messages on the dashboard's live connection.
 keepalive_seconds = 15.0
@@ -116,15 +116,15 @@ line_heuristic_code_chars = 160
 [study]  # per repo
 # Seconds before a study-assistant turn is abandoned.
 turn_timeout_seconds = 600
-# The most text one of the study assistant's tools returns to Copilot.
+# The most text one of the study assistant's tools returns to the model.
 max_tool_output_chars = 60000
-# The same two limits for Copilot-assisted onboarding, plus how much of each doc it's shown up front.
+# The same two limits for model-assisted onboarding, plus how much of each doc the model is shown up front.
 onboarding_turn_timeout_seconds = 900
 onboarding_tool_output_chars = 30000
 onboarding_doc_excerpt_chars = 8000
 
 [sessions]
-# Seconds between scans for new Copilot sessions to link to their PRs.
+# Seconds between scans for new agent sessions (Copilot CLI, Claude Code) to link to their PRs.
 scan_seconds = 5.0
 # How far into a session's event log to look for its first message.
 first_message_bytes = 512000

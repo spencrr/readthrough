@@ -72,6 +72,10 @@ class AnthropicRuntime:
         self.options: AnthropicOptions = options if isinstance(options, AnthropicOptions) else AnthropicOptions()
         self._conversations: dict[str, AnthropicSession] = {}
 
+    @property
+    def model(self) -> str | None:
+        return self.options.model
+
     def describe(self) -> str:
         return f"Anthropic Messages API at {self.options.base_url} ({self.options.model})"
 

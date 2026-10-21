@@ -8,7 +8,7 @@ same single-file dashboard as a static build, plus a small API (paths relative t
     GET  /api/events          Server-Sent Events: data, ledger, sessions, status, study
     GET  /api/study/<n>       the PR's study log;  GET /api/brief/<n>  its brief
     POST /api/refresh         rebuild now
-    POST /api/review/<n>      start or resume the Copilot review session for a PR
+    POST /api/review/<n>      start or resume the deep-review session for a PR
     POST /api/ledger/<n>      {"status": "understood" | "reviewed" | ... | null}
     POST /api/study/<n>[/ask] add to the study log, or ask the study assistant
 
@@ -254,7 +254,7 @@ class Dashboard:
                     self.rebuild()
 
     def watch_loop(self) -> None:
-        """Pick up changes made outside the server: `readthrough build`, `readthrough ledger`, Copilot sessions."""
+        """Pick up changes made outside the server: `readthrough build`, `readthrough ledger`, agent sessions."""
         while not self._stop.wait(self.cfg.tuning.server.watch_seconds):
             try:
                 self._watch_once()
@@ -324,12 +324,10 @@ class Dashboard:
 
     def study_state(self, number: int) -> dict[str, Any]:
         entries = study.load(self.cfg, number)
-        resolved = self.engine.resolved
-        engine = {"name": resolved.name, "available": resolved.available, "reason": resolved.reason}
         return {
             "entries": public_entries(entries),
             "summary": study.summarize(entries),
-            "engine": {**engine, "busy": self.engine.busy(number)},
+            "engine": {**self.engine.engine_info(), "busy": self.engine.busy(number)},
         }
 
     def add_study(self, number: int, body: dict[str, Any]) -> dict[str, Any]:

@@ -93,12 +93,17 @@ def harness(cfg, make_pull) -> Harness:
 def test_resolve_prefers_the_model_assistant_when_a_runtime_can_run(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("copilot", False, "no sdk"))
     assert assistants.resolve("auto") == assistants.Resolved("rules", True, "")
-    resolved = assistants.resolve("copilot")
-    assert resolved.name == "copilot" and not resolved.available and "no model to run on: no sdk" in resolved.reason
+    resolved = assistants.resolve("model")
+    assert resolved.name == "model" and not resolved.available and "no model to run on: no sdk" in resolved.reason
+    assert resolved.runtime == "copilot", "which runtime it would have run on, so the page can say what's missing"
     monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("anthropic", True, ""))
-    assert assistants.resolve("auto") == assistants.Resolved("copilot", True, "")
+    assert assistants.resolve("auto") == assistants.Resolved("model", True, "", runtime="anthropic")
+    assert assistants.resolve("rules").runtime is None
     with pytest.raises(RegistryError, match="did you mean 'rules'"):
         assistants.resolve("ruels")
+    # The old name of the model assistant resembles nothing, so the error lists what there is.
+    with pytest.raises(RegistryError, match=r"unknown study assistant 'copilot' \(one of: model, rules\)"):
+        assistants.resolve("copilot")
 
 
 def test_available_names_what_is_missing(monkeypatch: pytest.MonkeyPatch):
@@ -113,7 +118,7 @@ def test_available_names_what_is_missing(monkeypatch: pytest.MonkeyPatch):
             else (False, f"the {name} runtime needs an API key")
         ),
     )
-    ok, reason = assistants.available("copilot")
+    ok, reason = assistants.available("model")
     assert not ok and "install the [study] extra, or set an API key" in reason
     assert assistants.available("rules") == (True, "")
 
@@ -123,7 +128,7 @@ def test_make_builds_the_configured_assistant(harness, monkeypatch: pytest.Monke
     monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("fake", True, ""))
     monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
     assert isinstance(assistants.make(harness, "auto"), ModelAssistant)
-    assert [p.name for p in ASSISTANTS] == ["rules", "copilot"]
+    assert [p.name for p in ASSISTANTS] == ["rules", "model"]
 
 
 # ---------------------------------------------------------------- rules
@@ -257,6 +262,10 @@ class FakeRuntime:
     def describe(self) -> str:
         return "a fake runtime"
 
+    @property
+    def model(self) -> str | None:
+        return None
+
     async def open(self, conversation: runtimes.Conversation) -> FakeSession:
         self.opened.append(conversation)
         session = self.sessions.get(conversation.key)
@@ -307,7 +316,7 @@ def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runti
                                                     "assess_answer", "assess_teachback", "append_to_brief", "record_finding"]  # fmt: skip
     assert "The learner maintains Courier" in conversation.system
     last = study.load(harness.cfg, 7)[-1]
-    assert (last["kind"], last["by"], last["text"]) == ("chat", "copilot", "A reply")
+    assert (last["kind"], last["by"], last["runtime"], last["text"]) == ("chat", "model", "fake", "A reply")
     asyncio.run(assistant.turn(Turn(7, "chat", "again", None, "again")))
     assert session.sent[1] == "again", "the second turn is the prompt alone"
 
@@ -362,7 +371,7 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     entries = usage.load(harness.cfg)
     assert len(entries) == 1, "idempotent by call id"
     line = entries[0]
-    assert (line["id"], line["purpose"], line["ref"], line["by"]) == ("call-1", "study", "#7", "copilot")
+    assert (line["id"], line["purpose"], line["ref"], line["by"]) == ("call-1", "study", "#7", "model")
     assert line["billed_to"] == "copilot:spencrr" and line["via"] == "local"
     assert line["tokens"] == {"input": 1200, "output": 300, "cache_read": 800}, "unreported counts are absent, not 0"
     assert line["multiplier"] == 1.0 and line["nano_aiu"] == 1.5e9 and "usd" not in line
@@ -382,16 +391,14 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     assert usage.describe(summary) == "2 model calls, 1,515 tokens, 1.50 AIU, 1 calls with no price reported"
     assert usage.describe(usage.summarize([])) == "no model calls recorded"
     with pytest.raises(ValueError, match="price table"):
-        usage.record(
-            harness.cfg, call_id="x", purpose="study", ref="#1", model="m", billed_to="b", by="copilot", usd=1.0
-        )
+        usage.record(harness.cfg, call_id="x", purpose="study", ref="#1", model="m", billed_to="b", by="model", usd=1.0)
 
 
 def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkeypatch):
-    """The runtime reports the model with each call; what the assistant writes afterwards carries it, and the brief
-    says which model graded rather than just "Copilot"."""
+    """The runtime reports the model with each call; what the assistant writes afterwards carries it and the
+    runtime, and the brief says which model graded, through what, from the entries alone."""
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
-    study.append(harness.cfg, 7, "question", by="copilot", question="Why?")
+    study.append(harness.cfg, 7, "question", by="model", question="Why?")
     study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
     fake_runtime.script = [
         runtimes.Event("usage", usage=_usage(model="gpt-4.1")),
@@ -402,11 +409,13 @@ def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkey
     asyncio.run(ModelAssistant(harness, None).turn(Turn(7, "answer", "Because.", "Q1", "My answer")))
     entries = study.load(harness.cfg, 7)
     assert entries[-1]["model"] == "gpt-4.1" and entries[-1]["kind"] == "chat"
-    assert entries[-2]["model"] == "gpt-4.1" and entries[-2]["by"] == "copilot" and entries[-2]["kind"] == "assessment"
-    assert "assessed by gpt-4.1 (through Copilot)" in study.render_appendix(entries)
-    assert study.graders([{"kind": "assessment", "by": "copilot"}]) == "Copilot", (
-        "an older log, before models were recorded"
-    )
+    assert (entries[-2]["model"], entries[-2]["by"], entries[-2]["runtime"], entries[-2]["kind"]) == (
+        "gpt-4.1", "model", "fake", "assessment"
+    )  # fmt: skip
+    assert "assessed by gpt-4.1 via fake" in study.render_appendix(entries)
+    assert study.graders([{"kind": "assessment", "by": "model", "runtime": "openai"}]) == (
+        "a model not named in the log via openai"
+    ), "a runtime that reported no model: say so rather than guess"
     assert study.graders([]) == "nobody"
 
 
@@ -446,7 +455,7 @@ def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkey
     assert asyncio.run(tools["append_to_brief"].handler({"text": "note"})) == "Appended."
     assert asyncio.run(tools["record_finding"].handler({"severity": "minor", "summary": "s"})) == "Recorded."
     assert [e["kind"] for e in study.load(harness.cfg, 7)] == ["question", "note", "finding"]
-    assert all(e["by"] == "copilot" for e in study.load(harness.cfg, 7))
+    assert all(e["by"] == "model" and e["runtime"] == "fake" for e in study.load(harness.cfg, 7))
     for spec in tools.values():
         schema = runtimes.tool_schema(spec)
         assert schema["type"] == "object" and "properties" in schema

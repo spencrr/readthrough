@@ -103,6 +103,7 @@ class SetupService:
             "repos": [{**_repo_view(c), "cli_name": n} for n, c in zip(settings.names(), settings.all(), strict=True)],
             "accounts": signed_in_accounts(),
             "forges": [_forge_view(name) for name in forges.names()],
+            "runtime": _runtime_view(settings),
         }
         if repo:
             forge_name, repo = _locator(repo, forge)
@@ -211,8 +212,8 @@ class SetupService:
         forge_name, repo = _locator(body.get("repo"), body.get("forge"))
         account = _account(body.get("account"), forge_name)
         mode = body.get("mode", "plain")
-        if mode not in ("plain", "copilot", "source"):
-            raise SetupError("mode must be plain, copilot, or source")
+        if mode not in ("plain", "model", "source"):
+            raise SetupError("mode must be plain, model, or source")
         clone = _clone_path(body.get("clone"))
         remote = _remote(body.get("remote"))
         version = body.get("version")
@@ -226,11 +227,16 @@ class SetupService:
                 text = view["profile_text"]
                 if not text:
                     raise SetupError("There's no existing profile for this repo; draft one instead.")
-            elif mode == "copilot":
-                from readthrough.onboard_copilot import copilot_draft
+            elif mode == "model":
+                from readthrough import runtimes
+                from readthrough.onboard_model import model_draft
 
-                say("Copilot is reading the repo. This takes a few minutes.")
-                text = copilot_draft(cfg, forge, facts, on_progress=say)
+                name, ok, why = runtimes.resolve(cfg.runtime, cfg.runtime_options)
+                if not ok:
+                    raise SetupError(f"Drafting with a model needs a model runtime: {why}.")
+                engine = runtimes.make(name, cfg.runtime_options).describe()
+                say(f"The model is reading the repo ({engine}). This takes a few minutes.")
+                text = model_draft(cfg, forge, facts, on_progress=say)
             else:
                 say("Drafting from the file tree, CODEOWNERS, docs, and recent PRs")
                 text = onboard.draft_profile(facts, title=cfg.repo.rsplit("/", 1)[-1])
@@ -589,6 +595,16 @@ def _forge_view(name: str) -> dict[str, Any]:
         "access": adapter.access,
         "credentials": list(adapter.credentials),
     }
+
+
+def _runtime_view(settings: Settings) -> dict[str, Any]:
+    """The model runtime drafting and studying would use: its name, whether it can run (and why not), and its
+    own description, so the page can say which model reads the repo before the user asks it to."""
+    from readthrough import runtimes
+
+    name, ok, why = runtimes.resolve(settings.runtime, settings.runtime_options)
+    describe = runtimes.make(name, settings.runtime_options).describe() if ok else ""
+    return {"name": name, "available": ok, "reason": why, "describe": describe}
 
 
 def _repo_view(cfg: Config) -> dict[str, Any]:

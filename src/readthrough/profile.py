@@ -25,7 +25,11 @@ from readthrough.rules import glob_to_regex
 
 SCHEMA = 1
 FALLBACK = "other"
-DRAFTERS = ("readthrough", "copilot")  # who wrote the first draft; shown so readers know what to double-check
+# Who wrote the first draft, shown so readers know what to double-check: readthrough's heuristics from the file
+# tree, or a model (the header comment names which). Older profiles say "copilot", the drafter's former name;
+# it's read as "model".
+DRAFTERS = ("readthrough", "model")
+LEGACY_DRAFTERS = {"copilot": "model"}
 KINDS = ("risk", "blocker", "convention", "responsibility", "correctness", "info", "author", "you")
 DEFAULT_ASSOCIATION = {
     "OWNER": "internal",
@@ -457,7 +461,8 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         raise fail(f"unknown top-level key(s): {', '.join(sorted(unknown))}")
     if raw.get("schema") != SCHEMA:
         raise fail(f"schema must be {SCHEMA} (got {raw.get('schema')!r})")
-    if raw.get("drafted_by") not in (None, *DRAFTERS):
+    drafted_by = LEGACY_DRAFTERS.get(raw.get("drafted_by"), raw.get("drafted_by"))
+    if drafted_by not in (None, *DRAFTERS):
         raise fail(f"drafted_by must be one of {', '.join(DRAFTERS)}")
     repo = raw.get("repo")
     # The repo's path on its forge: owner/name on most, group/subgroup/project on GitLab, org/project/repo on
@@ -602,7 +607,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         overlap_ignore=strs(overlap.get("ignore"), "overlap.ignore"),
         overlap_non_source=strs(overlap.get("non_source"), "overlap.non_source"),
         authors=_parse_authors(raw.get("authors"), fail, table, strs, kind_of),
-        drafted_by=raw.get("drafted_by"),
+        drafted_by=drafted_by,
         origin=origin,
     )
 

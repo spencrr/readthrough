@@ -79,9 +79,7 @@ def test_submit_validates_inputs_and_schedules_a_turn(cfg, monkeypatch: pytest.M
 
 def test_submit_refuses_when_the_assistant_is_unavailable(cfg, monkeypatch: pytest.MonkeyPatch):
     engine = _engine(cfg)
-    monkeypatch.setattr(
-        assistants, "resolve", lambda name, **kw: assistants.Resolved("copilot", False, "needs the SDK")
-    )
+    monkeypatch.setattr(assistants, "resolve", lambda name, **kw: assistants.Resolved("model", False, "needs the SDK"))
     with pytest.raises(RuntimeError, match="needs the SDK"):
         engine.submit(7, "quiz")
 
@@ -89,7 +87,7 @@ def test_submit_refuses_when_the_assistant_is_unavailable(cfg, monkeypatch: pyte
 def test_record_and_prompt_covers_actions_and_validation(cfg):
     entries = []
     engine = _engine(cfg, entries)
-    study.append(cfg, 7, "question", by="copilot", question="Why?")
+    study.append(cfg, 7, "question", by="model", question="Why?")
 
     assert "assess_answer" in engine._record_and_prompt(7, "answer", "Because", "Q1")
     assert "assess_teachback" in engine._record_and_prompt(7, "teachback", "It changes routing", None)
@@ -172,6 +170,37 @@ def test_the_assistant_is_built_from_config(cfg):
     engine = _engine(cfg)
     assert isinstance(engine.assistant, assistants.RulesAssistant)
     assert engine.resolved == assistants.Resolved("rules", True, "")
+    assert engine.engine_info() == {
+        "name": "rules", "available": True, "reason": "", "runtime": None, "model": None, "describe": "",
+    }  # fmt: skip
+
+
+def test_engine_info_names_the_runtime_and_model_the_page_will_talk_to(cfg, monkeypatch: pytest.MonkeyPatch):
+    """The Study tab says what answers before anything is asked: the runtime, and the model when the runtime
+    names one up front (a repo's study_model wins). A failed turn is logged against the runtime, not a model."""
+    from readthrough import runtimes
+
+    class Engine:
+        name = "anthropic"
+        model = "claude-sonnet-5-5"
+
+        def describe(self):
+            return "Anthropic Messages API at https://api.anthropic.com (claude-sonnet-5-5)"
+
+    cfg.assistant = "model"
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("anthropic", True, ""))
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: Engine())
+    engine = _engine(cfg, [], RecordingAssistant(fail=RuntimeError("boom")))
+    info = engine.engine_info()
+    assert (info["runtime"], info["model"], info["describe"]) == ("anthropic", "claude-sonnet-5-5", Engine().describe())
+    cfg.study_model = "claude-opus-5-5"
+    assert engine.engine_info()["model"] == "claude-opus-5-5"
+
+    engine._busy.add(7)
+    asyncio.run(engine._turn(assistants.Turn(7, "chat", "hi", None, "hi")))
+    failure = study.load(cfg, 7)[-1]
+    assert (failure["kind"], failure["assistant"], failure["runtime"]) == ("failure", "model", "anthropic")
+    assert "model" not in {k for k in failure if k != "assistant"}, "no model is named: none answered"
 
 
 def test_reconfigure_keeps_the_assistant_unless_it_was_built_differently(cfg, tmp_path: Path):

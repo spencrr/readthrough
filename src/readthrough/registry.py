@@ -107,8 +107,12 @@ def _missing(options: type[Any], values: dict[str, Any]) -> str:
 
 
 def _suggest(name: str, options: Any) -> str:
+    """A typo gets its likely correction; a name nothing resembles (one that was renamed, say) gets the list."""
     close = difflib.get_close_matches(name, list(options), n=1)
-    return f" (did you mean {close[0]!r}?)" if close else ""
+    if close:
+        return f" (did you mean {close[0]!r}?)"
+    known = ", ".join(sorted(options))
+    return f" (one of: {known})" if known else ""
 
 
 def _coerce(where: str, hint: Any, value: Any, base: Path | None) -> Any:

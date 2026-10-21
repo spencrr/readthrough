@@ -64,7 +64,7 @@ function globalCard(){
 // ---- onboarding wizard
 function renderWizard(repo){
   const w = S.w ||= {repo: repo?.name || "", forge: repo?.forge || "github", account: repo?.account || "", clone: repo?.clone || "", remote: repo?.remote || "", info: null, cloneInfo: null, toml: repo?.profile_text || "", report: null, log: [], busy: false, editable: true, source: repo?.source || null};
-  const accounts = S.state.accounts, forges = S.state.forges, forge = forgeOf(w.forge);
+  const accounts = S.state.accounts, forges = S.state.forges, forge = forgeOf(w.forge), rt = S.state.runtime || {};
   const cli = `readthrough onboard ${w.repo || forge.shape.split(" ")[0]}${w.forge !== "github" ? ` --forge ${w.forge}` : ""}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
   const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? "✓" : n}</span>`;
   const info = w.info;
@@ -90,10 +90,10 @@ function renderWizard(repo){
     ${w.cloneInfo ? `<div class="msg ${w.cloneInfo.ok ? "ok" : ""}">${esc(w.cloneInfo.message)}</div>` : ""}${w.err2 ? `<div class="msg err">${esc(w.err2)}</div>` : ""}</div>
 
   <div class="card ${info ? "" : "dim"}"><h2>${step(3, !!w.toml)}Its architecture profile</h2>
-    <p class="sub">The map, the contracts in each PR's brief, and Copilot's questions all come from this. ${w.source ? `Found one: <b>${esc(w.source.label)}</b>.` : "There isn't one yet, so draft one."}</p>
+    <p class="sub">The map, the contracts in each PR's brief, and the quiz questions all come from this. ${w.source ? `Found one: <b>${esc(w.source.label)}</b>.` : "There isn't one yet, so draft one."}</p>
     <div class="row">${w.source ? `<button class="btn primary" data-act="draft" data-mode="source" ${w.busy ? "disabled" : ""}>Use ${w.source.kind === "shared" ? "the shared" : w.source.kind === "repo" ? "the repo's" : "the existing"} profile</button>` : ""}
       <button class="btn ${w.source ? "" : "primary"}" data-act="draft" data-mode="plain" ${w.busy ? "disabled" : ""}>${icon("layers", "ico sm")}Draft from the file tree</button>
-      <button class="btn" data-act="draft" data-mode="copilot" ${w.busy ? "disabled" : ""} title="Copilot reads the code and docs and proposes a profile; each proposal is checked like Accept does">${icon("sparkles", "ico sm")}Draft with Copilot</button>
+      <button class="btn" data-act="draft" data-mode="model" ${w.busy || !rt.available ? "disabled" : ""} title="${esc(rt.available ? `${rt.describe} reads the code and docs and proposes a profile; each proposal is checked like Accept does` : rt.reason)}">${icon("sparkles", "ico sm")}Draft with a model${rt.available ? ` <span class="muted">(${esc(rt.name)})</span>` : ""}</button>
       ${w.busy ? '<span class="spin"></span>' : ""}</div>
     ${w.log.length ? `<div class="log" id="w-log">${w.log.map(l => `<div>${esc(l)}</div>`).join("")}</div>` : ""}${w.err3 ? `<div class="msg err">${esc(w.err3)}</div>` : ""}</div>
 
@@ -176,7 +176,7 @@ function renderSettings(repo){
   <div class="card"><h2>${icon("list-checks")}Reviewing</h2>
     <div class="row"><label class="f">Session length (minutes)<input type="number" id="s-minutes" min="10" max="480" value="${repo.session_minutes}" style="width:110px"></label>
       <label class="f">Most PRs to fetch<input type="number" id="s-limit" min="1" max="500" value="${repo.limit}" style="width:110px"></label>
-      <label class="f">Study model<input type="text" id="s-model" value="${esc(repo.study_model || "")}" placeholder="Copilot's default" style="min-width:200px"></label></div>
+      <label class="f">Study model<input type="text" id="s-model" value="${esc(repo.study_model || "")}" placeholder="the runtime's default" style="min-width:200px"></label></div>
     <div class="row"><button class="btn primary" data-act="save-review">Save</button></div>
     ${S.msgReview ? `<div class="msg ${S.msgReview.ok ? "ok" : "err"}">${esc(S.msgReview.text)}</div>` : ""}</div>
   ${editorCard(e, "e", {editable: e.editable})}

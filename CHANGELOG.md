@@ -75,6 +75,21 @@
 
 ### Changed
 
+- The study assistant that reads the code is named for what it is, a **model**, not for GitHub Copilot, which
+  is now one of three runtimes it can run on. `assistant = "model"` in `config.toml` (the old `"copilot"` is
+  refused with the list of names); the log's `by` is `model`, and every entry the model writes also records
+  the `runtime` that carried it next to the `model` the runtime reported, so the brief says "assessed by
+  gpt-4.1 via openai" from the entry itself and switching runtimes never relabels an old grade. Logs written
+  before this say `by: copilot`, the assistant's former name; they're read as `model` without touching the
+  file, and with no runtime claimed, since they never recorded one. The Study tab labels each reply with the
+  model that wrote it, says what will answer next (the configured model, or the runtime when GitHub Copilot
+  picks per call),
+  and names a failed turn by its runtime rather than a model that never answered; "Study with Copilot" is
+  "Study". Model-assisted onboarding is `readthrough onboard --assisted` (was `--copilot`) and the setup page's
+  **Draft with a model**, which names the runtime it would use or says why none can run; a draft's
+  `drafted_by` is `model` (profiles saying `copilot` still load) and its first line names the model and
+  runtime. `readthrough study --by model` records a review agent's finding. A registry name that resembles
+  nothing (a renamed plugin, say) now gets the list of valid names in the error instead of no hint.
 - The config file is schema 2. Each repo's data lives under `repos/<forge>/<owner>/<name>/` (so
   `repos/github/microsoft/vscode/`), dashboard pages under `/r/<forge>/<owner>/<name>/`, and
   `readthrough://` links and the marker in Copilot prompts name repos the same way. There is no migration: move

@@ -146,12 +146,12 @@ def test_study_endpoints(live):
     assert json.loads(_request(port, R + "/api/brief/17185872")[1])["error"] == "No brief for #17185872"
     assert _request(port, R + "/api/brief/1234567890")[0] == 404, "ten digits is past any forge's numbering"
 
-    study.append(dashboard.cfg, 7, "question", by="copilot", question="Why?", expected_points=["secret"])
+    study.append(dashboard.cfg, 7, "question", by="model", question="Why?", expected_points=["secret"])
     state = json.loads(_request(port, R + "/api/study/7")[1])
     assert [e["kind"] for e in state["entries"]] == ["prediction", "question"]
     assert "expected_points" not in state["entries"][1]
     assert state["summary"]["predictions"] == 1
-    assert set(state["engine"]) == {"name", "available", "reason", "busy"}
+    assert set(state["engine"]) == {"name", "available", "reason", "busy", "runtime", "model", "describe"}
 
     assert _request(port, R + "/api/study/7/ask", method="POST", body={"action": "dance"}, headers=token)[0] == 400
     reflection = {"kind": "reflection", "text": "Missed the retry path", "qid": "Q1"}

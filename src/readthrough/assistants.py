@@ -2,12 +2,12 @@
 
 Two are built in, and ``assistant = "auto"`` in ``config.toml`` picks the first that works:
 
-* ``copilot`` is the Socratic assistant: one conversation per PR on whichever model runtime is configured
+* ``model`` is the Socratic assistant: one conversation per PR on whichever model runtime is configured
   (``runtime = ...``: the Copilot SDK, Anthropic, or OpenAI; see ``runtimes/``). The conversation runs in the
   PR's worktree but can't touch it: the only tools are read-only ones (``get_diff``, ``read_file``,
   ``search_code``) and append-only ones that write to the study log (``ask_quiz_question``,
   ``assess_answer``, ``assess_teachback``, ``append_to_brief``, ``record_finding``). It grades answers
-  against the code, and each entry it writes names the model that reached it.
+  against the code, and each entry it writes names the model that reached it and the runtime that carried it.
 * ``rules`` needs nothing installed. It asks the questions the repo's profile already carries (the
   always-questions, each touched component's questions, the author-kind questions, and one per signal),
   points at files for hints, and assembles a briefing from the PR's metadata. It never grades: there is no
@@ -72,7 +72,9 @@ class Assistant(Protocol):
 
 AssistantFactory = Callable[[Harness, Any], Assistant]
 ASSISTANTS: Registry[AssistantFactory] = Registry("study assistant")
-AUTO_ORDER = ("copilot", "rules")
+MODEL_BY = study.MODEL  # the name the Socratic assistant writes under, whichever runtime carries it
+RULES_BY = study.RULES
+AUTO_ORDER = (MODEL_BY, RULES_BY)
 
 
 @dataclass(frozen=True)
@@ -80,11 +82,12 @@ class Resolved:
     name: str
     available: bool
     reason: str  # why it isn't available, or ""
+    runtime: str | None = None  # the model runtime the assistant would run on, when it runs on one
 
 
 def available(name: str, *, runtime: str = AUTO, runtime_options: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Whether ``name`` can run here. The model assistant can when some model runtime can."""
-    if name == "copilot":
+    if name == MODEL_BY:
         _, ok, why = runtimes.resolve(runtime, runtime_options)
         return ok, ("" if ok else f"The study assistant has no model to run on: {why}.")
     return True, ""
@@ -92,19 +95,31 @@ def available(name: str, *, runtime: str = AUTO, runtime_options: dict[str, Any]
 
 def resolve(name: str = AUTO, *, runtime: str = AUTO, runtime_options: dict[str, Any] | None = None) -> Resolved:
     """Which assistant ``name`` means right now. ``auto`` is the first available one, the model assistant first."""
+
+    def resolved(candidate: str, ok: bool, why: str) -> Resolved:
+        engine = runtimes.resolve(runtime, runtime_options)[0] if candidate == MODEL_BY else None
+        return Resolved(candidate, ok, why, engine)
+
     if name != AUTO:
         ASSISTANTS.get(name)
-        return Resolved(name, *available(name, runtime=runtime, runtime_options=runtime_options))
+        return resolved(name, *available(name, runtime=runtime, runtime_options=runtime_options))
     for candidate in AUTO_ORDER:
         ok, _ = available(candidate, runtime=runtime, runtime_options=runtime_options)
         if ok:
-            return Resolved(candidate, True, "")
+            return resolved(candidate, True, "")
     return Resolved(AUTO_ORDER[-1], False, "no study assistant is available")
 
 
-def make(harness: Harness, name: str, options: dict[str, Any] | None = None) -> Assistant:
+def make(
+    harness: Harness,
+    name: str,
+    options: dict[str, Any] | None = None,
+    *,
+    runtime: str = AUTO,
+    runtime_options: dict[str, Any] | None = None,
+) -> Assistant:
     """Build the configured assistant. ``options`` maps assistant names to validated options objects."""
-    resolved = resolve(name)
+    resolved = resolve(name, runtime=runtime, runtime_options=runtime_options)
     factory = ASSISTANTS.get(resolved.name)
     opts = (options or {}).get(resolved.name) or ASSISTANTS.defaults_for(resolved.name)
     return factory.impl(harness, opts)
@@ -122,11 +137,11 @@ class BankQuestion:
     reference: str = ""  # shown once, after the group's last question has been answered
 
 
-RULES_BY = "rules"
 CANT_DISCUSS = (
     "I'm the rules-based assistant: I can quiz you from the profile's questions, assemble a briefing, and "
-    "point you at files, but I can't discuss the code. For a conversation that reads the diff, install "
-    "readthrough with the [study] extra, which brings GitHub Copilot."
+    "point you at files, but I can't discuss the code. For a conversation that reads the diff, give "
+    "readthrough a model: install the [study] extra for GitHub Copilot, or set an API key for Claude or "
+    "OpenAI (`runtime` in config.toml; `readthrough doctor` shows what it found)."
 )
 SIGNAL_KINDS = ("risk", "blocker", "responsibility", "correctness", "convention")
 
@@ -325,8 +340,6 @@ ASSISTANTS.add("rules", "the profile's own questions, hints, and briefing; no mo
 
 # ---------------------------------------------------------------- model: the Socratic assistant on a runtime
 
-MODEL_BY = "copilot"  # the name assistants on a model runtime write under; kept so older logs keep their meaning
-
 SYSTEM_MESSAGE = """\
 You are the study assistant inside readthrough. You help a maintainer of {repo} genuinely understand one
 pull request before they review it. Your job is to make them think, not to think for them.
@@ -411,10 +424,13 @@ class ModelAssistant:
             self._write(turn.number, "chat", role="assistant", text=text.strip())
 
     def _write(self, number: int, kind: str, **fields: Any) -> dict[str, Any]:
-        """Append in the assistant's name, recording which model wrote it. ``by`` says who ran the conversation
-        (this assistant); ``model`` says whose judgement it is, which is what a verdict's weight depends on."""
+        """Append in the assistant's name. ``by`` says what kind of author this is; ``model`` says whose
+        judgement it is (what a verdict's weight depends on), when the runtime has reported one; ``runtime``
+        says which runtime carried the conversation."""
         model = self._model_in_use.get(number)
-        return self.h.append(number, kind, by=MODEL_BY, **({"model": model} if model else {}), **fields)
+        return self.h.append(
+            number, kind, by=MODEL_BY, runtime=self.runtime.name, **({"model": model} if model else {}), **fields
+        )
 
     async def _send(self, number: int, session: runtimes.Session, prompt: str) -> str:
         parts = self._pending[number] = []
@@ -667,6 +683,6 @@ def _clip(text: str, *, limit: int) -> str:
 
 
 ASSISTANTS.add(
-    "copilot",
+    MODEL_BY,
     "a Socratic assistant that reads the code and grades answers, on the configured model runtime (needs a runtime)",
 )(ModelAssistant)

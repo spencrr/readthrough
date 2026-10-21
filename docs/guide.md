@@ -6,7 +6,7 @@ There are two ways to run it. The **live dashboard** is a small local server tha
 
 ## Setting it up
 
-Install it as a uv tool so `readthrough` is on your PATH. `[study]` adds the Copilot SDK, which the Copilot study assistant and Copilot-assisted onboarding need. Leave it off if you don't want those: the dashboard, briefs, deep reviews, and the rules-based study assistant all work on the standard library alone.
+Install it as a uv tool so `readthrough` is on your PATH. `[study]` adds the Copilot SDK, one of the model runtimes the study assistant and model-assisted onboarding can run on; the Anthropic and OpenAI runtimes need nothing installed, only an API key (see [Studying a PR](#studying-a-pr)). Leave it off if you don't want a model at all: the dashboard, briefs, deep reviews, and the rules-based study assistant all work on the standard library alone.
 
 ```sh
 uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"
@@ -42,7 +42,7 @@ With the live server running, open <http://127.0.0.1:8765/setup>, or pick **+ On
 
 1. **Which repo?** Pick where it lives (GitHub unless you say otherwise), type its name (`owner/name`; `organization/project/repository` on Azure DevOps), pick the gh account that can see it if you have more than one, and check access. The step says, for the forge you picked, what it will be read through (the `gh` CLI for GitHub; the platform's REST API elsewhere) and where the credential comes from, in the order tried (`AZURE_DEVOPS_EXT_PAT`, then `az`, then anonymously, on Azure DevOps), and after the check, which one was actually used. readthrough stores no token and never prompts you to sign in; when it has no credential, `doctor` says what to run.
 2. **Your local clone.** It guesses from `~/src` and `~/repos`; check it, and pick the remote PRs should be fetched through.
-3. **Its architecture profile.** Use one that already exists (the repo's own `readthrough.toml`, or one from a shared profile directory), draft one from the file tree, or have Copilot draft one. Progress shows as it runs.
+3. **Its architecture profile.** Use one that already exists (the repo's own `readthrough.toml`, or one from a shared profile directory), draft one from the file tree, or have a model draft one (the button names the runtime it would use). Progress shows as it runs.
 4. **Check it, edit it, accept it.** The profile's TOML is on the left, and the report on the right re-checks as you type: coverage against recent PRs, anything blocking acceptance, the paths that aren't mapped yet (each with a **+ component** button that adds a stub for it), the busiest components, and how recent authors classify, with an override for anyone who's wrong. **Preview the map** opens the dashboard as it would look, without touching anything live. **Accept and start** finishes, and the server starts serving the repo straight away.
 
 Each step shows the matching terminal command.
@@ -78,17 +78,17 @@ readthrough onboard pallets/click --accept
 
 `--force` accepts despite problems, if you know better.
 
-### Letting Copilot draft it
+### Letting a model draft it
 
 The plain draft is mechanical: it turns directories into components. That's fine for repos laid out by responsibility and poor for everything else. Click, for instance, keeps its whole library in one flat `src/click/` folder, so the plain draft gives you a single "Click" component.
 
 ```powershell
-readthrough onboard pallets/click --copilot
+readthrough onboard pallets/click --assisted
 ```
 
-This starts a Copilot session (through the Copilot SDK, under your Copilot account) that reads the repo and writes the profile itself. It can list directories, read files, search the code, check which files a pattern matches, and propose a profile. Every proposal goes through the same checks as `--accept`, and the results go back to Copilot so it can fix what's wrong. It can't edit anything or run commands. For click, it split the package into eleven components across six layers (the decorator API, the command model, argv parsing, types, terminal UI, help formatting, completion, and so on), with `does_not_own` notes that name the neighbouring component, and then told me which split it was least sure of.
+This starts a conversation on the configured model runtime (`runtime` in `config.toml`: GitHub Copilot through the Copilot SDK, or Claude or OpenAI through their APIs; see [Studying a PR](#studying-a-pr)) that reads the repo and writes the profile itself. It can list directories, read files, search the code, check which files a pattern matches, and propose a profile. Every proposal goes through the same checks as `--accept`, and the results go back to the model so it can fix what's wrong. It can't edit anything or run commands. For click, Copilot split the package into eleven components across six layers (the decorator API, the command model, argv parsing, types, terminal UI, help formatting, completion, and so on), with `does_not_own` notes that name the neighbouring component, and then told me which split it was least sure of.
 
-Read what it wrote anyway. It only writes responsibilities it could back up from the code or docs, but it's still a draft, and you're the one who'll be relying on it. The previous profile is kept next to it with a timestamp.
+Read what it wrote anyway. It only writes responsibilities it could back up from the code or docs, but it's still a draft, and you're the one who'll be relying on it. The profile's first line says which model drafted it and through what, and its `drafted_by` key says `model`, so anyone reading the map later knows what to double-check. The previous profile is kept next to it with a timestamp.
 
 [Writing a profile](profiles.md) explains each part of the file and how to make a good one.
 
@@ -196,21 +196,22 @@ The **Overlap graph** connects PRs that edit the same files, with each PR boxed 
 
 Clicking any PR opens a side panel. **Overview** has its signals, the description (rendered the way GitHub shows it), the contract for each component it touches, the repo's instruction files that apply, related PRs, unresolved review threads, and the files. **Study** is covered below. **Brief** shows the same study brief the deep review reads.
 
-### What's worked out by rules, and what Copilot wrote
+### What's worked out by rules, and what a model wrote
 
 Almost everything on the dashboard is computed, not generated:
 
 | What | Where it comes from |
 | --- | --- |
-| Lanes, CI, review state | GitHub |
+| Lanes, CI, review state | The forge |
 | Which component a file belongs to | The profile's path patterns (first match wins) |
-| Signals and line heuristics | GitHub facts, the profile's rules, and readthrough's own checks with thresholds from the profile |
+| Signals and line heuristics | Forge facts, the profile's rules, and readthrough's own checks with thresholds from the profile |
 | Contracts | Quoted from the repo's architecture doc, or written in the profile |
 | Plan, estimates, overlaps, related PRs | Arithmetic over the above |
-| The Study tab's conversation, review sessions | Copilot |
-| The profile itself | Whoever drafted it: readthrough's file-tree draft, Copilot, or a person (its `drafted_by` key says which) |
+| The Study tab's conversation | The model assistant (each entry names the model and the runtime), or the rules assistant from the profile's questions |
+| Review sessions | The review agent (the Copilot CLI or Claude Code) |
+| The profile itself | Whoever drafted it: readthrough's file-tree draft, a model (the file's first line says which), or a person (its `drafted_by` key says which) |
 
-Each signal shows a small icon for where it came from (GitHub, or a cog for a rule) and, on hover, the exact rule: the path pattern, the regex, or the threshold. The PR panel's Overview ends with the same summary, and the map's legend names the profile, who first drafted it, and when you accepted it. Anything Copilot wrote in the Study tab carries a ✦.
+Each signal shows a small icon for where it came from (the forge, or a cog for a rule) and, on hover, the exact rule: the path pattern, the regex, or the threshold. The PR panel's Overview ends with the same summary, and the map's legend names the profile, who first drafted it, and when you accepted it. Anything a model wrote in the Study tab carries a ✦ and the model's name.
 
 ### What the signals mean
 
@@ -251,7 +252,7 @@ To burn down a whole session, ask Copilot for "burn down session 2 of OWNER/NAME
 
 The deep review is a long, guided conversation in a terminal. The **Study** tab in the PR panel is the lighter version, right in the dashboard, for building understanding a question at a time. It needs the live dashboard.
 
-Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. The **model assistant** (named `copilot`, after its first engine) reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. It runs on whichever **model runtime** you have: the Copilot SDK (the `[study]` extra; GitHub Copilot through its sign-in, or a provider of your own), Anthropic's API with a key, or OpenAI's (OpenAI itself, or Azure OpenAI and Foundry with a key or an Entra sign-in). Without any of those, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when a runtime is available. The rest of this section describes the model assistant; the stages, the log, and the brief are the same for both.
+Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. The **model assistant** (`assistant = "model"`) reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. It runs on whichever **model runtime** you have: the Copilot SDK (the `[study]` extra; GitHub Copilot through its sign-in, or a provider of your own), Anthropic's API with a key, or OpenAI's (OpenAI itself, or Azure OpenAI and Foundry with a key or an Entra sign-in). Without any of those, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when a runtime is available. The rest of this section describes the model assistant; the stages, the log, and the brief are the same for both.
 
 The runtime is a machine-wide choice, `runtime = "auto" | "copilot" | "anthropic" | "openai"`, where `auto` takes the first that can run (the Copilot SDK when installed, else a runtime whose key is set). Each has a `[runtimes.NAME]` table; the key itself never goes in the config, only the name of the variable holding it:
 
@@ -274,7 +275,7 @@ model = "gpt-4.1"                                         # on Azure, the deploy
 entra = true                                              # Azure only: an Entra token from the signed-in az instead of a key
 ```
 
-A repo's `study_model` still wins over the runtime's model. With `entra = true` the token comes from `az` whenever a call needs one, which is how Azure OpenAI resources with key auth disabled by policy are reached. The study log records which model reached each verdict, and the brief names it ("assessed by gpt-4.1 (through Copilot)"), since a verdict's weight depends on who gave it. The onboarding drafter (`--copilot`, and the setup page's **Draft with Copilot**) runs on the same runtime, so it can draft with Claude or GPT too.
+A repo's `study_model` still wins over the runtime's model. With `entra = true` the token comes from `az` whenever a call needs one, which is how Azure OpenAI resources with key auth disabled by policy are reached. Every entry the assistant writes records the model that wrote it (as the runtime reported it) and the runtime that carried it, and the brief names them ("assessed by gpt-4.1 via openai"), since a verdict's weight depends on who gave it; both come from the entry, so changing runtimes never relabels an old grade. The onboarding drafter (`--assisted`, and the setup page's **Draft with a model**) runs on the same runtime, so it can draft with Claude or GPT too.
 
 Every model call, whoever pays for it, is one line in the repo's **usage ledger** (`usage.jsonl` in its data directory): the model, the tokens in the provider's own units, Copilot's premium-request multiplier and AI-credit consumption when it was Copilot, and who was billed (`copilot:<login>`, `anthropic:api.anthropic.com`, `azure:<resource host>`). Nothing is converted into anything else, and a quantity the provider didn't report is left out rather than written as zero. `readthrough doctor` sums the last thirty days per repo.
 ![The study tab after a quiz question was answered and assessed](img/study.webp)
@@ -282,16 +283,16 @@ Every model call, whoever pays for it, is one line in the repo's **usage ledger*
 It's one conversation with a single box underneath, and a small indicator at the top shows how far you've got: Predict, Quiz, Teach back. What the box does follows where you are:
 
 1. **Predict.** Until you've predicted, the box saves your prediction: what you expect the PR to touch, what's riskiest, and what test you'd want. You'll compare later, and it's kept as evidence. **Skip** goes straight on, and the log notes that you skipped.
-2. **Talk, quiz, or get briefed.** After that, the box sends messages: ask anything, or argue a point. **Quiz me** has Copilot read the diff and the surrounding code and ask one question about the intent, the control flow, which component should own what, the unhappy paths, or whether the tests would catch a regression. While a question is open, the box answers it, and **Hint** asks for a nudge. Copilot grades each answer *correct*, *partial*, or *incorrect* with file and line evidence, and for anything short of correct gives a hint rather than the answer; afterwards you can open "What a good answer covers". **Brief me** asks for a short summary of the change and the things most worth a reviewer's attention, with file and line references. It's there when you'd rather be oriented first, and the log records that you asked and whether it was before the quiz, so the evidence shows what you were told versus what you worked out. Also after the prediction, **What to look at** lists the PR's signals, line heuristics, the main component's contract, the biggest files, and the PRs it shares files with, all worked out by rules.
-3. **Teach back.** Write a few sentences explaining the whole PR as if briefing a teammate, and press **Teach back**: Copilot names the gaps.
+2. **Talk, quiz, or get briefed.** After that, the box sends messages: ask anything, or argue a point. **Quiz me** has the model read the diff and the surrounding code and ask one question about the intent, the control flow, which component should own what, the unhappy paths, or whether the tests would catch a regression. While a question is open, the box answers it, and **Hint** asks for a nudge. The model grades each answer *correct*, *partial*, or *incorrect* with file and line evidence, and for anything short of correct gives a hint rather than the answer; afterwards you can open "What a good answer covers". **Brief me** asks for a short summary of the change and the things most worth a reviewer's attention, with file and line references. It's there when you'd rather be oriented first, and the log records that you asked and whether it was before the quiz, so the evidence shows what you were told versus what you worked out. Also after the prediction, **What to look at** lists the PR's signals, line heuristics, the main component's contract, the biggest files, and the PRs it shares files with, all worked out by rules.
+3. **Teach back.** Write a few sentences explaining the whole PR as if briefing a teammate, and press **Teach back**: the model names the gaps.
 
-Tab moves from the box to its buttons, and Ctrl+Enter runs the main one. To keep something, **pin** any message, yours or Copilot's, and it goes into the brief.
+Tab moves from the box to its buttons, and Ctrl+Enter runs the main one. To keep something, **pin** any message, yours or the model's, and it goes into the brief. A line under the transcript says what's answering (the configured model, or the runtime when GitHub Copilot picks the model per call), and each reply is labelled with the model that actually wrote it.
 
-Everything you write and everything the assistant concludes goes into the PR's **study log**, an append-only record in the repo's `study/` folder. Nothing in it is ever edited or deleted, and every entry says who wrote it: you, Copilot, or the rules. When a turn fails (Copilot unreachable, the clone missing a commit), the log records that too, so a request without a reply is never mistaken for one you abandoned. Each answer is tagged, from the log itself, with whether a hint or a briefing came before it. The log is rendered as the last section of the brief, so the evidence travels with it: the terminal deep review reads it, and the **Brief** tab shows it. Your quiz score shows next to the PR in the plan and the table; with the rules assistant there is no score, only how many questions you answered and how many of those were unaided.
+Everything you write and everything the assistant concludes goes into the PR's **study log**, an append-only record in the repo's `study/` folder. Nothing in it is ever edited or deleted, and every entry says who wrote it: you, the model (and which model, through which runtime), or the rules. When a turn fails (the provider unreachable, the clone missing a commit), the log records that too, against the runtime rather than a model that never answered, so a request without a reply is never mistaken for one you abandoned. Each answer is tagged, from the log itself, with whether a hint or a briefing came before it. The log is rendered as the last section of the brief, so the evidence travels with it: the terminal deep review reads it, and the **Brief** tab shows it. Your quiz score shows next to the PR in the plan and the table; with the rules assistant there is no score, only how many questions you answered and how many of those were unaided.
 
-**What Copilot can do here.** Each PR gets its own Copilot session, separate from the deep-review session, that survives server restarts. It runs on the GitHub Copilot SDK under your Copilot account, in the PR's worktree, but with every built-in tool switched off and permission requests refused. It has eight tools of its own. Three read the code: the diff, a file, and a search. Five append to the study log: ask a question, assess an answer, assess a teach-back, add a note, record a finding.
+**What the model can do here.** Each PR gets its own conversation, separate from the deep-review session. On the Copilot SDK it lives in the CLI's session store and survives server restarts; on the API runtimes a restart starts a fresh conversation, which is handed the brief and so the study log's evidence. It runs in the PR's worktree, but with every built-in tool switched off and permission requests refused. It has eight tools of its own. Three read the code: the diff, a file, and a search. Five append to the study log: ask a question, assess an answer, assess a teach-back, add a note, record a finding.
 
-**Taking it into a deep review.** The study session and the deep-review session are separate on purpose: they have different tools and different rules (study can't edit or run anything), so resuming one as the other wouldn't fit. What carries over is the evidence. The study log's section of the brief starts with a **Handoff** line (solid on, revisit, unanswered, and teach-back gaps), and the deep review reads it first and spends its time on the weak spots. It can't edit files, run commands, or reach the network beyond Copilot itself. File reads are confined to the worktree. If the profile has study guidance, Copilot gets that too.
+**Taking it into a deep review.** The study session and the deep-review session are separate on purpose: they have different tools and different rules (study can't edit or run anything), so resuming one as the other wouldn't fit. What carries over is the evidence. The study log's section of the brief starts with a **Handoff** line (solid on, revisit, unanswered, and teach-back gaps), and the deep review reads it first and spends its time on the weak spots. The study assistant can't edit files, run commands, or reach the network beyond its own provider. File reads are confined to the worktree. If the profile has study guidance, the model gets that too.
 
 From a terminal, `readthrough study 2897` prints the log, and `--prediction`, `--teachback`, `--note`, and `--finding "major: summary" --at path:line` add to it. The deep-review skill uses these too, so a terminal review and the dashboard build the same record.
 
@@ -351,7 +352,7 @@ default_repo = "pallets/click"     # used when you leave out --repo
 port = 8765                        # live server
 refresh_minutes = 10               # live server refresh interval
 terminal = "auto"                  # where deep reviews open: auto, wt, console, terminal-app, x-terminal-emulator, gnome-terminal
-assistant = "auto"                 # who answers in the Study tab: auto, copilot (the model assistant), rules
+assistant = "auto"                 # who answers in the Study tab: auto, model (needs a runtime), rules
 runtime = "auto"                   # the model it runs on: auto, copilot (the SDK), anthropic, openai
 agent = "auto"                     # which agent runs deep reviews: auto, copilot, claude
 
@@ -394,7 +395,7 @@ Per-repo keys, which can also go under `[defaults]`:
 | `session_minutes` | How long each burn-down session should be (default 60). |
 | `limit` | The most open PRs to fetch (default 100). |
 | `internal_authors`, `external_authors` | Logins to force into a kind, on top of the profile's lists. |
-| `study_model` | The model for the study assistant and Copilot onboarding. |
+| `study_model` | The model for the study assistant and model-assisted onboarding, overriding the runtime's. |
 | `agent_args` | Extra arguments for the review agent, for this repo. For example, `["--model", "claude-opus-4.8", "--remote"]` makes Copilot pick a model and lets you continue the session from GitHub on your phone. |
 
 Paths under your home directory are written as `~/...`, so the file works on another machine or account. To keep it somewhere else, in a dotfiles repo for instance, point `READTHROUGH_CONFIG` at it; the data still goes to `~/.readthrough` (or `READTHROUGH_HOME`). The `schema = 2` line at the top lets a future version recognize the file's layout. Leave it as is.
@@ -480,7 +481,7 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 
 | Command | What it does |
 | --- | --- |
-| `onboard OWNER/NAME [--forge F] [--clone P] [--account A] [--copilot] [--update] [--preview] [--accept] [--force]` | Draft, check, preview, and accept a repo's profile |
+| `onboard OWNER/NAME [--forge F] [--clone P] [--account A] [--assisted] [--update] [--preview] [--accept] [--force]` | Draft, check, preview, and accept a repo's profile |
 | `repos` | List the repos you've onboarded |
 | `default OWNER/NAME` | Set the default repo |
 | `remove OWNER/NAME [--purge]` | Stop tracking a repo |
@@ -516,9 +517,9 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 
 **Coverage is stuck below 85%.** Look at the "Unmapped" line in the report. Those are the paths that land in "other". Add a component for each, or widen an existing one's `paths`. If they're generated files, map them to a support component.
 
-**The Study tab or `--copilot` says the Copilot SDK isn't installed.** Stop the server, reinstall with the `[study]` extra (see [Setting it up](#setting-it-up)), and start it again.
+**The Study tab or `--assisted` says there is no model runtime.** Either install the Copilot SDK (reinstall with the `[study]` extra, see [Setting it up](#setting-it-up)) or set an API key for the Anthropic or OpenAI runtime, then restart the server. `readthrough doctor` shows what each runtime is missing.
 
-**A study turn or Copilot onboarding fails or hangs.** The error appears at the bottom of the page (or in the terminal), and `readthrough.log` has the details. Copilot needs to be signed in (`copilot` in a terminal will tell you). A study turn gives up after ten minutes, onboarding after fifteen (`[tuning.study]` changes both).
+**A study turn or model-assisted onboarding fails or hangs.** The error appears at the bottom of the page (or in the terminal), and `readthrough.log` has the details. On the Copilot runtime, Copilot needs to be signed in (`copilot` in a terminal will tell you); on the API runtimes, rate limits and outages are retried a few times before the turn gives up. A study turn gives up after ten minutes, onboarding after fifteen (`[tuning.study]` changes both).
 
 **"readthrough hit an unexpected error".** That's a bug. Run `readthrough doctor --bundle` and attach the zip to the report, along with the error id.
 

@@ -255,7 +255,7 @@ def test_config_validates_plugin_choices_and_options(tmp_path: Path):
 
     for text, message in [
         ('terminal = "wtt"\n', "did you mean 'wt'"),
-        ('assistant = "copilto"\n', "did you mean 'copilot'"),
+        ('assistant = "modle"\n', "did you mean 'model'"),
         ("terminal = 3\n", "terminal must be a name"),
         ('[terminals.wt]\nprofil = "x"\n', "did you mean 'profile'"),
         ("[assistants]\nrules = 1\n", "one \\[assistants.<name>\\] table"),

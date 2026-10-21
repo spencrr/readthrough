@@ -112,6 +112,10 @@ class CopilotRuntime:
         self._lock: asyncio.Lock | None = None
         self._sessions: list[CopilotSession] = []
 
+    @property
+    def model(self) -> str | None:
+        return self.options.model  # None for GitHub Copilot: the service picks its default
+
     def describe(self) -> str:
         o = self.options
         return f"Copilot SDK, {o.provider} at {o.base_url} ({o.model})" if o.byok else "Copilot SDK, GitHub Copilot"

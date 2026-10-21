@@ -15,7 +15,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, agents, forges, ledger, logs, review, system, usage
+from readthrough import __version__, agents, forges, ledger, logs, review, study, system, usage
 from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
 from readthrough.faults import ForgeError
@@ -194,8 +194,6 @@ def cmd_ledger(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
-    from readthrough import study
-
     cfg = settings.config_for(args.repo)
     adds: list[tuple[str, Any]] = [
         (k, getattr(args, k)) for k in ("prediction", "teachback", "note") if getattr(args, k)
@@ -329,10 +327,10 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
     facts = onboard.gather(forge, clone=clone, sample=cfg.tuning.onboarding.merged_sample)
     sources = profile_sources(cfg, forge)
 
-    if args.copilot:
-        from readthrough.onboard_copilot import copilot_draft
+    if args.assisted:
+        from readthrough.onboard_model import model_draft
 
-        _write_profile(cfg, copilot_draft(cfg, forge, facts, on_progress=lambda m: log.info("  %s", m)))
+        _write_profile(cfg, model_draft(cfg, forge, facts, on_progress=lambda m: log.info("  %s", m)))
         sources = profile_sources(cfg, forge)
     elif args.update or args.draft or not sources:
         if cfg.local_profile_path.exists() and not (args.update or args.force):
@@ -821,7 +819,11 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("--account", help="gh account to read the repo as (for repos only one of your accounts can see)")
     p.add_argument("--draft", action="store_true", help="draft a profile even if a shared or in-repo one exists")
     p.add_argument("--update", action="store_true", help="redraft your local profile (keeps a backup)")
-    p.add_argument("--copilot", action="store_true", help="have Copilot draft the profile by reading the repo")
+    p.add_argument(
+        "--assisted",
+        action="store_true",
+        help="have the configured model read the repo and draft the profile (see `runtime`)",
+    )
     p.add_argument("--preview", action="store_true", help="build the dashboard with this profile and open it")
     p.add_argument("--accept", action="store_true", help="finish onboarding once the checks pass")
     p.add_argument("--force", action="store_true", help="accept despite problems; or replace an existing draft")
@@ -879,10 +881,15 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("--note", help="a short insight to keep with the brief")
     p.add_argument("--finding", metavar="SEVERITY:SUMMARY", help="e.g. 'major: retries swallow the original error'")
     p.add_argument("--at", metavar="PATH:LINE", help="location for --finding")
-    p.add_argument("--by", choices=("you", "copilot"), default="you", help="who wrote a --note or --finding")
+    p.add_argument(
+        "--by",
+        choices=("you", study.MODEL),
+        default="you",
+        help="who wrote a --note or --finding: you, or a model (a review agent)",
+    )
     p.set_defaults(func=cmd_study)
 
-    p = sub.add_parser("review", help="start or resume the Copilot deep-review session for a PR")
+    p = sub.add_parser("review", help="start or resume the deep-review session for a PR (the configured review agent)")
     p.add_argument("pr", type=int)
     p.add_argument("--fresh", action="store_true", help="start a new session instead of resuming")
     p.add_argument("--here", action="store_true", help="run in this terminal instead of opening a new one")

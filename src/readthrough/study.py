@@ -4,9 +4,16 @@ Everything that shows understanding (or the lack of it) is appended here: your p
 reading (or that you skipped it), whether you asked for a briefing, quiz questions and your answers (each
 tagged with whether a hint or a briefing came first), the assistant's assessments with code evidence, your
 teach-back, your "what I missed" reflections, pinned notes, and findings. Entries are never edited or
-deleted, so the log is an honest trail. Only an assistant that read the code writes verdicts; the rules
-assistant never does. A verdict carries the model that reached it when the runtime says which, since the
-same assistant may be talking to GitHub Copilot or to a model provider of yours, and the brief names it.
+deleted, so the log is an honest trail.
+
+``by`` says what kind of author wrote an entry: ``you``, ``model`` (the Socratic assistant, on whichever model
+runtime is configured), or ``rules`` (the assistant that needs no model). Only an author that read the code
+writes verdicts; the rules assistant never does. What the model writes also carries ``model`` (the model the
+runtime reported using) and ``runtime`` (which runtime carried the conversation), because a verdict's weight
+depends on who reached it and the same assistant may be talking to GitHub Copilot, Claude, or a deployment
+of yours. Both come from the entry, never from the current configuration, so changing runtimes never relabels
+an old grade. Older logs say ``by: copilot``, the assistant's former name; ``load`` reads it as ``model`` rather
+than rewriting the file, and leaves the runtime unrecorded, since those entries never said which it was.
 
 The log lives in the repo's data directory (``study/pr-<n>.jsonl``), and its evidence is rendered as the last
 section of the brief, so a terminal deep review reads the same evidence the dashboard shows.
@@ -27,7 +34,10 @@ MARKER = "<!-- readthrough:study-log -->"
 VERDICTS = ("correct", "partial", "incorrect")
 SEVERITIES = ("blocker", "major", "minor", "question")
 
-ASSISTANTS = ("copilot", "rules")
+MODEL = "model"  # the Socratic assistant, whichever model runtime carries it
+RULES = "rules"  # the assistant that needs no model and never grades
+ASSISTANTS = (MODEL, RULES)
+LEGACY_MODEL_BY = "copilot"  # the model assistant's former name in the log, after its first engine
 AIDS = ("hint", "brief")  # what can come before an answer and inform it
 TOOL = "readthrough"  # the engine itself, which only ever records that an assistant failed to answer
 
@@ -39,10 +49,10 @@ KINDS: dict[str, tuple[set[str], tuple[str, ...]]] = {
     "reflection": ({"you"}, ("text",)),  # "what I missed", after an answer or a teach-back
     "chat": ({"you", *ASSISTANTS}, ("role", "text")),
     "note": ({"you", *ASSISTANTS}, ("text",)),
-    "finding": ({"you", "copilot"}, ("severity", "summary")),
+    "finding": ({"you", MODEL}, ("severity", "summary")),
     "question": (set(ASSISTANTS), ("question",)),
-    "assessment": ({"copilot"}, ("qid", "verdict", "feedback")),
-    "teachback_assessment": ({"copilot"}, ("verdict", "feedback")),
+    "assessment": ({MODEL}, ("qid", "verdict", "feedback")),
+    "teachback_assessment": ({MODEL}, ("verdict", "feedback")),
     # A turn that ended in an error, so a request with no reply is never read as one you abandoned.
     "failure": ({TOOL}, ("assistant", "text")),
 }
@@ -62,10 +72,21 @@ def load(cfg: Config, number: int) -> list[dict[str, Any]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             try:
-                entries.append(json.loads(line))
+                entries.append(_current(json.loads(line)))
             except ValueError:
                 continue  # a torn final line from a crash; skip it rather than lose the log
     return entries
+
+
+def _current(entry: dict[str, Any]) -> dict[str, Any]:
+    """An entry as this version names things. The model assistant used to write as ``copilot``; that was its
+    name, not a record of the runtime (the same name was written through other runtimes for a while), so the
+    author is renamed and the runtime is left unrecorded rather than guessed."""
+    if entry.get("by") == LEGACY_MODEL_BY:
+        entry["by"] = MODEL
+    if entry.get("kind") == "failure" and entry.get("assistant") == LEGACY_MODEL_BY:
+        entry["assistant"] = MODEL
+    return entry
 
 
 def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]:
@@ -154,16 +175,18 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def graders(entries: list[dict[str, Any]]) -> str:
-    """Who graded, as precisely as the log knows: the models named on the verdicts, else the assistant's name.
-
-    A verdict's weight depends on which model reached it, so a brief that says "assessed by Copilot" when the
-    runtime was talking to a model of yours would be hiding the thing a reader most needs to know.
+    """Who graded, as precisely as the log knows: the models named on the verdicts and the runtime that carried
+    them, else "a model" whose name wasn't recorded. Always from the entries, never from the current
+    configuration: a verdict's weight depends on who reached it, and switching runtimes must not relabel it.
     """
     verdicts = [e for e in entries if e["kind"] in ("assessment", "teachback_assessment")]
+    if not verdicts:
+        return "nobody"
     models = sorted({e["model"] for e in verdicts if e.get("model")})
-    if models:
-        return ", ".join(models) + (" (through Copilot)" if all(e["by"] == "copilot" for e in verdicts) else "")
-    return ", ".join(sorted({e["by"].capitalize() for e in verdicts})) or "nobody"
+    runtimes = sorted({e["runtime"] for e in verdicts if e.get("runtime")})
+    who = ", ".join(models) if models else "a model not named in the log"
+    via = f" via {', '.join(runtimes)}" if runtimes else ""
+    return who + via
 
 
 def _handoff(entries: list[dict[str, Any]]) -> str:
@@ -245,7 +268,7 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
         out.append(
             f"**{q['qid']}.** {q['question'].strip()}"
             + (f" _(refs: {', '.join(q.get('refs') or [])})_" if q.get("refs") else "")
-            + (f" _(asked by {q['by']})_" if q["by"] != "copilot" else "")
+            + (f" _(asked by {q['by']})_" if q["by"] != MODEL else "")
         )
         if q["qid"] in answers:
             a = answers[q["qid"]]

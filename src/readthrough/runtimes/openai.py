@@ -97,6 +97,10 @@ class OpenAIRuntime:
         self.options: OpenAIOptions = options if isinstance(options, OpenAIOptions) else OpenAIOptions()
         self._conversations: dict[str, OpenAISession] = {}
 
+    @property
+    def model(self) -> str | None:
+        return self.options.model
+
     def describe(self) -> str:
         o = self.options
         where = "Azure OpenAI" if o.azure else "OpenAI"

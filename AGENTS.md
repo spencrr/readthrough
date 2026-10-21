@@ -62,11 +62,14 @@ would fail there except for the browser tests, which skip when no Chromium-famil
   operational numbers are `[tuning.*]` with defaults and documentation in `assets/defaults.toml` (a test keeps
   the two in step); safety limits are constants in `limits.py` and change only by a deliberate commit.
 - **The study log is append-only and truthful about authorship.** Every entry's `by` is who wrote it (`you`,
-  `copilot`, `rules`; `readthrough` only for a `failure`, the record that a turn ended in an error). Only an
-  assistant that read the code writes verdicts; the rules assistant never grades. What an assistant writes
-  carries the `model` the runtime reported, since the same assistant may be talking to GitHub Copilot, Claude,
-  or a deployment of yours. Answers are tagged with the aids that preceded
-  them (`hint`, `brief`) from the log itself, never asserted.
+  `model`, `rules`; `readthrough` only for a `failure`, the record that a turn ended in an error). Only an
+  assistant that read the code writes verdicts; the rules assistant never grades. What the model assistant
+  writes carries the `model` the runtime reported and the `runtime` that carried it, since the same assistant
+  may be talking to GitHub Copilot, Claude, or a deployment of yours; labels (the page, the brief) come from
+  the entry, never from the current config. No brand names in `by` or in the UI: the engine is named by what
+  it is. Older logs say `by: copilot`, the assistant's former name; `study.load` reads it as `model` and claims
+  no runtime for it, and the file is never rewritten. Answers are tagged with the aids that preceded them
+  (`hint`, `brief`) from the log itself, never asserted.
 - **Model usage goes to the ledger (`usage.py`), in the provider's units.** One line per call, idempotent
   by call id; tokens, Copilot's multiplier, and AI credits stay separate, a dollar figure must name its price
   table, and nothing unreported is written as zero. `billed_to` says whose account paid.

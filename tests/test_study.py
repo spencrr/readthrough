@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -33,8 +34,34 @@ def test_append_validates_kind_writer_and_fields(cfg):
     with pytest.raises(ValueError, match="no question"):
         study.append(cfg, 5, "reflection", by="you", qid="Q9", text="missed it")
     with pytest.raises(ValueError, match="verdict"):
-        q = study.append(cfg, 5, "question", by="copilot", question="q?")
-        study.append(cfg, 5, "assessment", by="copilot", qid=q["qid"], verdict="great", feedback="f")
+        q = study.append(cfg, 5, "question", by="model", question="q?")
+        study.append(cfg, 5, "assessment", by="model", qid=q["qid"], verdict="great", feedback="f")
+
+
+def test_older_logs_read_as_the_model_without_a_guessed_runtime(cfg):
+    """Older logs say `by: copilot`, the assistant's former name. They're read as `model`; the runtime stays
+    unrecorded (the same name was written through other runtimes for a while, so inferring one would be a
+    guess), the file itself is never rewritten, and nothing can write the old name again."""
+    path = study.log_path(cfg, 5)
+    path.parent.mkdir(parents=True)
+    old = [
+        {"id": 1, "ts": "2026-10-01T00:00:00+00:00", "kind": "question", "by": "copilot", "qid": "Q1", "question": "Why?"},
+        {"id": 2, "ts": "2026-10-01T00:00:01+00:00", "kind": "answer", "by": "you", "qid": "Q1", "text": "Because."},
+        {"id": 3, "ts": "2026-10-01T00:00:02+00:00", "kind": "assessment", "by": "copilot", "qid": "Q1",
+         "verdict": "correct", "feedback": "Yes.", "model": "claude-sonnet-5"},
+        {"id": 4, "ts": "2026-10-01T00:00:03+00:00", "kind": "failure", "by": "readthrough", "assistant": "copilot",
+         "text": "timed out"},
+    ]  # fmt: skip
+    path.write_text("".join(json.dumps(e) + "\n" for e in old), encoding="utf-8")
+    entries = study.load(cfg, 5)
+    assert [e["by"] for e in entries] == ["model", "you", "model", "readthrough"]
+    assert not any("runtime" in e for e in entries), "no runtime was recorded, so none is claimed"
+    assert entries[-1]["assistant"] == "model"
+    assert study.graders(entries) == "claude-sonnet-5"
+    assert "assessed by claude-sonnet-5." in study.render_appendix(entries)
+    assert '"by": "copilot"' in path.read_text(encoding="utf-8"), "the log is append-only; reading normalizes"
+    with pytest.raises(ValueError, match="can't write"):
+        study.append(cfg, 5, "chat", by="copilot", role="assistant", text="x")
 
 
 def test_rules_mode_log_counts_answers_without_grading_them(cfg):
@@ -60,14 +87,14 @@ def test_rules_mode_log_counts_answers_without_grading_them(cfg):
 
 def test_question_ids_summary_and_appendix(cfg):
     study.append(cfg, 5, "prediction", by="you", text="It touches scorers.")
-    q1 = study.append(cfg, 5, "question", by="copilot", question="Why?", expected_points=["secret"])
-    q2 = study.append(cfg, 5, "question", by="copilot", question="How?", expected_points=["hidden"])
+    q1 = study.append(cfg, 5, "question", by="model", question="Why?", expected_points=["secret"])
+    q2 = study.append(cfg, 5, "question", by="model", question="How?", expected_points=["hidden"])
     assert (q1["qid"], q2["qid"]) == ("Q1", "Q2")
     study.append(cfg, 5, "answer", by="you", qid="Q1", text="Because.")
     study.append(
-        cfg, 5, "assessment", by="copilot", qid="Q1", verdict="partial", feedback="Look at line 3.", evidence=["a.py:3"]
+        cfg, 5, "assessment", by="model", qid="Q1", verdict="partial", feedback="Look at line 3.", evidence=["a.py:3"]
     )
-    study.append(cfg, 5, "assessment", by="copilot", qid="Q1", verdict="correct", feedback="Now yes.")
+    study.append(cfg, 5, "assessment", by="model", qid="Q1", verdict="correct", feedback="Now yes.")
 
     entries = study.load(cfg, 5)
     s = study.summarize(entries)
@@ -86,7 +113,7 @@ def test_question_ids_summary_and_appendix(cfg):
 
 
 def test_public_entries_hide_expected_points_until_answered(cfg):
-    study.append(cfg, 5, "question", by="copilot", question="Why?", expected_points=["secret"])
+    study.append(cfg, 5, "question", by="model", question="Why?", expected_points=["secret"])
     assert "expected_points" not in public_entries(study.load(cfg, 5))[0]
     study.append(cfg, 5, "answer", by="you", qid="Q1", text="guess")
     assert public_entries(study.load(cfg, 5))[0]["expected_points"] == ["secret"]
@@ -102,7 +129,7 @@ def test_torn_line_is_skipped(cfg):
 def test_engine_records_learner_input_before_prompting(cfg):
     events = []
     engine = StudyEngine(cfg, lambda e, d: events.append((e, d)), lambda n: {"number": n})
-    study.append(cfg, 5, "question", by="copilot", question="Why?")
+    study.append(cfg, 5, "question", by="model", question="Why?")
     prompt = engine._record_and_prompt(5, "answer", "My answer", "Q1")
     assert "Q1" in prompt and "assess_answer" in prompt
     assert study.load(cfg, 5)[-1]["kind"] == "answer"
@@ -116,7 +143,7 @@ def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
     study.append(cfg, 5, "prediction", by="you", text="Skipped the prediction.", skipped=True)
     prompt = engine._record_and_prompt(5, "brief", "", None)
     assert "path:line" in prompt and "No quiz question" in prompt
-    q = study.append(cfg, 5, "question", by="copilot", question="Why?")
+    q = study.append(cfg, 5, "question", by="model", question="Why?")
     study.append(cfg, 5, "answer", by="you", qid=q["qid"], text="Because.")
     entries = study.load(cfg, 5)
     s = study.summarize(entries)
@@ -128,7 +155,7 @@ def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
     assert "pinned from the conversation" in study.render_appendix(study.load(cfg, 5))
 
 
-def test_copilot_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
+def test_model_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
     from readthrough.assistants import _safe_rel
 
     (tmp_path / "pkg").mkdir()
@@ -171,12 +198,12 @@ def test_author_kind_overrides():
 
 
 def test_handoff_line_says_where_understanding_is_solid(cfg):
-    q1 = study.append(cfg, 6, "question", by="copilot", question="Why?", focus="intent")
-    q2 = study.append(cfg, 6, "question", by="copilot", question="Who owns it?", focus="responsibility")
-    study.append(cfg, 6, "question", by="copilot", question="Tests?", focus="tests")
+    q1 = study.append(cfg, 6, "question", by="model", question="Why?", focus="intent")
+    q2 = study.append(cfg, 6, "question", by="model", question="Who owns it?", focus="responsibility")
+    study.append(cfg, 6, "question", by="model", question="Tests?", focus="tests")
     for q, v in ((q1, "correct"), (q2, "incorrect")):
         study.append(cfg, 6, "answer", by="you", qid=q["qid"], text="...")
-        study.append(cfg, 6, "assessment", by="copilot", qid=q["qid"], verdict=v, feedback="f")
+        study.append(cfg, 6, "assessment", by="model", qid=q["qid"], verdict=v, feedback="f")
     appendix = study.render_appendix(study.load(cfg, 6))
     assert "**Handoff:** solid on Q1 (intent); revisit Q2 (responsibility); unanswered Q3 (tests)." in appendix
 

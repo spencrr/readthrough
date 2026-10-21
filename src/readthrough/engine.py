@@ -14,7 +14,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from readthrough import assistants, process, study
+from readthrough import assistants, process, runtimes, study
 from readthrough.config import Config
 
 log = logging.getLogger(__name__)
@@ -88,8 +88,24 @@ class StudyEngine:
     @property
     def assistant(self) -> assistants.Assistant:
         if self._assistant is None:
-            self._assistant = assistants.make(self, self.cfg.assistant, self.cfg.assistant_options)
+            self._assistant = assistants.make(
+                self, self.cfg.assistant, self.cfg.assistant_options,
+                runtime=self.cfg.runtime, runtime_options=self.cfg.runtime_options,
+            )  # fmt: skip
         return self._assistant
+
+    def engine_info(self) -> dict[str, Any]:
+        """What answers in the Study tab, for the page: the assistant, whether it can run, and when it runs on a
+        model runtime, which one, the model configured for it (if any), and the runtime's own description."""
+        resolved = self.resolved
+        info: dict[str, Any] = {
+            "name": resolved.name, "available": resolved.available, "reason": resolved.reason,
+            "runtime": resolved.runtime, "model": None, "describe": "",
+        }  # fmt: skip
+        if resolved.runtime and resolved.available:
+            engine = runtimes.make(resolved.runtime, self.cfg.runtime_options)
+            info.update(model=self.cfg.study_model or engine.model, describe=engine.describe())
+        return info
 
     def components(self) -> list[dict[str, Any]]:
         return self._components()
@@ -189,7 +205,10 @@ class StudyEngine:
             log.exception("Study turn for #%d failed", turn.number)
             message = process.redact(str(exc))[:500]
             # Logged as well as broadcast: the request above it would otherwise read as one that was ignored.
-            self.append(turn.number, "failure", by=study.TOOL, assistant=self.resolved.name, text=message)
+            # Named by runtime, never by model: a model that never answered reached nothing.
+            resolved = self.resolved
+            runtime = {"runtime": resolved.runtime} if resolved.runtime else {}
+            self.append(turn.number, "failure", by=study.TOOL, assistant=resolved.name, text=message, **runtime)
             self.broadcast("study", {"pr": turn.number, "type": "error", "message": message})
         finally:
             with self._busy_lock:

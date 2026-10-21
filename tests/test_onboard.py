@@ -177,9 +177,9 @@ def test_membership_failures_are_reported_not_cached(tmp_path: Path):
     assert found == {"alice", "dave"} and failed == [] and healthy.calls == ["o/dave"]
 
 
-def test_copilot_drafter_keeps_the_best_proposal(facts, tmp_path: Path):
+def test_model_drafter_keeps_the_best_proposal(facts, tmp_path: Path):
     from readthrough.config import Config
-    from readthrough.onboard_copilot import _Drafter
+    from readthrough.onboard_model import _Drafter
 
     said: list[str] = []
     drafter = _Drafter(Config(home=tmp_path, repo="o/app"), forge=None, facts=facts, on_progress=said.append)
@@ -194,9 +194,9 @@ def test_copilot_drafter_keeps_the_best_proposal(facts, tmp_path: Path):
     assert drafter.proposals == 4 and len(said) == 4
 
 
-def test_copilot_drafter_reads_only_repo_files(facts, tmp_path: Path):
+def test_model_drafter_reads_only_repo_files(facts, tmp_path: Path):
     from readthrough.config import Config
-    from readthrough.onboard_copilot import _Drafter
+    from readthrough.onboard_model import _Drafter
 
     clone = tmp_path / "clone"
     (clone / ".git").mkdir(parents=True)
@@ -238,15 +238,18 @@ def test_draft_drops_components_that_never_get_a_file():
 
 
 def test_drafts_record_who_drafted_them(facts):
-    from readthrough.onboard_copilot import mark_drafter
+    from readthrough.onboard_model import mark_drafter
 
     profile, _ = onboard.check_profile_text(onboard.draft_profile(facts), facts)
     assert profile.drafted_by == "readthrough"
-    marked = mark_drafter(onboard.draft_profile(facts), "copilot")
+    marked = mark_drafter(onboard.draft_profile(facts), "model")
     assert marked.count("drafted_by") == 1
-    assert onboard.check_profile_text(marked, facts)[0].drafted_by == "copilot"
+    assert onboard.check_profile_text(marked, facts)[0].drafted_by == "model"
+    # Profiles drafted before runtimes existed say "copilot": a model on the only runtime there was.
+    legacy = marked.replace('"model"', '"copilot"')
+    assert onboard.check_profile_text(legacy, facts)[0].drafted_by == "model"
     with pytest.raises(ProfileError, match="drafted_by"):
-        onboard.check_profile_text(marked.replace('"copilot"', '"someone"'), facts)
+        onboard.check_profile_text(marked.replace('"model"', '"someone"'), facts)
 
 
 def test_deleted_files_dont_count_toward_coverage():

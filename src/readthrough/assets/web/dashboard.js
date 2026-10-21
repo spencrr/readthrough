@@ -546,8 +546,8 @@ function overviewTab(n){
   const s = p.session;
   return `<div class="actions">
       ${reviewButton(n, "btn primary").replace(/>(review|resume)</, (m, w) => `>${w === "resume" ? "Resume" : "Start"} deep review<`)}
-      ${LIVE ? `<button class="btn" data-dtab="study">Study with Copilot</button>` : ""}
-      <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest Copilot session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
+      ${LIVE ? `<button class="btn" data-dtab="study" title="Predict, get quizzed, teach back; everything goes in this PR's study log">Study</button>` : ""}
+      <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest agent session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
       <button class="btn" data-deep="${n}">Copy prompt</button>
       <button class="btn" data-copy="readthrough worktree ${n}">Copy worktree cmd</button></div>
     ${sessionList(n)}
@@ -565,12 +565,12 @@ function overviewTab(n){
 }
 const profileLine = () => {
   const pr = PROFILE, when = pr.onboarded ? new Date(pr.onboarded).toLocaleDateString() : null;
-  const drafted = pr.drafted_by === "copilot" ? ", first drafted by Copilot" : pr.drafted_by === "readthrough" ? ", first drafted by readthrough from the file tree" : "";
+  const drafted = pr.drafted_by === "model" ? ", first drafted by a model (the profile's header says which)" : pr.drafted_by === "readthrough" ? ", first drafted by readthrough from the file tree" : "";
   return `The map comes from ${esc(pr.origin || "the repo's profile")}${drafted}${when ? `, accepted on ${when}` : ""}.`;
 };
 function howItWorks(){
   return `<div class="how"><p>${icon("cog", "ico sm")}<b>Worked out by rules.</b> Lanes, CI, and review state come from ${esc(FORGE.label)}. Components come from the profile's path patterns, signals and line heuristics from its rules (hover one to see which), and the contracts are ${PROFILE.contracts_source ? `quoted from <code>${esc(PROFILE.contracts_source)}</code> in the repo` : "written in the profile"}. The plan, estimates, and related PRs are arithmetic. ${profileLine()}</p>
-    <p>${icon("sparkles", "ico sm")}<b>Written by Copilot:</b> only what's in the Study tab and in review sessions, and the profile itself if Copilot drafted it.</p></div>`;
+    <p>${icon("sparkles", "ico sm")}<b>Written by a model:</b> only what's in the Study tab (each entry names the model), what review agents write in their sessions, and the profile itself if a model drafted it.</p></div>`;
 }
 function briefTab(n){
   if (!LIVE) return `<p class="muted" style="margin-top:14px">The rendered brief is part of the live dashboard (<code>readthrough serve</code>). The file is at <code>${esc(LINKS.briefs_dir)}\\pr-${n}.md</code>. <button class="btn small" data-copy="${esc(LINKS.briefs_dir + "\\pr-" + n + ".md")}">copy path</button></p>`;
@@ -629,10 +629,15 @@ function watchList(p){
   const big = [...p.files].sort((a, b) => (b.add + b.del) - (a.add + a.del)).slice(0, 3);
   items.push(`${icon("cog", "ico sm")}Most changed: ${big.map(f => `<code>${esc(f.path.split("/").pop())}</code> (+${f.add}/-${f.del})`).join(", ")}`);
   if (p.related?.length) items.push(`${icon("cog", "ico sm")}Shares files with ${p.related.slice(0, 5).map(r => `#${r}`).join(", ")}`);
-  return `<details class="watch"><summary>${icon("target", "ico sm")}What to look at <span class="muted">(worked out by rules, no Copilot)</span></summary><ul>${items.map(i => `<li>${i}</li>`).join("")}</ul></details>`;
+  return `<details class="watch"><summary>${icon("target", "ico sm")}What to look at <span class="muted">(worked out by rules, no model)</span></summary><ul>${items.map(i => `<li>${i}</li>`).join("")}</ul></details>`;
 }
+// Who wrote an entry, as precisely as the log knows: the model named on it, else the runtime that carried it,
+// else the kind of author. Never the current configuration: switching runtimes must not relabel old entries.
+const author = e => e.by === "you" ? "You" : e.by === "rules" ? `${icon("cog", "ico sm")}rules` : `${icon("sparkles", "ico sm")}${esc(e.model || e.runtime || "model")}`;
+// What will answer next, from the engine: the configured model if the runtime names one, else the runtime.
+const engineLabel = eng => eng.name === "rules" ? `${icon("cog", "ico sm")}rules` : `${icon("sparkles", "ico sm")}${esc(eng.model || eng.runtime || "model")}`;
 function studyTab(n){
-  if (!LIVE) return `<p class="muted" style="margin-top:14px">Studying with Copilot needs the live dashboard: run <code>readthrough serve</code> (or <code>readthrough install server</code>). In a terminal, <code>readthrough study ${n}</code> shows the evidence collected so far.</p>`;
+  if (!LIVE) return `<p class="muted" style="margin-top:14px">Studying needs the live dashboard: run <code>readthrough serve</code> (or <code>readthrough install server</code>). In a terminal, <code>readthrough study ${n}</code> shows the evidence collected so far.</p>`;
   const st = study[n];
   if (!st || st.loading && !st.entries) { loadStudy(n); return `<p class="muted">Loading…</p>`; }
   if (st.error) return `<p class="muted">Couldn't load the study log: ${esc(st.error)}</p>`;
@@ -643,7 +648,7 @@ function studyTab(n){
   const {mode, q: openQ} = studyMode(entries);
   const pin = e => pinned.has(e.id) ? `<span class="pin on" title="Kept in the brief">${icon("pin", "ico sm")}pinned</span>`
     : `<button class="pin" data-pin="${e.id}" title="Keep this in the brief's study log">${icon("pin", "ico sm")}pin</button>`;
-  const who = e => e.by === "you" ? "You" : `${icon("sparkles", "ico sm")}Copilot`;
+  const who = author;
   const qcard = q => { const a = answers[q.qid], v = assessments[q.qid];
     return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${v.verdict}">${v.verdict}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}</div>
       <div class="md">${md(q.question)}</div>
@@ -661,13 +666,14 @@ function studyTab(n){
       case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${md(e.text)}</div></div>`;
       case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${md(e.text)}</div></div>`;
       case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${e.verdict}">${e.verdict}</span></div><div class="md">${md(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
-      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "copilot" ? "Copilot added to the brief" : "Note"}: <span class="md">${md(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
-      case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${e.assistant === "copilot" ? "Copilot" : "The assistant"} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
+      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${md(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
+      // A failure is named by the runtime, never a model: a model that never answered reached nothing.
+      case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${esc(e.runtime ? `The ${e.runtime} runtime` : e.assistant === "rules" ? "The rules assistant" : "The assistant")} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
       case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${e.line ?? "?"}</code> ` : ""}${esc(e.summary)} <span class="muted">(${e.by})</span></div>`;
       default: return "";
     }
   }).join("");
-  const pending = st.pending ? `<div class="bubble copilot" id="pending"><div class="who-line">${icon("sparkles", "ico sm")}Copilot</div><div class="md typing" id="pending-text">${md(st.pending.text || "")}</div><div class="tools" id="pending-tools">${pendingTools(st.pending)}</div></div>` : "";
+  const pending = st.pending ? `<div class="bubble model" id="pending"><div class="who-line">${engineLabel(st.engine)}</div><div class="md typing" id="pending-text">${md(st.pending.text || "")}</div><div class="tools" id="pending-tools">${pendingTools(st.pending)}</div></div>` : "";
   const step = (label, done, detail) => `<span class="step ${done ? "done" : ""}">${icon(done ? "circle-check" : "circle", "ico sm")}${label}${detail ? ` <span class="muted">${detail}</span>` : ""}</span>`;
   const stepper = `<div class="stepper">${step("Predict", s.predictions || s.prediction_skipped, s.prediction_skipped && !s.predictions ? "skipped" : "")}<span class="line"></span>
     ${step("Quiz", s.assessed, s.assessed ? `${s.correct}/${s.assessed} correct` : "")}<span class="line"></span>${step("Teach back", s.teachback, s.teachback || "")}</div>`;
@@ -681,13 +687,18 @@ function studyTab(n){
   const buttons = {
     predict: `<button class="btn primary" data-study-add="prediction">Save prediction</button><button class="btn" data-skip-predict title="Go straight to the quiz or a briefing. The log notes that you skipped.">Skip</button>`,
     answer: `<button class="btn primary" data-ask="answer" data-qid="${esc(openQ?.qid)}" ${dis}>Submit answer</button><button class="btn" data-ask="hint" data-qid="${esc(openQ?.qid)}" ${dis}>${icon("lightbulb", "ico sm")}Hint</button>`,
-    chat: `<button class="btn primary" data-ask="chat" ${dis} title="Send what's in the box">Send</button><button class="btn" data-ask="quiz" ${dis} title="Copilot asks one question; you answer here">${icon("graduation-cap", "ico sm")}${entries.some(e => e.kind === "question") ? "Next question" : "Quiz me"}</button><button class="btn" data-ask="brief" ${dis} title="A short summary and what to watch for. The log notes that you asked.">${icon("lightbulb", "ico sm")}Brief me</button><button class="btn" data-ask="teachback" ${dis} title="Copilot assesses what's in the box as your summary of the whole PR">Teach back</button>${reflect}`,
+    chat: `<button class="btn primary" data-ask="chat" ${dis} title="Send what's in the box">Send</button><button class="btn" data-ask="quiz" ${dis} title="One question at a time; you answer here and it's graded against the diff">${icon("graduation-cap", "ico sm")}${entries.some(e => e.kind === "question") ? "Next question" : "Quiz me"}</button><button class="btn" data-ask="brief" ${dis} title="A short summary and what to watch for. The log notes that you asked.">${icon("lightbulb", "ico sm")}Brief me</button><button class="btn" data-ask="teachback" ${dis} title="What's in the box is graded as your summary of the whole PR">Teach back</button>${reflect}`,
   }[mode];
+  // What answers here, from the engine and never from an old entry: the model if the runtime names one up front,
+  // else the runtime (GitHub Copilot picks its model per call; each reply then names it).
+  const engineNote = ai ? (st.engine.name === "rules"
+      ? `Questions come from the repo's profile, not a model; nothing here is graded.`
+      : `Questions and grades come from <b title="${esc(st.engine.describe || "")}">${esc(st.engine.model || `the ${st.engine.runtime} runtime`)}</b>; each reply names the model that wrote it.`) : "";
   return `${stepper}
     ${ai ? "" : `<div class="banner warn">${esc(st.engine.reason)}</div>`}
     ${mode === "predict" ? "" : watchList(p)}
-    <div class="transcript">${timeline || `<p class="hint">Write your prediction first: it's the cheapest way to find out what you don't know. Then let Copilot quiz you, or ask for a briefing.</p>`}${pending}</div>
-    <p class="hint">Everything here is appended to this PR's study log, which the brief and the terminal deep review read. ${icon("sparkles", "ico sm")}marks what Copilot wrote; it can read the PR's code but can't change anything.</p>
+    <div class="transcript">${timeline || `<p class="hint">Write your prediction first: it's the cheapest way to find out what you don't know. Then ask for a question, or for a briefing.</p>`}${pending}</div>
+    <p class="hint">Everything here is appended to this PR's study log, which the brief and the terminal deep review read. ${engineNote} ${icon("sparkles", "ico sm")}marks what a model wrote; it can read the PR's code but can't change anything.</p>
     <div class="composer">
       <textarea data-draft="${esc(draft)}" placeholder="${esc(placeholder)}"></textarea>
       <div class="actions">${buttons}<span class="hint">Ctrl+Enter ${mode === "predict" ? "saves" : mode === "answer" ? "submits" : "sends"}</span></div>
@@ -736,11 +747,11 @@ function onStudyEvent(ev){
   } else if (ev.type === "entry") {
     if (!st.entries.some(e => e.id === ev.entry.id)) st.entries.push(ev.entry);
     st.summary = ev.summary;
-    if (ev.entry.kind === "chat" && ev.entry.by === "copilot") st.pending = null;
+    if (ev.entry.kind === "chat" && ev.entry.by !== "you") st.pending = null;
     if (ev.entry.kind === "answer") { const q = st.entries.find(e => e.kind === "question" && e.qid === ev.entry.qid); if (q) loadStudy(n); }
   } else if (ev.type === "done" || ev.type === "error") {
     st.pending = null; st.engine.busy = false;
-    if (ev.type === "error") toast("Copilot: " + ev.message);
+    if (ev.type === "error") toast("Study: " + ev.message);
   } else if (ev.type === "reload") { loadStudy(n); }
   if (here) renderDrawer(); else if (ev.type === "entry") render();
 }

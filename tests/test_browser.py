@@ -69,11 +69,31 @@ def _seed_study_log(cfg: Config) -> None:
     """#2 has been studied a little: a prediction, a turn that failed, and a question answered only partly."""
     study.append(cfg, 2, "prediction", by="you", text="Touches the transport only.")
     study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
-    study.append(cfg, 2, "failure", by=study.TOOL, assistant="copilot", text="git merge-base failed: shallow clone")
+    study.append(
+        cfg,
+        2,
+        "failure",
+        by=study.TOOL,
+        assistant="model",
+        runtime="openai",
+        text="git merge-base failed: shallow clone",
+    )
     study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
-    study.append(cfg, 2, "question", by="copilot", question="Why does the retry **stop** at 3?", focus="intent")
+    study.append(
+        cfg, 2, "question", by="model", runtime="openai", question="Why does the retry **stop** at 3?", focus="intent"
+    )
     study.append(cfg, 2, "answer", by="you", qid="Q1", text="Because the limit says so.")
-    study.append(cfg, 2, "assessment", by="copilot", qid="Q1", verdict="partial", feedback="Name the limit.")
+    study.append(
+        cfg,
+        2,
+        "assessment",
+        by="model",
+        runtime="openai",
+        model="gpt-4.1",
+        qid="Q1",
+        verdict="partial",
+        feedback="Name the limit.",
+    )
 
 
 @pytest.fixture
@@ -175,7 +195,9 @@ def test_study_tab_shows_failed_turns_and_takes_a_reflection(page):
     page.click('[data-dtab="study"]')
     page.wait_for_selector(".transcript")
     text = page.inner_text(".transcript")
-    assert "Copilot didn't answer: git merge-base failed: shallow clone" in text, "a failed turn is in the record"
+    assert "The openai runtime didn't answer: git merge-base failed: shallow clone" in text, (
+        "a failed turn is in the record, named by runtime"
+    )
     assert "partial" in text
     # The transcript opens at its end, where the latest exchange and the composer are.
     assert page.evaluate(

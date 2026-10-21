@@ -24,7 +24,7 @@ Read `data.json` from the repo's data directory (`readthrough config --repo OWNE
 
 ## Mode 2: Deep review session
 
-You may have been launched by the dashboard's review button. If so, this Copilot session is tied to the PR and the user will come back to it. If the conversation already has history, pick up where it left off. Don't start over.
+You may have been launched by the dashboard's review button. If so, this session is tied to the PR and the user will come back to it. If the conversation already has history, pick up where it left off. Don't start over.
 
 **Ground rules.** These are what make this different from a rubber stamp:
 - **Don't reveal your own findings until the user commits to theirs.** Each phase asks first and shows second.
@@ -66,7 +66,7 @@ Ask the user to explain the whole PR in 3-4 sentences as if they were briefing a
 1. Ask: *"What are your concerns, if any? List them before I share mine."*
 2. Show your Phase 0 findings side by side with theirs, grouped as **both found**, **only you**, **only me**. For each "only me" item, give the evidence (`path:line` and the rule or contract) so the user can disagree.
 3. Settle disputed points empirically when that's cheap. Use the profile's test command (from `profile show`) in the worktree; the profile's review guidance says how to make sure the tests run the PR's code, not the user's checkout. To check whether the PR's tests actually exercise the change, run them against the merge-base source too.
-4. Record each finding the user agreed with: `readthrough R study N --finding "major: <one line>" --at path:line --by copilot` (severities: blocker, major, minor, question). Use `--by you` for ones the user raised.
+4. Record each finding the user agreed with: `readthrough R study N --finding "major: <one line>" --at path:line --by model` (severities: blocker, major, minor, question; `model` means you, the agent, wrote it). Use `--by you` for ones the user raised.
 
 ### Phase 5: Draft and decide
 

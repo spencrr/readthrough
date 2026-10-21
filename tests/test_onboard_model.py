@@ -7,10 +7,10 @@ import pytest
 from fakes import FakeForge
 
 from readthrough import onboard, runtimes
-from readthrough import onboard_copilot as copilot_mod
+from readthrough import onboard_model as model_mod
 from readthrough.config import Config
 from readthrough.onboard import RepoFacts
-from readthrough.onboard_copilot import _clip, _Drafter, copilot_draft, mark_drafter
+from readthrough.onboard_model import _clip, _Drafter, mark_drafter, model_draft
 
 TREE = [
     "src/app/api/routes.py",
@@ -110,17 +110,17 @@ def _use(monkeypatch: pytest.MonkeyPatch, runtime: FakeRuntime) -> None:
     monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("fake", True, ""))
 
 
-def test_copilot_draft_reports_a_missing_runtime(monkeypatch: pytest.MonkeyPatch, cfg, facts):
+def test_model_draft_reports_a_missing_runtime(monkeypatch: pytest.MonkeyPatch, cfg, facts):
     monkeypatch.setattr(
         runtimes,
         "resolve",
         lambda name, options=None: ("copilot", False, "install the [study] extra, or set an API key"),
     )
     with pytest.raises(RuntimeError, match=r"needs a model runtime: install the \[study\] extra"):
-        copilot_draft(cfg, forge=None, facts=facts)
+        model_draft(cfg, forge=None, facts=facts)
 
 
-def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPatch, cfg, facts):
+def test_model_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPatch, cfg, facts):
     progress = []
     proposal = onboard.draft_profile(facts)
 
@@ -128,22 +128,27 @@ def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPa
         def __init__(self, cfg, forge, facts, on_progress):
             self.best = None
             self.summary = ""
+            self.runtime_name = "anthropic"
+            self.model = "claude-sonnet-5-5"
 
         async def run(self):
             self.best = ([], 0.875, proposal)
             self.summary = "Check the API split."
 
     _use(monkeypatch, FakeRuntime())
-    monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
+    monkeypatch.setattr(model_mod, "_Drafter", FakeDrafter)
 
-    text = copilot_draft(cfg, forge=None, facts=facts, on_progress=progress.append)
+    text = model_draft(cfg, forge=None, facts=facts, on_progress=progress.append)
 
-    assert text.startswith("# Drafted with Copilot")
-    assert onboard.check_profile_text(text, facts)[0].drafted_by == "copilot"
-    assert progress == ["Best proposal: 88% coverage, 0 problem(s) left", "Copilot's notes:\nCheck the API split."]
+    # The profile says a model drafted it and the header says which, so a reader knows what to double-check.
+    assert text.startswith(
+        "# Drafted with claude-sonnet-5-5 (anthropic runtime) by `readthrough onboard o/app --assisted`"
+    )
+    assert onboard.check_profile_text(text, facts)[0].drafted_by == "model"
+    assert progress == ["Best proposal: 88% coverage, 0 problem(s) left", "The model's notes:\nCheck the API split."]
 
 
-def test_copilot_draft_raises_when_session_never_proposes(monkeypatch: pytest.MonkeyPatch, cfg, facts):
+def test_model_draft_raises_when_session_never_proposes(monkeypatch: pytest.MonkeyPatch, cfg, facts):
     class FakeDrafter:
         def __init__(self, cfg, forge, facts, on_progress):
             self.best = None
@@ -153,10 +158,10 @@ def test_copilot_draft_raises_when_session_never_proposes(monkeypatch: pytest.Mo
             return None
 
     _use(monkeypatch, FakeRuntime())
-    monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
+    monkeypatch.setattr(model_mod, "_Drafter", FakeDrafter)
 
     with pytest.raises(RuntimeError, match="didn't propose"):
-        copilot_draft(cfg, forge=None, facts=facts)
+        model_draft(cfg, forge=None, facts=facts)
 
 
 def test_run_opens_a_fresh_locked_down_conversation_and_closes_it(cfg, facts, monkeypatch: pytest.MonkeyPatch):
@@ -270,7 +275,7 @@ def test_helpers_read_from_github_search_clone_and_track_best(
         clone_drafter.cfg.tuning,
         study=replace(clone_drafter.cfg.tuning.study, onboarding_tool_output_chars=10),
     )
-    monkeypatch.setattr(copilot_mod, "run", lambda cmd, check=True: "abcdefghijklmnopqrstuvwxyz")
+    monkeypatch.setattr(model_mod, "run", lambda cmd, check=True: "abcdefghijklmnopqrstuvwxyz")
     assert clone_drafter._search("a", "src/**").endswith("[truncated 16 characters]")
 
     wrong_repo = onboard.draft_profile(facts).replace('repo = "o/app"', 'repo = "other/app"')
@@ -298,7 +303,7 @@ def test_tools_delegate_to_helpers_and_validate_profile(cfg, facts, monkeypatch:
 
 def test_mark_drafter_replaces_existing_value_and_clip():
     text = 'drafted_by = "readthrough"\nschema = 1\nrepo = "o/app"\n'
-    marked = mark_drafter(text, "copilot")
-    assert marked == 'schema = 1\ndrafted_by = "copilot"\nrepo = "o/app"\n'
+    marked = mark_drafter(text, "model")
+    assert marked == 'schema = 1\ndrafted_by = "model"\nrepo = "o/app"\n'
     assert _clip("abc", limit=10) == "abc"
     assert _clip("abcdef", limit=3) == "abc\n... [truncated 3 characters]"

@@ -109,7 +109,10 @@ class Session(Protocol):
 
 
 class Runtime(Protocol):
-    name: str
+    name: str  # the registry name, which the study log records as ``runtime`` on what the model writes
+
+    @property
+    def model(self) -> str | None: ...  # the configured model, or None when the provider picks (Copilot's default)
 
     async def open(self, conversation: Conversation) -> Session: ...
     async def stop(self) -> None: ...

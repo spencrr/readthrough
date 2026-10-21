@@ -1,8 +1,10 @@
-"""Copilot-assisted onboarding: a Copilot session reads the repo and proposes a profile.
+"""Model-assisted onboarding: a model reads the repo and proposes a profile.
 
-The session gets read-only tools over the repo and one tool to propose a profile. Each proposal is
-validated and measured with the same checks ``readthrough onboard --accept`` uses, and the result goes
-back to the model so it can fix problems. The best proposal wins; you still review it before accepting.
+The conversation runs on the configured model runtime (``runtime`` in config.toml: the Copilot SDK, Anthropic,
+or OpenAI; see ``runtimes/``) with read-only tools over the repo and one tool to propose a profile. Each
+proposal is validated and measured with the same checks ``readthrough onboard --accept`` uses, and the
+result goes back to the model so it can fix problems. The best proposal wins; you still review it before
+accepting, and the profile says a model drafted it, and which.
 """
 
 # No `from __future__ import annotations`: the Copilot SDK reads tool parameter types at runtime.
@@ -25,6 +27,8 @@ from readthrough.profile import ProfileError, parse_profile
 from readthrough.rules import glob_to_regex
 
 log = logging.getLogger(__name__)
+
+MODEL_DRAFTER = "model"  # the drafted_by a model's draft carries (profile.DRAFTERS); the header names the model
 
 
 SYSTEM_MESSAGE = """\
@@ -53,25 +57,28 @@ How to work:
 """
 
 
-def copilot_draft(
+def model_draft(
     cfg: Config, forge: Forge | None, facts: RepoFacts, *, on_progress: Callable[[str], None] = log.info
 ) -> str:
-    """Run a Copilot drafting session and return the best profile it proposed (TOML text)."""
+    """Run a drafting conversation on the configured runtime and return the best profile it proposed (TOML)."""
     _, ok, why = runtimes.resolve(cfg.runtime, cfg.runtime_options)
     if not ok:
-        raise RuntimeError(f"--copilot needs a model runtime: {why}.")
+        raise RuntimeError(f"--assisted needs a model runtime: {why}.")
     drafter = _Drafter(cfg, forge, facts, on_progress)
     asyncio.run(drafter.run())
     if drafter.best is None:
         raise RuntimeError(
-            "Copilot didn't propose a valid profile. Try again, or start from the plain draft (--update)."
+            "The model didn't propose a valid profile. Try again, or start from the plain draft (--update)."
         )
     problems, share, text = drafter.best
     on_progress(f"Best proposal: {share:.0%} coverage, {len(problems)} problem(s) left")
     if drafter.summary:
-        on_progress("Copilot's notes:\n" + drafter.summary.strip())
-    header = f"# Drafted with Copilot by `readthrough onboard {facts.repo} --copilot`. Review it before accepting.\n"
-    return header + mark_drafter(text.lstrip(), "copilot")
+        on_progress("The model's notes:\n" + drafter.summary.strip())
+    who = (
+        f"{drafter.model} ({drafter.runtime_name} runtime)" if drafter.model else f"the {drafter.runtime_name} runtime"
+    )
+    header = f"# Drafted with {who} by `readthrough onboard {facts.repo} --assisted`. Review it before accepting.\n"
+    return header + mark_drafter(text.lstrip(), MODEL_DRAFTER)
 
 
 def mark_drafter(text: str, drafter: str) -> str:
@@ -90,11 +97,14 @@ class _Drafter:
         self.best: tuple[list[str], float, str] | None = None
         self.proposals = 0
         self.summary = ""
+        self.runtime_name = ""
+        self.model: str | None = None  # the model the runtime reported using, for the profile's header
 
     # ---- the session
 
     async def run(self) -> None:
         runtime = runtimes.make(self.cfg.runtime, self.cfg.runtime_options)
+        self.runtime_name = runtime.name
         try:
             conversation = runtimes.Conversation(
                 key=f"readthrough:onboarding:{uuid.uuid4()}",
@@ -115,8 +125,9 @@ class _Drafter:
     def _record_usage(self, used: runtimes.Usage) -> None:
         from readthrough.assistants import record_usage
 
+        self.model = used.model or self.model
         try:
-            record_usage(self.cfg, used, purpose="draft", ref="onboarding", by="copilot")
+            record_usage(self.cfg, used, purpose="draft", ref="onboarding", by=MODEL_DRAFTER)
         except Exception:
             log.exception("Couldn't record model usage for the onboarding draft")
 

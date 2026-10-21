@@ -1,6 +1,6 @@
 # Writing a profile
 
-A profile tells readthrough what a repo's architecture is. Onboarding drafts one for you, and Copilot can draft a better one, but the ones that pay off are edited by someone who knows the code. This page is about making those edits well. The [schema reference](../src/readthrough/assets/profile-reference.md) lists every key; the [test fixture profile](../tests/fixtures/courier.toml), for a made-up message-delivery library, is a complete worked example that uses every part of the schema.
+A profile tells readthrough what a repo's architecture is. Onboarding drafts one for you, and a model can draft a better one, but the ones that pay off are edited by someone who knows the code. This page is about making those edits well. The [schema reference](../src/readthrough/assets/profile-reference.md) lists every key; the [test fixture profile](../tests/fixtures/courier.toml), for a made-up message-delivery library, is a complete worked example that uses every part of the schema.
 
 ## What it's for
 
@@ -11,7 +11,7 @@ Everything readthrough shows you is organized by the profile:
 - **Contracts** (`responsibility` and `does_not_own`) appear in the PR panel and the brief for every component a PR touches. They're what turns "this looks fine" into "this target is now deciding when to retry, and retries belong to the attack." Both the quiz and the deep review ask questions about them.
 - **Signals and smells** are the hints in the PR panel: paths and code patterns that deserve a second look in this repo.
 - **Authors** decides who is internal.
-- **Guidance** goes to Copilot: what reviewers here comment on, how to run the tests, what to emphasise when quizzing.
+- **Guidance** goes to the model, in the deep review and the Study tab: what reviewers here comment on, how to run the tests, what to emphasise when quizzing.
 
 ## Layers
 
@@ -62,7 +62,7 @@ The defaults follow GitHub's author association: owners, org members, and collab
 
 Each kind can have its own `signal` and `questions` under `[authors.kinds.<kind>]`, and you can add kinds of your own (a `partner` kind for a vendor's engineers, say) and map associations or teams to them.
 
-## Guidance for Copilot
+## Guidance for the model
 
 `[review] guidance` is what the deep review follows when it drafts comments: what this repo's reviewers comment on and what they don't. Distil it from the contributing guide or the repo's Copilot instructions, and keep it short. `test_cmd` is how to run tests, with `{clone}` and `{tests}` filled in. `[study] guidance` is extra context for the quiz.
 
@@ -86,7 +86,7 @@ A git repo of profiles is the natural shape: clone it anywhere, point `dirs` at 
 
 ## Who drafted it
 
-Drafts record where they came from in a top-level `drafted_by` key: `"readthrough"` for the file-tree draft, `"copilot"` for a Copilot draft. The dashboard's map legend shows it, so anyone reading the map knows whether a person has been over it. Leave it when you edit a draft; delete it once the profile is really yours.
+Drafts record where they came from in a top-level `drafted_by` key: `"readthrough"` for the file-tree draft, `"model"` for a model's draft (the file's first line names the model and runtime; older profiles say `"copilot"`, the drafter's former name, which reads the same). The dashboard's map legend shows it, so anyone reading the map knows whether a person has been over it. Leave it when you edit a draft; delete it once the profile is really yours.
 
 ## Checking your work
 

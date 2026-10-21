@@ -4,20 +4,20 @@ Busy repos have fifty-plus open pull requests. I wanted two things from a queue 
 
 readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
-From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
+From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before the agent shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
 ![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](docs/img/map.webp)
 
 ## A repo has to be onboarded first
 
-The map is only as good as readthrough's idea of the architecture, so before it lays out a repo you check that idea with it. Onboarding (in the browser at `/setup`, or `readthrough onboard`) drafts an architecture profile from the code, CODEOWNERS, the docs, and where recent PRs actually changed things, measures it against those PRs, and won't accept it until it covers them. Copilot can write the draft for you by reading the repo. Repos can ship their own profile as `readthrough.toml` (in `.github/`, `.gitlab/`, or the root), and a team can keep a directory of profiles for repos that can't.
+The map is only as good as readthrough's idea of the architecture, so before it lays out a repo you check that idea with it. Onboarding (in the browser at `/setup`, or `readthrough onboard`) drafts an architecture profile from the code, CODEOWNERS, the docs, and where recent PRs actually changed things, measures it against those PRs, and won't accept it until it covers them. A model can write the draft for you by reading the repo. Repos can ship their own profile as `readthrough.toml` (in `.github/`, `.gitlab/`, or the root), and a team can keep a directory of profiles for repos that can't.
 
 ## Quick start
 
-You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For deep reviews, the [Copilot CLI](https://github.com/github/copilot-cli) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) signed in; for the Study tab's Copilot assistant, the `[study]` extra.
+You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For deep reviews, the [Copilot CLI](https://github.com/github/copilot-cli) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) signed in; for the Study tab's model assistant, the `[study]` extra (GitHub Copilot) or an API key for Claude or OpenAI.
 
 ```sh
-uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"   # drop [study] to skip Copilot
+uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"   # drop [study] to skip the Copilot SDK
 
 readthrough onboard microsoft/vscode --accept  # map the repo's architecture (edit the draft first if you like)
 readthrough build --open                       # fetch the PRs and open the dashboard
@@ -25,9 +25,9 @@ readthrough build --open                       # fetch the PRs and open the dash
 
 Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/forgejo`, `--forge gitlab gitlab-org/cli`, or `--forge ado organization/project/repository`. Those are read through the platform's REST API, with a token from its own CLI (`glab`, `az`) or an environment variable when there is one, and anonymously otherwise, which is enough for public repos.
 
-That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with Copilot drafting the profile if you like. `readthrough install skill` teaches Copilot the deep-review routine, and `readthrough doctor` tells you what's missing.
+That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with a model drafting the profile if you like. `readthrough install skill` teaches the review agents the deep-review routine, and `readthrough doctor` tells you what's missing.
 
-![Studying a vscode PR: the prediction, a question Copilot asked, the answer, and its verdict with evidence](docs/img/study.webp)
+![Studying a vscode PR: the prediction, a question the model asked, the answer, and its verdict with evidence](docs/img/study.webp)
 
 ## Docs
 
@@ -49,7 +49,7 @@ tuning.py         operational numbers, typed and ranged; defaults.toml documents
 limits.py         safety limits that only change by a deliberate commit
 profile.py        architecture profiles, and where a repo's comes from (a registry of sources)
 onboard.py        drafting a profile from the repo and measuring it against recent PRs
-onboard_copilot.py  the same, with Copilot reading the repo
+onboard_model.py  the same, with a model reading the repo (on the configured runtime)
 model.py          the pull request as the analysis sees it, whichever forge it came from
 forges/           a registry of forge adapters: github (gh), gitlab, forgejo, azure_devops (REST); the diff cache
 faults.py         how outside calls fail, classified from a CLI's stderr or an HTTP status
