@@ -42,7 +42,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from readthrough import __version__, ledger, logs, review, study
-from readthrough.build import DATA_SCHEMA, BuildFailed, build, mark_seen, refresh_sessions, render_html, render_setup
+from readthrough.build import (
+    DATA_SCHEMA,
+    BuildFailed,
+    apply_session_changes,
+    build,
+    mark_seen,
+    refresh_sessions,
+    render_html,
+    render_setup,
+    session_changes,
+)
 from readthrough.config import DEFAULT_HOME, Config, load_settings
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.faults import ForgeError
@@ -274,9 +284,12 @@ class Dashboard:
             with self._lock:
                 self.payload["ledger"] = entries
             self.broadcast("ledger", entries)
-        with self._lock:
-            changed = refresh_sessions(self.payload, self.cfg) if self.payload else {}
+        # Look without the lock (the scan takes real time on a machine with many sessions), apply under it.
+        payload = self.snapshot()
+        changed = session_changes(payload, self.cfg) if payload else {}
         if changed:
+            with self._lock:
+                apply_session_changes(self.payload, changed)
             self.broadcast("sessions", changed)
         self._watch_study()
 

@@ -137,26 +137,40 @@ def session_index(cfg: Config) -> SessionIndex:
         return _indexes[cfg.home]
 
 
-def agent_for(cfg: Config, session_id: str | None = None) -> Agent:
+@dataclass(frozen=True)
+class AgentSet:
+    """The configured agent and every installed one, resolved once. Finding a program on PATH costs several
+    milliseconds on Windows, and a refresh asks about every PR, so the answer is looked up per pass, not per PR."""
+
+    configured: Agent
+    installed: list[Agent]
+
+
+def agent_set(cfg: Config) -> AgentSet:
+    return AgentSet(agents.resolve(cfg.agent, cfg.agent_options), _agents(cfg))
+
+
+def agent_for(cfg: Config, session_id: str | None = None, *, known: AgentSet | None = None) -> Agent:
     """The agent a session belongs to (by the index, else by asking each), or the configured one for a new session."""
-    configured = agents.resolve(cfg.agent, cfg.agent_options)
+    known = known or agent_set(cfg)
     if session_id is None:
-        return configured
+        return known.configured
     name = session_index(cfg).agent_of(session_id)
     if name:
         return agents.make(name, cfg.agent_options)
-    for agent in _agents(cfg):
-        if agent.name != configured.name and agent.session_info(session_id).exists:
+    for agent in known.installed:
+        if agent.name != known.configured.name and agent.session_info(session_id).exists:
             return agent
-    return configured
+    return known.configured
 
 
-def pr_sessions(cfg: Config, number: int, primary: str) -> list[dict[str, object]]:
+def pr_sessions(cfg: Config, number: int, primary: str, *, known: AgentSet | None = None) -> list[dict[str, object]]:
     """Every agent session for this PR, the default one first, then the most recently used."""
+    known = known or agent_set(cfg)
     found = session_index(cfg).sessions_for(cfg.slug, number)
     out = []
     for sid in dict.fromkeys([primary, *found]):
-        agent = agent_for(cfg, sid)
+        agent = agent_for(cfg, sid, known=known)
         info = agent.session_info(sid)
         if info.exists:
             meta = found.get(sid) or {}
@@ -187,9 +201,9 @@ def session_id_for(cfg: Config, number: int, ledger_entry: dict | None) -> str:
     return (ledger_entry or {}).get("session") or default_session_id(cfg, number)
 
 
-def session_info(cfg: Config, session_id: str) -> dict[str, object]:
+def session_info(cfg: Config, session_id: str, *, known: AgentSet | None = None) -> dict[str, object]:
     """Whether the session exists, when it was last written, and whether it's open now (when the agent can say)."""
-    info: SessionInfo = agent_for(cfg, session_id).session_info(session_id)
+    info: SessionInfo = agent_for(cfg, session_id, known=known).session_info(session_id)
     return info.payload()
 
 

@@ -114,6 +114,12 @@
 
 ### Fixed
 
+- The live dashboard took two to four seconds to answer a page request on a repo with a hundred PRs. The
+  watcher thread recomputed every PR's agent sessions every three seconds while holding the payload lock, and
+  for each PR it searched PATH for the agents again (several milliseconds per lookup on Windows), so every page
+  load waited for a pass to finish. The agents are now resolved once per pass, and the scan runs without the
+  lock and applies its findings under it: 5.5 s to 0.1 s per pass on microsoft/vscode, and the page in about
+  100 ms (the browser's own parse and render of the 2.6 MB page is about 200 ms).
 - A clone (or a model, or a runtime) set in config.toml or on the setup page now reaches a running study
   session. The server reloaded the repo's settings but the study engine and its assistant kept the Config they
   were built with, so a repo onboarded without a clone kept failing "No local clone configured" after one was

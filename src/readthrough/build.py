@@ -421,11 +421,12 @@ def _build(
         for old in cfg.briefs_dir.glob("pr-*.md"):
             old.unlink()
     review.session_index(cfg).scan(force=True)
+    known = review.agent_set(cfg)
     for it in items:
         entry = entries.get(str(it["number"]))
         primary = review.session_id_for(cfg, it["number"], entry)
-        it["session"] = review.session_info(cfg, primary)
-        it["sessions"] = review.pr_sessions(cfg, it["number"], primary)
+        it["session"] = review.session_info(cfg, primary, known=known)
+        it["sessions"] = review.pr_sessions(cfg, it["number"], primary, known=known)
         log_entries = study.load(cfg, it["number"])
         it["study"] = study.summarize(log_entries)
         appendix = study.render_appendix(log_entries)
@@ -572,15 +573,36 @@ def render_html(payload: dict[str, Any], *, live: dict[str, Any] | None = None, 
     )
 
 
-def refresh_sessions(payload: dict[str, Any], cfg: Config) -> dict[int, dict[str, Any]]:
-    """Recompute Copilot session status for every PR. Returns only the PRs whose sessions changed."""
+def session_changes(payload: dict[str, Any], cfg: Config) -> dict[int, dict[str, Any]]:
+    """The PRs whose agent sessions differ from what the payload says, and their new values.
+
+    Only reads: the server runs this on its watcher thread every few seconds and must not hold the payload lock
+    while it looks, or every page request waits on it. The agents are resolved once per pass; the lookups
+    behind them cost milliseconds each and there is one PR after another.
+    """
     review.session_index(cfg).scan()
+    known = review.agent_set(cfg)
     changed = {}
     for it in payload["prs"]:
         entry = payload["ledger"].get(str(it["number"]))
         primary = review.session_id_for(cfg, it["number"], entry)
-        info, sessions = review.session_info(cfg, primary), review.pr_sessions(cfg, it["number"], primary)
+        info = review.session_info(cfg, primary, known=known)
+        sessions = review.pr_sessions(cfg, it["number"], primary, known=known)
         if info != it.get("session") or sessions != it.get("sessions"):
-            it["session"], it["sessions"] = info, sessions
             changed[it["number"]] = {"session": info, "sessions": sessions}
+    return changed
+
+
+def apply_session_changes(payload: dict[str, Any], changed: dict[int, dict[str, Any]]) -> None:
+    """Write what ``session_changes`` found into the payload (under the server's lock, when there is one)."""
+    by_number = {it["number"]: it for it in payload["prs"]}
+    for number, fields in changed.items():
+        if (it := by_number.get(number)) is not None:
+            it.update(fields)
+
+
+def refresh_sessions(payload: dict[str, Any], cfg: Config) -> dict[int, dict[str, Any]]:
+    """Recompute agent session status for every PR in place. Returns only the PRs whose sessions changed."""
+    changed = session_changes(payload, cfg)
+    apply_session_changes(payload, changed)
     return changed

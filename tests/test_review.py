@@ -206,6 +206,35 @@ def test_sessions_are_linked_to_prs_by_the_prompt_marker(tmp_path: Path):
         review.plan_review(cfg, 7, ledger_entry=None, session_id="44444444-4444-4444-4444-444444444444")
 
 
+def test_refreshing_sessions_looks_up_the_agents_once_per_pass(tmp_path: Path, monkeypatch):
+    """Finding a program on PATH costs milliseconds (Windows walks every PATH entry and extension); done per PR,
+    a hundred PRs cost seconds, and the live server did it every few seconds under the payload lock."""
+    from readthrough import agents, build
+
+    cfg = Config(home=tmp_path / "home", repo="o/r", clone=tmp_path)
+    cfg.home.mkdir()
+    lookups = []
+    monkeypatch.setattr(agents, "installed", lambda program: lookups.append(program) or program == "copilot")
+    payload = {"prs": [{"number": n} for n in range(1, 51)], "ledger": {}}
+
+    changed = build.refresh_sessions(payload, cfg)
+
+    # The session index asks each agent once when it's built, then a pass resolves the configured agent and
+    # the installed ones: five lookups for two agents, however many PRs there are.
+    assert len(lookups) <= 5, f"PATH was searched {len(lookups)} times for 50 PRs; the bound is per agent per pass"
+    assert changed == {n: {"session": payload["prs"][n - 1]["session"], "sessions": []} for n in range(1, 51)}
+    assert all(
+        p["session"]
+        == {"id": review.default_session_id(cfg, p["number"]), "exists": False, "updated": None, "active": None}
+        for p in payload["prs"]
+    )
+    # Looking and applying are separate so a server can look without its lock; looking changes nothing.
+    before, seen = json.dumps(payload), len(lookups)
+    again = build.session_changes(payload, cfg)
+    assert again == {} and json.dumps(payload) == before
+    assert len(lookups) - seen <= 3, "a later pass: the configured agent and the installed ones, nothing per PR"
+
+
 def test_review_prompt_starts_with_the_marker(tmp_path: Path):
     prompt = review.review_prompt(_cfg(tmp_path), 7, Path("b.md"))
     assert prompt.startswith("[readthrough:github/o/r#7] ")

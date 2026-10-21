@@ -104,6 +104,27 @@ def test_external_changes_are_picked_up(live):
     assert event == "sessions"
     assert data[7]["session"]["exists"] and data[7]["session"]["active"]
     assert [x["id"] for x in data[7]["sessions"]] == [data[7]["session"]["id"]]
+    assert dashboard.snapshot()["prs"][0]["session"]["active"], "applied to the payload the pages read"
+
+
+def test_the_session_scan_runs_outside_the_payload_lock(live, monkeypatch):
+    """On a machine with many agent sessions the scan takes real time; holding the lock meanwhile made every page
+    request wait for it (seconds, on a hundred PRs). The watcher looks first and applies under the lock."""
+    from readthrough import serve as serve_mod
+
+    dashboard, _ = live
+    seen = []
+
+    def fake_changes(payload, cfg):
+        seen.append(dashboard._lock.locked())
+        return {7: {"session": {"id": "s", "exists": True}, "sessions": []}}
+
+    monkeypatch.setattr(serve_mod, "session_changes", fake_changes)
+    events = dashboard.subscribe()
+    dashboard._watch_once()
+    assert seen == [False], "the lock is free while the scan runs"
+    assert events.get(timeout=2) == ("sessions", {7: {"session": {"id": "s", "exists": True}, "sessions": []}})
+    assert dashboard.snapshot()["prs"][0]["session"] == {"id": "s", "exists": True}
 
 
 def test_second_server_cannot_share_the_port(live):
