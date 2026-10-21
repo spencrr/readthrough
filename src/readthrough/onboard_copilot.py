@@ -16,6 +16,7 @@ from collections.abc import Callable
 from importlib.resources import files
 from typing import Any
 
+from readthrough import runtimes
 from readthrough.config import Config
 from readthrough.forges import Forge
 from readthrough.onboard import RepoFacts, author_table, check_profile_text, draft_profile, measure, report
@@ -56,10 +57,9 @@ def copilot_draft(
     cfg: Config, forge: Forge | None, facts: RepoFacts, *, on_progress: Callable[[str], None] = log.info
 ) -> str:
     """Run a Copilot drafting session and return the best profile it proposed (TOML text)."""
-    try:
-        import copilot  # noqa: F401
-    except ImportError as exc:
-        raise RuntimeError("--copilot needs the Copilot SDK. Install readthrough with the [study] extra.") from exc
+    _, ok, why = runtimes.resolve(cfg.runtime, cfg.runtime_options)
+    if not ok:
+        raise RuntimeError(f"--copilot needs a model runtime: {why}.")
     drafter = _Drafter(cfg, forge, facts, on_progress)
     asyncio.run(drafter.run())
     if drafter.best is None:
@@ -94,74 +94,52 @@ class _Drafter:
     # ---- the session
 
     async def run(self) -> None:
-        from copilot.generated.rpc import PermissionDecisionUserNotAvailable
-
-        from readthrough.assistants import copilot_client, copilot_options, model_options
-
-        options_for = copilot_options(self.cfg)
-        client = copilot_client(options_for)
-        await client.start()
+        runtime = runtimes.make(self.cfg.runtime, self.cfg.runtime_options)
         try:
-            tools = self._tools()
-            options: dict[str, Any] = {
-                "tools": tools,
-                "available_tools": [t.name for t in tools],
-                "on_permission_request": lambda _req, _ctx: PermissionDecisionUserNotAvailable(),
-                "client_name": "readthrough-onboard",
-                "working_directory": str(self.clone or self.cfg.home),
-                "enable_skills": False,
-                "system_message": {"mode": "append", "content": SYSTEM_MESSAGE.format(repo=self.facts.repo)},
-            }
-            options.update(model_options(self.cfg, options_for))
-            session = await client.create_session(session_id=str(uuid.uuid4()), **options)
+            conversation = runtimes.Conversation(
+                key=f"readthrough:onboarding:{uuid.uuid4()}",
+                system=SYSTEM_MESSAGE.format(repo=self.facts.repo),
+                tools=self._tools(),
+                working_directory=str(self.clone or self.cfg.home),
+                model=self.cfg.study_model,
+                resume=False,
+            )
+            session = await runtime.open(conversation)
             try:
                 self.summary = await self._send(session, self._first_prompt())
             finally:
-                await session.disconnect()
+                await session.close()
         finally:
-            await client.stop()
+            await runtime.stop()
 
-    def _record_usage(self, data: Any) -> None:
-        from readthrough.assistants import copilot_options, record_sdk_usage
+    def _record_usage(self, used: runtimes.Usage) -> None:
+        from readthrough.assistants import record_usage
 
         try:
-            record_sdk_usage(self.cfg, data, purpose="draft", ref="onboarding", by="copilot",
-                             options=copilot_options(self.cfg))  # fmt: skip
+            record_usage(self.cfg, used, purpose="draft", ref="onboarding", by="copilot")
         except Exception:
             log.exception("Couldn't record model usage for the onboarding draft")
 
-    async def _send(self, session: Any, prompt: str) -> str:
-        loop = asyncio.get_running_loop()
-        done = asyncio.Event()
-        last: list[str] = []
-        error: list[str] = []
+    async def _send(self, session: runtimes.Session, prompt: str) -> str:
+        final = ""
+        error: str | None = None
 
-        def on_event(event: Any) -> None:
-            kind = getattr(event.type, "value", str(event.type))
-            data = event.data
-            if kind == "assistant.usage":
-                self._record_usage(data)
-            elif kind == "assistant.message":
-                last[:] = [getattr(data, "content", None) or ""]
-            elif kind == "tool.execution_start":
-                name = getattr(data, "tool_name", "?")
-                if name != "propose_profile":
-                    self.say(f"Copilot: {name.replace('_', ' ')}")
-            elif kind == "session.error":
-                error.append(getattr(data, "message", None) or "Copilot reported an error")
-                loop.call_soon_threadsafe(done.set)
-            elif kind == "session.idle":
-                loop.call_soon_threadsafe(done.set)
+        async def consume() -> None:
+            nonlocal final, error
+            async for event in session.send(prompt):
+                if event.kind == "usage" and event.usage is not None:
+                    self._record_usage(event.usage)
+                elif event.kind == "tool" and event.name != "propose_profile":
+                    self.say(f"model: {event.name.replace('_', ' ')}")
+                elif event.kind == "error":
+                    error = event.text
+                elif event.kind == "done":
+                    final = event.text
 
-        unsubscribe = session.on(on_event)
-        try:
-            await session.send(prompt)
-            await asyncio.wait_for(done.wait(), timeout=self.cfg.tuning.study.onboarding_turn_timeout_seconds)
-        finally:
-            unsubscribe()
+        await asyncio.wait_for(consume(), timeout=self.cfg.tuning.study.onboarding_turn_timeout_seconds)
         if error and self.best is None:
-            raise RuntimeError(error[0])
-        return last[0] if last else ""
+            raise RuntimeError(error)
+        return final
 
     def _first_prompt(self) -> str:
         f = self.facts
@@ -259,60 +237,22 @@ class _Drafter:
 
     # ---- tools
 
-    def _tools(self) -> list[Any]:
-        from copilot import define_tool
-        from pydantic import BaseModel, Field
-
+    def _tools(self) -> list[runtimes.ToolSpec]:
         drafter = self
 
-        class DirParams(BaseModel):
-            prefix: str = Field("", description="Directory to list, e.g. 'src/app'. Empty for the repo root.")
-            depth: int = Field(2, ge=1, le=4, description="How many levels below the prefix to show")
+        async def list_directory(args: dict[str, Any]) -> str:
+            return drafter._dirs(args.get("prefix") or "", int(args.get("depth") or 2))
 
-        class ReadParams(BaseModel):
-            path: str = Field(description="Repo-relative file path")
-            start_line: int = Field(1, ge=1)
-            end_line: int = Field(200, ge=1)
+        async def read_file(args: dict[str, Any]) -> str:
+            return await asyncio.to_thread(
+                drafter._read, args["path"], int(args.get("start_line") or 1), int(args.get("end_line") or 200)
+            )
 
-        class SearchParams(BaseModel):
-            pattern: str = Field(description="Extended regex for git grep -E")
-            path_glob: str | None = Field(None, description="Optional pathspec, e.g. 'src/**/*.py'")
+        async def search_code(args: dict[str, Any]) -> str:
+            return await asyncio.to_thread(drafter._search, args["pattern"], args.get("path_glob"))
 
-        class GlobParams(BaseModel):
-            glob: str = Field(description="A profile path glob, e.g. 'src/app/score/**'")
-
-        class ProposeParams(BaseModel):
-            toml: str = Field(description="The complete profile as TOML")
-
-        @define_tool(
-            name="list_directory",
-            description="Directories and files with file counts and recent PR churn.",
-            skip_permission=True,
-        )
-        def list_directory(params: DirParams) -> str:
-            return drafter._dirs(params.prefix, params.depth)
-
-        @define_tool(
-            name="read_file",
-            description="Read lines of a file on the default branch. Lines are numbered.",
-            skip_permission=True,
-        )
-        async def read_file(params: ReadParams) -> str:
-            return await asyncio.to_thread(drafter._read, params.path, params.start_line, params.end_line)
-
-        @define_tool(
-            name="search_code", description="git grep the repo. Returns path:line:text matches.", skip_permission=True
-        )
-        async def search_code(params: SearchParams) -> str:
-            return await asyncio.to_thread(drafter._search, params.pattern, params.path_glob)
-
-        @define_tool(
-            name="match_glob",
-            description="Which repo files a profile glob matches, and their recent churn.",
-            skip_permission=True,
-        )
-        def match_glob(params: GlobParams) -> str:
-            rx = glob_to_regex(params.glob)
+        async def match_glob(args: dict[str, Any]) -> str:
+            rx = glob_to_regex(args["glob"])
             hits = [p for p in drafter.facts.tree if rx.match(p)]
             churn = sum(drafter.facts.churn.get(p, 0) for p in hits)
             return (
@@ -321,15 +261,41 @@ class _Drafter:
                 + ("\n..." if len(hits) > 40 else "")
             )
 
-        @define_tool(
-            name="propose_profile",
-            description="Validate and measure a complete profile. Returns coverage and problems.",
-            skip_permission=True,
-        )
-        def propose_profile(params: ProposeParams) -> str:
-            return drafter._propose(params.toml)
+        async def propose_profile(args: dict[str, Any]) -> str:
+            return drafter._propose(args["toml"])
 
-        return [list_directory, read_file, search_code, match_glob, propose_profile]
+        s = runtimes.ToolSpec
+        return [
+            s("list_directory", "Directories and files with file counts and recent PR churn.", {
+                "properties": {
+                    "prefix": {"type": "string", "description": "Directory to list, e.g. 'src/app'. Empty for the repo root.", "default": ""},
+                    "depth": {"type": "integer", "minimum": 1, "maximum": 4, "description": "How many levels below the prefix to show", "default": 2},
+                },
+            }, list_directory),
+            s("read_file", "Read lines of a file on the default branch. Lines are numbered.", {
+                "properties": {
+                    "path": {"type": "string", "description": "Repo-relative file path"},
+                    "start_line": {"type": "integer", "minimum": 1, "default": 1},
+                    "end_line": {"type": "integer", "minimum": 1, "default": 200},
+                },
+                "required": ["path"],
+            }, read_file),
+            s("search_code", "git grep the repo. Returns path:line:text matches.", {
+                "properties": {
+                    "pattern": {"type": "string", "description": "Extended regex for git grep -E"},
+                    "path_glob": {"type": "string", "description": "Optional pathspec, e.g. 'src/**/*.py'"},
+                },
+                "required": ["pattern"],
+            }, search_code),
+            s("match_glob", "Which repo files a profile glob matches, and their recent churn.", {
+                "properties": {"glob": {"type": "string", "description": "A profile path glob, e.g. 'src/app/score/**'"}},
+                "required": ["glob"],
+            }, match_glob),
+            s("propose_profile", "Validate and measure a complete profile. Returns coverage and problems.", {
+                "properties": {"toml": {"type": "string", "description": "The complete profile as TOML"}},
+                "required": ["toml"],
+            }, propose_profile),
+        ]  # fmt: skip
 
 
 def _clip(text: str, *, limit: int) -> str:

@@ -1,27 +1,21 @@
-"""The study assistants: the rules one end to end, the Copilot one against a fake SDK, and how they're chosen."""
+"""The study assistants: the rules one end to end, the model one on a fake runtime, and how they're chosen."""
 
 import asyncio
-import sys
-import types
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from conftest import NOW, PROFILE, PROFILE_PATH, REPO
 
-from readthrough import assistants, study
-from readthrough.agents import SessionInfo
+from readthrough import assistants, runtimes, study, usage
 from readthrough.analyze import analyze
 from readthrough.assistants import (
     ASSISTANTS,
-    CopilotAssistant,
+    ModelAssistant,
     RulesAssistant,
     Turn,
     _clip,
-    open_study_session,
     question_bank,
     system_message,
 )
@@ -96,29 +90,39 @@ def harness(cfg, make_pull) -> Harness:
 # ---------------------------------------------------------------- choosing
 
 
-def test_resolve_prefers_copilot_when_installed_and_rules_otherwise(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        assistants, "available", lambda name: (name != "copilot", "no sdk" if name == "copilot" else "")
-    )
+def test_resolve_prefers_the_model_assistant_when_a_runtime_can_run(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("copilot", False, "no sdk"))
     assert assistants.resolve("auto") == assistants.Resolved("rules", True, "")
-    assert assistants.resolve("copilot") == assistants.Resolved("copilot", False, "no sdk")
-    monkeypatch.setattr(assistants, "available", lambda name: (True, ""))
+    resolved = assistants.resolve("copilot")
+    assert resolved.name == "copilot" and not resolved.available and "no model to run on: no sdk" in resolved.reason
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("anthropic", True, ""))
     assert assistants.resolve("auto") == assistants.Resolved("copilot", True, "")
     with pytest.raises(RegistryError, match="did you mean 'rules'"):
         assistants.resolve("ruels")
 
 
-def test_available_names_the_missing_extra(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setitem(sys.modules, "copilot", None)  # makes `import copilot` raise ImportError
+def test_available_names_what_is_missing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        runtimes,
+        "available",
+        lambda name: (
+            (False, "the copilot runtime needs the Copilot SDK: install readthrough with the [study] extra")
+            if name == "copilot"
+            else (False, f"the {name} runtime needs an API key")
+        ),
+    )
     ok, reason = assistants.available("copilot")
-    assert not ok and "[study]" in reason
+    assert not ok and "install the [study] extra, or set an API key" in reason
     assert assistants.available("rules") == (True, "")
 
 
 def test_make_builds_the_configured_assistant(harness, monkeypatch: pytest.MonkeyPatch):
     assert isinstance(assistants.make(harness, "rules"), RulesAssistant)
-    monkeypatch.setattr(assistants, "available", lambda name: (True, ""))
-    assert isinstance(assistants.make(harness, "auto"), CopilotAssistant)
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("fake", True, ""))
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
+    assert isinstance(assistants.make(harness, "auto"), ModelAssistant)
     assert [p.name for p in ASSISTANTS] == ["rules", "copilot"]
 
 
@@ -206,65 +210,82 @@ def test_rules_without_a_profile_has_no_questions(harness):
     assert "every question" in study.load(harness.cfg, 7)[-1]["text"]
 
 
-# ---------------------------------------------------------------- copilot
-
-
-class Params(SimpleNamespace):
-    def model_dump(self, *, exclude_none: bool = False):
-        data = dict(self.__dict__)
-        return {k: v for k, v in data.items() if v is not None} if exclude_none else data
-
-
-def _event(kind: str, **data):
-    return SimpleNamespace(type=SimpleNamespace(value=kind), data=SimpleNamespace(**data))
-
-
-def _install_fake_copilot(monkeypatch: pytest.MonkeyPatch, client=None) -> None:
-    def define_tool(**tool_options):
-        def decorate(func):
-            func.name = tool_options["name"]
-            func.tool_options = tool_options
-            return func
-
-        return decorate
-
-    class PermissionDecisionUserNotAvailable:
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot",
-        types.SimpleNamespace(
-            define_tool=define_tool, CopilotClient=(lambda **kw: client.built(kw)) if client else object
-        ),
-    )
-    monkeypatch.setitem(sys.modules, "copilot.generated", types.SimpleNamespace())
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot.generated.rpc",
-        types.SimpleNamespace(PermissionDecisionUserNotAvailable=PermissionDecisionUserNotAvailable),
-    )
+# ---------------------------------------------------------------- the model assistant, on a fake runtime
 
 
 class FakeSession:
-    def __init__(self, events):
-        self.events = events
-        self.sent = []
-        self.unsubscribed = False
-        self.callback: Callable[[Any], None] = lambda _event: None
+    """A runtime session scripted with the events one prompt produces. Tool calls run the real handlers."""
 
-    def on(self, callback):
-        self.callback = callback
+    def __init__(self, script: list[Any], *, fresh: bool = True):
+        self.script = script  # Events, or ("call", tool_name, args) to run a tool and report it
+        self.sent: list[str] = []
+        self._fresh = fresh
+        self.closed = False
+        self.tools: dict[str, runtimes.ToolSpec] = {}
 
-        def unsubscribe():
-            self.unsubscribed = True
+    @property
+    def fresh(self) -> bool:
+        return self._fresh
 
-        return unsubscribe
-
-    async def send(self, prompt):
+    async def send(self, prompt: str):
         self.sent.append(prompt)
-        for event in self.events:
-            self.callback(event)
+        self._fresh = False
+        text: list[str] = []
+        for item in self.script:
+            if isinstance(item, tuple):
+                _, name, args = item
+                yield runtimes.Event("tool", name=name)
+                await self.tools[name].handler(args)
+                continue
+            if item.kind == "text":
+                text.append(item.text)
+            yield runtimes.Event("done", text="".join(text)) if item.kind == "done" and not item.text else item
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeRuntime:
+    name = "fake"
+
+    def __init__(self, options: Any = None):
+        self.sessions: dict[str, FakeSession] = {}
+        self.opened: list[runtimes.Conversation] = []
+        self.script: list[Any] = [runtimes.Event("done")]
+        self.stopped = False
+
+    def describe(self) -> str:
+        return "a fake runtime"
+
+    async def open(self, conversation: runtimes.Conversation) -> FakeSession:
+        self.opened.append(conversation)
+        session = self.sessions.get(conversation.key)
+        if session is None or not conversation.resume:
+            session = self.sessions[conversation.key] = FakeSession(list(self.script))
+        session.tools = {t.name: t for t in conversation.tools}
+        return session
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+@pytest.fixture
+def fake_runtime(monkeypatch: pytest.MonkeyPatch) -> FakeRuntime:
+    runtime = FakeRuntime()
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: runtime)
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("fake", True, ""))
+    return runtime
+
+
+def _usage(**kw: Any) -> runtimes.Usage:
+    base: dict[str, Any] = {
+        "call_id": "call-1",
+        "model": "claude-sonnet-5-5",
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "billed_to": "anthropic:api.anthropic.com",
+    }
+    return runtimes.Usage(**{**base, **kw})
 
 
 def test_system_message_adds_guidance_only_when_present():
@@ -272,225 +293,85 @@ def test_system_message_adds_guidance_only_when_present():
     assert "About this repository:\nuse the framework map\n" in system_message("o/r", "  use the framework map  ")
 
 
-def test_turn_adds_first_context_on_a_new_session(harness, monkeypatch: pytest.MonkeyPatch):
-    copilot = CopilotAssistant(harness, None)
-    prompts = []
+def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runtime, monkeypatch):
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
+    fake_runtime.script = [runtimes.Event("text", text="  A reply  "), runtimes.Event("done")]
+    assistant = ModelAssistant(harness, None)
+    asyncio.run(assistant.turn(Turn(7, "chat", "original prompt", None, "original prompt")))
+    session = fake_runtime.sessions[next(iter(fake_runtime.sessions))]
+    assert f"We're studying {REPO}#7" in session.sent[0] and session.sent[0].endswith("original prompt")
+    assert "brief brief" in session.sent[0], "the brief rides along on the first turn"
+    conversation = fake_runtime.opened[0]
+    assert conversation.key.endswith("#study") and conversation.working_directory == "wt"
+    assert [t.name for t in conversation.tools] == ["get_diff", "read_file", "search_code", "ask_quiz_question",
+                                                    "assess_answer", "assess_teachback", "append_to_brief", "record_finding"]  # fmt: skip
+    assert "The learner maintains Courier" in conversation.system
+    last = study.load(harness.cfg, 7)[-1]
+    assert (last["kind"], last["by"], last["text"]) == ("chat", "copilot", "A reply")
+    asyncio.run(assistant.turn(Turn(7, "chat", "again", None, "again")))
+    assert session.sent[1] == "again", "the second turn is the prompt alone"
 
-    async def session_for(number: int) -> tuple[Any, bool]:
-        return object(), True
 
-    async def send(number: int, session: Any, prompt: str) -> str:
-        prompts.append(prompt)
-        return "  Copilot reply  "
-
-    monkeypatch.setattr(copilot, "_session_for", session_for)
-    monkeypatch.setattr(copilot, "_send", send)
-    asyncio.run(copilot.turn(Turn(7, "chat", "original prompt", None, "original prompt")))
-    assert f"We're studying {REPO}#7" in prompts[0] and prompts[0].endswith("original prompt")
-    assert study.load(harness.cfg, 7)[-1] | {"text": "Copilot reply", "by": "copilot"} == study.load(harness.cfg, 7)[-1]
-
-
-def test_send_streams_deltas_records_quiz_leadin_and_unsubscribes(harness):
-    session = FakeSession(
-        [
-            _event("assistant.message_delta", delta_content="Lead-in"),
-            _event("tool.execution_start", tool_name="ask_quiz_question"),
-            _event("assistant.message_delta", delta_content="After tool"),
-            _event("assistant.message", content="After tool"),
-            _event("session.idle"),
-        ]
-    )
-    copilot = CopilotAssistant(harness, None)
-    text = asyncio.run(copilot._send(7, session, "prompt"))
-    assert text == "After tool\n\n"
-    assert session.sent == ["prompt"] and session.unsubscribed
-    assert study.load(harness.cfg, 7)[0]["text"] == "Lead-in"
+def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, monkeypatch):
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
+    fake_runtime.script = [
+        runtimes.Event("text", text="Lead-in"),
+        ("call", "ask_quiz_question", {"question": "Why?", "focus": "intent", "expected_points": ["x"]}),
+        runtimes.Event("done"),
+    ]
+    assistant = ModelAssistant(harness, None)
+    asyncio.run(assistant.turn(Turn(7, "quiz", "", None, "Ask me the next quiz question.")))
+    kinds = [(e["kind"], e.get("text", e.get("question"))) for e in study.load(harness.cfg, 7)]
+    assert kinds == [("chat", "Lead-in"), ("question", "Why?")], "the lead-in stays above the question card"
     assert ("study", {"pr": 7, "type": "tool", "name": "ask_quiz_question"}) in harness.events
-    assert ("study", {"pr": 7, "type": "delta", "text": "After tool"}) in harness.events
+    assert ("study", {"pr": 7, "type": "delta", "text": "Lead-in"}) in harness.events
 
 
-def test_send_raises_session_errors_and_timeouts(harness):
-    copilot = CopilotAssistant(harness, None)
-    error_session = FakeSession([_event("session.error", message="boom")])
+def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkeypatch):
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
+    fake_runtime.script = [runtimes.Event("error", text="boom")]
+    assistant = ModelAssistant(harness, None)
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(copilot._send(7, error_session, "prompt"))
-    assert error_session.unsubscribed
+        asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
+
+    class Hanging(FakeSession):
+        async def send(self, prompt: str):
+            await asyncio.sleep(10)
+            yield runtimes.Event("done")
+
     harness.cfg.tuning = replace(harness.cfg.tuning, study=replace(harness.cfg.tuning.study, turn_timeout_seconds=0.05))
-    timeout_session = FakeSession([])  # never signals idle or error
+    hanging = Hanging([])
+    fake_runtime.sessions.clear()
+    assistant._sessions[8] = hanging
     with pytest.raises(TimeoutError):
-        asyncio.run(copilot._send(7, timeout_session, "prompt"))
-    assert timeout_session.unsubscribed
+        asyncio.run(assistant.turn(Turn(8, "chat", "x", None, "x")))
 
 
-def test_session_for_starts_client_builds_options_and_caches_session(harness, tmp_path, monkeypatch):
-    class Client:
-        def __init__(self):
-            self.started = False
-            self.resumed = []
-            self.construction: dict = {}
-
-        def built(self, kwargs):
-            self.construction = kwargs
-            return self
-
-        async def start(self):
-            self.started = True
-
-        async def resume_session(self, sid, **options):
-            self.resumed.append((sid, options))
-            return SimpleNamespace(session_id=sid)
-
-    client = Client()
-    worktree = tmp_path / "worktree"
-    worktree.mkdir()
-    _install_fake_copilot(monkeypatch, client)
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
-    monkeypatch.setattr(assistants.Copilot, "session_info", lambda _self, sid: SessionInfo(sid, exists=True))
-
-    copilot = CopilotAssistant(harness, None)
-    harness.cfg.study_model = "gpt-test"
-    session, created = asyncio.run(copilot._session_for(7))
-    cached, cached_created = asyncio.run(copilot._session_for(7))
-
-    assert client.started
-    assert session is cached and created is False and cached_created is False
-    sid, options = client.resumed[0]
-    assert copilot._pr_by_session[sid] == 7
-    assert options["client_name"] == "readthrough"
-    assert options["working_directory"] == str(worktree)
-    assert options["model"] == "gpt-test"
-    assert options["available_tools"] == [tool.name for tool in copilot._tools or []]
-    assert "The learner maintains Courier" in options["system_message"]["content"]
-    assert options["on_permission_request"](None, None).__class__.__name__ == "PermissionDecisionUserNotAvailable"
-
-
-def test_copilot_options_describe_a_provider_of_your_own(monkeypatch):
-    from readthrough.assistants import CopilotOptions
-
-    default = CopilotOptions()
-    assert not default.byok and default.provider_config() is None and default.billed_to() == "copilot"
-    with pytest.raises(ValueError, match="provider must be one of"):
-        CopilotOptions(provider="gemini", base_url="https://x", model="m")
-    with pytest.raises(ValueError, match="needs base_url"):
-        CopilotOptions(provider="anthropic", model="claude-sonnet-4-5")
-    with pytest.raises(ValueError, match="needs model"):
-        CopilotOptions(provider="anthropic", base_url="https://api.anthropic.com")
-    opts = CopilotOptions(
-        provider="anthropic", base_url="https://api.anthropic.com", model="claude-sonnet-4-5", api_key_env="MY_KEY"
-    )
-    assert opts.byok and opts.billed_to() == "anthropic:api.anthropic.com"
-    monkeypatch.delenv("MY_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="MY_KEY isn't set"):
-        opts.provider_config()
-    monkeypatch.setenv("MY_KEY", "sk-ant-test")
-    assert opts.provider_config() == {
-        "type": "anthropic",
-        "base_url": "https://api.anthropic.com",
-        "api_key": "sk-ant-test",
-    }
-    azure = CopilotOptions(
-        provider="azure",
-        base_url="https://r.openai.azure.com",
-        model="gpt-5",
-        api_key_env="MY_KEY",
-        azure_api_version="2025-04-01",
-    )
-    assert (azure.provider_config() or {})["azure"] == {"api_version": "2025-04-01"}
-    # The config loader validates the table like any plugin's, so a typo is caught there.
-    from readthrough.assistants import ASSISTANTS
-
-    with pytest.raises(Exception, match="base_ur"):
-        ASSISTANTS.options_for(
-            "copilot", {"provider": "openai", "base_ur": "https://x", "model": "m"}, where="[assistants.copilot]"
-        )
-
-
-def test_a_provider_of_your_own_means_no_github_sign_in(harness, tmp_path, monkeypatch):
-    """With [assistants.copilot] provider set, the runtime talks to that provider and never falls back to the
-    Copilot CLI's GitHub login; the repo's study_model still wins over the provider's model."""
-    from readthrough.assistants import CopilotOptions
-
-    class Client:
-        def __init__(self):
-            self.created = []
-            self.construction: dict = {}
-
-        def built(self, kwargs):
-            self.construction = kwargs
-            return self
-
-        async def start(self):
-            pass
-
-        async def create_session(self, session_id, **options):
-            self.created.append(options)
-            return SimpleNamespace(session_id=session_id)
-
-    client = Client()
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
-    _install_fake_copilot(monkeypatch, client)
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
-    monkeypatch.setattr(assistants.Copilot, "session_info", lambda _self, sid: SessionInfo(sid, exists=False))
-    monkeypatch.setenv("READTHROUGH_MODEL_API_KEY", "sk-test")
-    opts = CopilotOptions(
-        provider="openai", base_url="https://api.openai.com/v1", model="gpt-5-codex", wire_api="responses"
-    )
-
-    copilot = CopilotAssistant(harness, opts)
-    asyncio.run(copilot._session_for(7))
-    assert client.construction == {"use_logged_in_user": False}
-    options = client.created[0]
-    assert options["provider"] == {
-        "type": "openai",
-        "base_url": "https://api.openai.com/v1",
-        "api_key": "sk-test",
-        "wire_api": "responses",
-    }
-    assert options["model"] == "gpt-5-codex"
-
-    harness.cfg.study_model = "o4-mini"
-    other = CopilotAssistant(harness, opts)
-    asyncio.run(other._session_for(8))
-    assert client.created[1]["model"] == "o4-mini", "the repo's own model choice wins"
-
-    plain = CopilotAssistant(harness, None)
-    asyncio.run(plain._session_for(9))
-    assert client.construction == {}, "GitHub Copilot: the CLI's own sign-in, as before"
-    assert "provider" not in client.created[2]
-
-
-def test_usage_events_become_ledger_lines(harness, monkeypatch):
-    """Each assistant.usage event is one ledger line in the provider's own units, idempotent by call id, billed
-    to the Copilot viewer or to the provider; a line names what was measured and nothing else."""
-    from readthrough import usage
-    from readthrough.assistants import CopilotOptions
-
+def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
+    """Each usage event is one ledger line in the provider's own units, idempotent by call id, billed to whoever
+    the runtime says; GitHub Copilot's lines name the dashboard's viewer."""
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     harness.cfg.data_path.parent.mkdir(parents=True, exist_ok=True)
     harness.cfg.data_path.write_text('{"viewer": "spencrr"}', encoding="utf-8")
-    copilot_usage = SimpleNamespace(total_nano_aiu=1.5e9)
-    event = _event("assistant.usage", api_call_id="call-1", model="claude-sonnet-4-5", input_tokens=1200, output_tokens=300,
-                   cache_read_tokens=800, cache_write_tokens=None, reasoning_tokens=None, cost=1.0, is_byok=False,
-                   copilot_usage=copilot_usage)  # fmt: skip
-    session = FakeSession([event, event, _event("session.idle")])  # the same call reported twice
-    copilot = CopilotAssistant(harness, None)
-    asyncio.run(copilot._send(7, session, "prompt"))
+    copilot_call = _usage(call_id="call-1", model="gpt-5", input_tokens=1200, output_tokens=300, cache_read_tokens=800,
+                          multiplier=1.0, nano_aiu=1.5e9, billed_to="copilot")  # fmt: skip
+    fake_runtime.script = [runtimes.Event("usage", usage=copilot_call), runtimes.Event("usage", usage=copilot_call),
+                           runtimes.Event("text", text="ok"), runtimes.Event("done")]  # fmt: skip
+    assistant = ModelAssistant(harness, None)
+    asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
     entries = usage.load(harness.cfg)
     assert len(entries) == 1, "idempotent by call id"
     line = entries[0]
-    assert line["id"] == "call-1" and line["purpose"] == "study" and line["ref"] == "#7" and line["by"] == "copilot"
+    assert (line["id"], line["purpose"], line["ref"], line["by"]) == ("call-1", "study", "#7", "copilot")
     assert line["billed_to"] == "copilot:spencrr" and line["via"] == "local"
     assert line["tokens"] == {"input": 1200, "output": 300, "cache_read": 800}, "unreported counts are absent, not 0"
     assert line["multiplier"] == 1.0 and line["nano_aiu"] == 1.5e9 and "usd" not in line
-    assert sum(1 for e, d in harness.events if d.get("type") == "usage") == 1
+    assert sum(1 for e, d in harness.events if isinstance(d, dict) and d.get("type") == "usage") == 1
 
-    byok = CopilotAssistant(
-        harness, CopilotOptions(provider="anthropic", base_url="https://api.anthropic.com", model="m")
-    )
-    byok_event = _event("assistant.usage", api_call_id="call-2", model="claude-opus-4-8", input_tokens=10, output_tokens=5,
-                        cache_read_tokens=None, cache_write_tokens=None, reasoning_tokens=None, cost=None, is_byok=True,
-                        copilot_usage=None)  # fmt: skip
-    asyncio.run(byok._send(8, FakeSession([byok_event, _event("session.idle")]), "prompt"))
+    fake_runtime.script = [runtimes.Event("usage", usage=_usage(call_id="call-2", input_tokens=10, output_tokens=5)),
+                           runtimes.Event("done")]  # fmt: skip
+    fake_runtime.sessions.clear()
+    asyncio.run(ModelAssistant(harness, None).turn(Turn(8, "chat", "x", None, "x")))
     line = usage.load(harness.cfg)[1]
     assert line["billed_to"] == "anthropic:api.anthropic.com" and "nano_aiu" not in line and "multiplier" not in line
 
@@ -506,19 +387,19 @@ def test_usage_events_become_ledger_lines(harness, monkeypatch):
         )
 
 
-def test_verdicts_name_the_model_that_reached_them(harness):
-    """The runtime reports the model in use with each call; what the assistant writes afterwards carries it, and the
-    brief says which model graded rather than just "Copilot"."""
-    copilot = CopilotAssistant(harness, None)
+def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkeypatch):
+    """The runtime reports the model with each call; what the assistant writes afterwards carries it, and the brief
+    says which model graded rather than just "Copilot"."""
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     study.append(harness.cfg, 7, "question", by="copilot", question="Why?")
     study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
-    usage_event = _event("assistant.usage", api_call_id="c1", model="gpt-4.1", input_tokens=1, output_tokens=1,
-                         cache_read_tokens=None, cache_write_tokens=None, reasoning_tokens=None, cost=None,
-                         is_byok=True, copilot_usage=None)  # fmt: skip
-    text = asyncio.run(copilot._send(7, FakeSession([usage_event, _event("assistant.message_delta", delta_content="Right."),
-                                                     _event("session.idle")]), "prompt"))  # fmt: skip
-    copilot._write(7, "assessment", qid="Q1", verdict="correct", feedback="Yes.")
-    copilot._write(7, "chat", role="assistant", text=text)  # as turn() does with what _send returns
+    fake_runtime.script = [
+        runtimes.Event("usage", usage=_usage(model="gpt-4.1")),
+        ("call", "assess_answer", {"qid": "Q1", "verdict": "correct", "feedback": "Yes."}),
+        runtimes.Event("text", text="Right."),
+        runtimes.Event("done"),
+    ]
+    asyncio.run(ModelAssistant(harness, None).turn(Turn(7, "answer", "Because.", "Q1", "My answer")))
     entries = study.load(harness.cfg, 7)
     assert entries[-1]["model"] == "gpt-4.1" and entries[-1]["kind"] == "chat"
     assert entries[-2]["model"] == "gpt-4.1" and entries[-2]["by"] == "copilot" and entries[-2]["kind"] == "assessment"
@@ -532,92 +413,54 @@ def test_verdicts_name_the_model_that_reached_them(harness):
 def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkeypatch):
     worktree = tmp_path / "worktree"
     (worktree / "src").mkdir(parents=True)
-    (worktree / "src" / "app.py").write_text("one\ntwo\nthree\n", encoding="utf-8")
-    copilot = CopilotAssistant(harness, None)
-    copilot._worktrees[7] = (worktree, "base")
-    copilot._pr_by_session["sid"] = 7
-    _install_fake_copilot(monkeypatch)
-    tools = {tool.name: tool for tool in copilot._build_tools()}
-    commands = []
+    (worktree / "src" / "a.py").write_text("\n".join(f"line {i}" for i in range(1, 11)), encoding="utf-8")
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
+    calls = []
 
-    def fake_run(cmd, check=True):
-        commands.append((cmd, check))
-        return "x" * 80
+    def fake_run(cmd, *, check=True, **kw):
+        calls.append(cmd)
+        return "x" * 100 if "diff" in cmd else "src/a.py:1:line 1\n"
 
     monkeypatch.setattr(assistants, "run", fake_run)
-    invocation = SimpleNamespace(session_id="sid")
+    assistant = ModelAssistant(harness, None)
+    tools = {t.name: t for t in assistant._tools(7)}
 
-    assert asyncio.run(
-        tools["read_file"](SimpleNamespace(path="src/app.py", start_line=2, end_line=99), invocation)
-    ) == ("src/app.py lines 2-3 of 3\n    2  two\n    3  three")
-    assert "No such file" in asyncio.run(
-        tools["read_file"](SimpleNamespace(path="src/missing.py", start_line=1, end_line=10), invocation)
+    diff = asyncio.run(tools["get_diff"].handler({"path": "src/a.py"}))
+    assert diff.startswith("x" * 32) and "truncated 68 characters" in diff
+    assert calls[-1][-3:] == ["base..HEAD", "--", "src/a.py"]
+    with pytest.raises(ValueError, match="outside the PR checkout"):
+        asyncio.run(tools["get_diff"].handler({"path": "../escape.py"}))
+
+    text = asyncio.run(tools["read_file"].handler({"path": "src/a.py", "start_line": 2, "end_line": 3}))
+    assert "lines 2-3 of 10" in text and "    2  line 2" in text
+    assert asyncio.run(tools["read_file"].handler({"path": "nope.py"})).startswith("No such file")
+
+    found = asyncio.run(tools["search_code"].handler({"pattern": "line", "path_glob": "src/**"}))
+    assert found.startswith("src/a.py:1:line 1") and calls[-1][-2:] == ["--", "src/**"]
+
+    asked = asyncio.run(
+        tools["ask_quiz_question"].handler({"question": "Why?", "focus": "intent", "expected_points": ["p"]})
     )
-    with pytest.raises(ValueError, match="outside"):
-        asyncio.run(tools["read_file"](SimpleNamespace(path="../escape.py", start_line=1, end_line=10), invocation))
-    diff = asyncio.run(tools["get_diff"](SimpleNamespace(path="src/app.py"), invocation))
-    search = asyncio.run(tools["search_code"](SimpleNamespace(pattern="one", path_glob="src/**"), invocation))
-    assert diff.endswith("narrow the request]") and search.endswith("narrow the request]")
-    assert commands[0][0][-2:] == ["--", "src/app.py"]
-    assert commands[1][0][-2:] == ["--", "src/**"]
-
-    assert tools["ask_quiz_question"](
-        Params(question="Why?", focus="intent", refs=["src/app.py:1"], expected_points=["point"]), invocation
-    ).startswith("Asked Q1")
-    assert (
-        tools["assess_answer"](Params(qid="Q1", verdict="correct", feedback="yes", evidence=[]), invocation)
-        == "Recorded."
-    )
-    assert (
-        tools["assess_teachback"](Params(verdict="partial", feedback="gap", gaps=["tests"]), invocation) == "Recorded."
-    )
-    assert tools["append_to_brief"](Params(text="Remember this", section=None), invocation) == "Appended."
-    assert (
-        tools["record_finding"](Params(severity="major", summary="Bug", path="src/app.py", line=2), invocation)
-        == "Recorded."
-    )
-    entries = study.load(harness.cfg, 7)
-    assert [e["kind"] for e in entries] == ["question", "assessment", "teachback_assessment", "note", "finding"]
-    assert all(e["by"] == "copilot" for e in entries)
-    with pytest.raises(RuntimeError, match="study session"):
-        copilot._number_for(SimpleNamespace(session_id="unknown"))
+    assert asked == "Asked Q1. Wait for the learner's answer."
+    assert asyncio.run(tools["append_to_brief"].handler({"text": "note"})) == "Appended."
+    assert asyncio.run(tools["record_finding"].handler({"severity": "minor", "summary": "s"})) == "Recorded."
+    assert [e["kind"] for e in study.load(harness.cfg, 7)] == ["question", "note", "finding"]
+    assert all(e["by"] == "copilot" for e in study.load(harness.cfg, 7))
+    for spec in tools.values():
+        schema = runtimes.tool_schema(spec)
+        assert schema["type"] == "object" and "properties" in schema
+    assert tools["ask_quiz_question"].terminal and not tools["assess_answer"].terminal
 
 
-def test_stop_disconnects_sessions_and_the_client(harness):
-    copilot = CopilotAssistant(harness, None)
-    closed = []
-
-    class Session:
-        async def disconnect(self):
-            closed.append("session")
-
-    class Client:
-        async def stop(self):
-            closed.append("client")
-
-    copilot._sessions[7] = Session()
-    copilot._client = Client()
-    asyncio.run(copilot.stop())
-    assert closed == ["session", "client"]
-
-
-def test_open_study_session_falls_back_to_a_fresh_one():
-    class Client:
-        def __init__(self):
-            self.created = []
-
-        async def resume_session(self, sid, **options):
-            raise OSError("history is gone")
-
-        async def create_session(self, *, session_id, **options):
-            self.created.append(session_id)
-            return "session"
-
-    client = Client()
-    session, sid, created = asyncio.run(open_study_session(client, "old-id", {}, resume=True))
-    assert session == "session" and created and sid != "old-id" and client.created == [sid]
+def test_stop_stops_the_runtime(harness, fake_runtime, monkeypatch):
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
+    assistant = ModelAssistant(harness, None)
+    asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
+    asyncio.run(assistant.stop())
+    assert fake_runtime.stopped and assistant._sessions == {}
 
 
 def test_clip():
-    assert _clip("abcdef", limit=20) == "abcdef"
-    assert _clip("abcdef", limit=3) == "abc\n... [truncated 3 characters; narrow the request]"
+    assert _clip("abc", limit=5) == "abc"
+    assert _clip("abcdefgh", limit=5).startswith("abcde\n... [truncated 3 characters")

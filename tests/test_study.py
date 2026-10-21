@@ -129,16 +129,16 @@ def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
 
 
 def test_copilot_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
-    from readthrough.assistants import CopilotAssistant
+    from readthrough.assistants import _safe_rel
 
     (tmp_path / "pkg").mkdir()
-    assert CopilotAssistant._safe_rel(tmp_path, "pkg/../pkg/x.py") == "pkg/x.py"
+    assert _safe_rel(tmp_path, "pkg/../pkg/x.py") == "pkg/x.py"
     escapes = ["../secret.txt", "../../x", str(tmp_path.parent / "x")]
     if sys.platform == "win32":
         escapes.append("..\\..\\x")  # a separator on Windows; on POSIX a backslash is just a character in a name
     for bad in escapes:
         with pytest.raises(ValueError):
-            CopilotAssistant._safe_rel(tmp_path, bad)
+            _safe_rel(tmp_path, bad)
 
 
 def test_study_session_id_is_stable_and_distinct_from_review(tmp_path: Path):
@@ -184,7 +184,7 @@ def test_handoff_line_says_where_understanding_is_solid(cfg):
 def test_unresumable_study_session_falls_back_to_a_fresh_one():
     import asyncio
 
-    from readthrough.assistants import open_study_session
+    from readthrough.runtimes.copilot import open_study_session
 
     class Client:
         def __init__(self, broken):
@@ -199,9 +199,8 @@ def test_unresumable_study_session_falls_back_to_a_fresh_one():
             self.created.append(session_id)
             return f"new:{session_id}"
 
-    ok = asyncio.run(open_study_session(Client(False), "abc", {}, resume=True))
-    assert ok == ("resumed:abc", "abc", False)
+    assert asyncio.run(open_study_session(Client(False), "abc", {}, resume=True)) == ("resumed:abc", False)
     broken = Client(True)
-    session, sid, created = asyncio.run(open_study_session(broken, "abc", {}, resume=True))
-    assert created and sid != "abc" and broken.created == [sid] and session == f"new:{sid}"
-    assert asyncio.run(open_study_session(Client(False), "abc", {}, resume=False))[2] is True
+    session, created = asyncio.run(open_study_session(broken, "abc", {}, resume=True))
+    assert created and broken.created and broken.created[0] != "abc" and session == f"new:{broken.created[0]}"
+    assert asyncio.run(open_study_session(Client(False), "abc", {}, resume=False))[1] is True

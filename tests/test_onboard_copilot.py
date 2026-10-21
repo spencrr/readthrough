@@ -1,17 +1,12 @@
 import asyncio
-import sys
-import types
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from fakes import FakeForge
 
-from readthrough import onboard
+from readthrough import onboard, runtimes
 from readthrough import onboard_copilot as copilot_mod
 from readthrough.config import Config
 from readthrough.onboard import RepoFacts
@@ -61,49 +56,67 @@ def cfg(tmp_path: Path) -> Config:
     return cfg
 
 
-class Params(SimpleNamespace):
-    pass
+class FakeSession:
+    """A runtime session scripted with the events one prompt produces; tool calls run the real handlers."""
+
+    def __init__(self, script):
+        self.script = script
+        self.sent = []
+        self.closed = False
+        self.tools: dict[str, runtimes.ToolSpec] = {}
+
+    @property
+    def fresh(self) -> bool:
+        return True
+
+    async def send(self, prompt):
+        self.sent.append(prompt)
+        for item in self.script:
+            if isinstance(item, tuple):
+                _, name, args = item
+                yield runtimes.Event("tool", name=name)
+                await self.tools[name].handler(args)
+            else:
+                yield item
+
+    async def close(self):
+        self.closed = True
 
 
-def _event(kind: str, **data):
-    return SimpleNamespace(type=SimpleNamespace(value=kind), data=SimpleNamespace(**data))
+class FakeRuntime:
+    name = "fake"
+
+    def __init__(self, script=None):
+        self.script = script or [runtimes.Event("done", text="")]
+        self.opened = []
+        self.session = None
+        self.stopped = False
+
+    def describe(self):
+        return "a fake runtime"
+
+    async def open(self, conversation):
+        self.opened.append(conversation)
+        self.session = FakeSession(list(self.script))
+        self.session.tools = {t.name: t for t in conversation.tools}
+        return self.session
+
+    async def stop(self):
+        self.stopped = True
 
 
-def _install_fake_copilot(monkeypatch: pytest.MonkeyPatch, client=None) -> None:
-    def define_tool(**tool_options):
-        def decorate(func):
-            func.name = tool_options["name"]
-            func.tool_options = tool_options
-            return func
+def _use(monkeypatch: pytest.MonkeyPatch, runtime: FakeRuntime) -> None:
+    monkeypatch.setattr(runtimes, "make", lambda name, options=None: runtime)
+    monkeypatch.setattr(runtimes, "resolve", lambda name, options=None: ("fake", True, ""))
 
-        return decorate
 
-    class PermissionDecisionUserNotAvailable:
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot",
-        types.SimpleNamespace(define_tool=define_tool, CopilotClient=(lambda: client) if client else object),
+def test_copilot_draft_reports_a_missing_runtime(monkeypatch: pytest.MonkeyPatch, cfg, facts):
+    monkeypatch.setattr(
+        runtimes,
+        "resolve",
+        lambda name, options=None: ("copilot", False, "install the [study] extra, or set an API key"),
     )
-    monkeypatch.setitem(sys.modules, "copilot.generated", types.SimpleNamespace())
-    monkeypatch.setitem(
-        sys.modules,
-        "copilot.generated.rpc",
-        types.SimpleNamespace(PermissionDecisionUserNotAvailable=PermissionDecisionUserNotAvailable),
-    )
-
-
-def test_copilot_draft_reports_missing_sdk(monkeypatch: pytest.MonkeyPatch, cfg, facts):
-    original_import = __import__
-
-    def blocked_import(name, *args, **kwargs):
-        if name == "copilot":
-            raise ImportError("missing")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", blocked_import)
-    with pytest.raises(RuntimeError, match="Copilot SDK"):
+    with pytest.raises(RuntimeError, match=r"needs a model runtime: install the \[study\] extra"):
         copilot_draft(cfg, forge=None, facts=facts)
 
 
@@ -120,7 +133,7 @@ def test_copilot_draft_returns_marked_best_proposal(monkeypatch: pytest.MonkeyPa
             self.best = ([], 0.875, proposal)
             self.summary = "Check the API split."
 
-    _install_fake_copilot(monkeypatch)
+    _use(monkeypatch, FakeRuntime())
     monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
 
     text = copilot_draft(cfg, forge=None, facts=facts, on_progress=progress.append)
@@ -139,119 +152,87 @@ def test_copilot_draft_raises_when_session_never_proposes(monkeypatch: pytest.Mo
         async def run(self):
             return None
 
-    _install_fake_copilot(monkeypatch)
+    _use(monkeypatch, FakeRuntime())
     monkeypatch.setattr(copilot_mod, "_Drafter", FakeDrafter)
 
     with pytest.raises(RuntimeError, match="didn't propose"):
         copilot_draft(cfg, forge=None, facts=facts)
 
 
-def test_run_starts_client_creates_locked_down_session_and_disconnects(cfg, facts, monkeypatch: pytest.MonkeyPatch):
-    class Session:
-        def __init__(self):
-            self.disconnected = False
-
-        async def disconnect(self):
-            self.disconnected = True
-
-    class Client:
-        def __init__(self):
-            self.session = Session()
-            self.started = False
-            self.stopped = False
-            self.created = []
-
-        async def start(self):
-            self.started = True
-
-        async def create_session(self, *, session_id, **options):
-            self.created.append((session_id, options))
-            return self.session
-
-        async def stop(self):
-            self.stopped = True
-
-    client = Client()
-    _install_fake_copilot(monkeypatch, client)
+def test_run_opens_a_fresh_locked_down_conversation_and_closes_it(cfg, facts, monkeypatch: pytest.MonkeyPatch):
+    runtime = FakeRuntime([runtimes.Event("done", text="summary")])
+    _use(monkeypatch, runtime)
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
-    monkeypatch.setattr(drafter, "_tools", lambda: [SimpleNamespace(name="read_file")])
     monkeypatch.setattr(drafter, "_first_prompt", lambda: "first prompt")
-
-    async def fake_send(session, prompt):
-        assert session is client.session and prompt == "first prompt"
-        return "summary"
-
-    monkeypatch.setattr(drafter, "_send", fake_send)
 
     asyncio.run(drafter.run())
 
-    assert client.started and client.stopped and client.session.disconnected
-    session_id, options = client.created[0]
-    assert session_id
-    assert options["available_tools"] == ["read_file"]
-    assert options["client_name"] == "readthrough-onboard"
-    assert options["enable_skills"] is False
-    assert options["working_directory"] == str(cfg.home)
-    assert options["on_permission_request"](None, None).__class__.__name__ == "PermissionDecisionUserNotAvailable"
+    conversation = runtime.opened[0]
+    assert conversation.key.startswith("readthrough:onboarding:") and conversation.resume is False
+    assert [t.name for t in conversation.tools] == [
+        "list_directory",
+        "read_file",
+        "search_code",
+        "match_glob",
+        "propose_profile",
+    ]
+    assert (
+        conversation.working_directory == str(cfg.home)
+        and "drafting an architecture profile for o/app" in conversation.system
+    )
+    assert runtime.session is not None
+    assert runtime.session is not None
+    assert runtime.session.sent == ["first prompt"] and runtime.session.closed and runtime.stopped
     assert drafter.summary == "summary"
 
 
-class FakeSession:
-    def __init__(self, events):
-        self.events = events
-        self.sent = []
-        self.unsubscribed = False
-        self.callback: Callable[[Any], None] = lambda _event: None
+def test_send_records_progress_summary_and_usage(cfg, facts):
+    from readthrough import usage
 
-    def on(self, callback):
-        self.callback = callback
-
-        def unsubscribe():
-            self.unsubscribed = True
-
-        return unsubscribe
-
-    async def send(self, prompt):
-        self.sent.append(prompt)
-        for event in self.events:
-            self.callback(event)
-
-
-def test_send_records_progress_summary_and_unsubscribes(cfg, facts):
     progress = []
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=progress.append)
-    session = FakeSession(
-        [
-            _event("tool.execution_start", tool_name="read_file"),
-            _event("tool.execution_start", tool_name="propose_profile"),
-            _event("assistant.message", content="Final notes"),
-            _event("session.idle"),
-        ]
+    used = runtimes.Usage(
+        call_id="c1",
+        model="claude-sonnet-5-5",
+        input_tokens=10,
+        output_tokens=5,
+        billed_to="anthropic:api.anthropic.com",
     )
+    session = FakeSession([
+        runtimes.Event("tool", name="read_file"),
+        runtimes.Event("tool", name="propose_profile"),
+        runtimes.Event("usage", usage=used),
+        runtimes.Event("done", text="Final notes"),
+    ])  # fmt: skip
 
     result = asyncio.run(drafter._send(session, "prompt"))
 
-    assert result == "Final notes"
-    assert session.sent == ["prompt"] and session.unsubscribed
-    assert progress == ["Copilot: read file"]
+    assert result == "Final notes" and session.sent == ["prompt"]
+    assert progress == ["model: read file"], "proposals are reported by the tool itself, with their coverage"
+    line = usage.load(cfg)[0]
+    assert (line["purpose"], line["ref"], line["billed_to"]) == ("draft", "onboarding", "anthropic:api.anthropic.com")
 
 
 def test_send_raises_errors_only_when_no_best_proposal_exists(cfg, facts):
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(drafter._send(FakeSession([_event("session.error", message="boom")]), "prompt"))
+        asyncio.run(drafter._send(FakeSession([runtimes.Event("error", text="boom")]), "prompt"))
 
     drafter.best = (["remaining"], 0.5, "text")
-    assert asyncio.run(drafter._send(FakeSession([_event("session.error", message="ignored")]), "prompt")) == ""
+    assert asyncio.run(drafter._send(FakeSession([runtimes.Event("error", text="ignored")]), "prompt")) == ""
 
 
-def test_send_timeout_unsubscribes(cfg, facts):
+def test_send_times_out(cfg, facts):
     cfg.tuning = replace(cfg.tuning, study=replace(cfg.tuning.study, onboarding_turn_timeout_seconds=0.05))
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
-    session = FakeSession([])  # never signals
+
+    class Hanging(FakeSession):
+        async def send(self, prompt):
+            await asyncio.sleep(10)
+            yield runtimes.Event("done")
+
     with pytest.raises(TimeoutError):
-        asyncio.run(drafter._send(session, "prompt"))
-    assert session.unsubscribed
+        asyncio.run(drafter._send(Hanging([]), "prompt"))
 
 
 def test_first_prompt_includes_reference_docs_authors_and_no_clone_notice(cfg, facts):
@@ -300,16 +281,19 @@ def test_helpers_read_from_github_search_clone_and_track_best(
 
 
 def test_tools_delegate_to_helpers_and_validate_profile(cfg, facts, monkeypatch: pytest.MonkeyPatch):
-    _install_fake_copilot(monkeypatch)
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     tools = {tool.name: tool for tool in drafter._tools()}
     monkeypatch.setattr(drafter, "_search", lambda pattern, path_glob: f"{pattern}:{path_glob}")
 
-    assert "src/app/" in tools["list_directory"](Params(prefix="src", depth=1))
-    assert "isn't a file" in asyncio.run(tools["read_file"](Params(path="missing.py", start_line=1, end_line=2)))
-    assert asyncio.run(tools["search_code"](Params(pattern="Route", path_glob="src/**"))) == "Route:src/**"
-    assert tools["match_glob"](Params(glob="src/app/**/*.py")).startswith("3 files, recent churn 70")
-    assert "No problems" in tools["propose_profile"](Params(toml=onboard.draft_profile(facts)))
+    call = lambda name, **args: asyncio.run(tools[name].handler(args))
+    assert "src/app/" in call("list_directory", prefix="src", depth=1)
+    assert "src/" in call("list_directory"), "defaults apply when the model sends nothing"
+    assert "isn't a file" in call("read_file", path="missing.py", start_line=1, end_line=2)
+    assert call("search_code", pattern="Route", path_glob="src/**") == "Route:src/**"
+    assert call("match_glob", glob="src/app/**/*.py").startswith("3 files, recent churn 70")
+    assert "No problems" in call("propose_profile", toml=onboard.draft_profile(facts))
+    for spec in tools.values():
+        assert runtimes.tool_schema(spec)["type"] == "object"
 
 
 def test_mark_drafter_replaces_existing_value_and_clip():

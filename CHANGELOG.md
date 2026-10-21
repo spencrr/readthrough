@@ -44,12 +44,18 @@
   the "can't tell us the association" warning is gone and authors are classified the way they are on GitHub.
 - A token a CLI prints is used only if it looks like one (a line of printable characters). A stand-in that
   printed a banner used to end up in an `Authorization` header, which `urllib` rejects by crashing the call.
-- The Copilot study assistant can talk to a model provider of your own instead of GitHub Copilot
-  (`[assistants.copilot] provider = "openai" | "azure" | "anthropic"`, with `base_url`, `model`, and the key in
-  the variable `api_key_env` names, or `entra = true` on Azure to sign in with `az`). The runtime then never
-  touches the Copilot CLI's GitHub login, so studying works for repos on any forge without a GitHub account,
-  and the onboarding drafter uses the same provider. Checked live against Azure OpenAI with an Entra token on
-  a resource that has key auth disabled: a full predict, quiz, answer, grade loop on `gpt-4.1`.
+- The study assistant and the onboarding drafter run on a **model runtime**, chosen machine-wide with
+  `runtime = "auto" | "copilot" | "anthropic" | "openai"` and configured in `[runtimes.NAME]`. `copilot` is the
+  Copilot SDK: GitHub Copilot through its sign-in, or with `provider = "openai" | "azure" | "anthropic"` a
+  provider of your own, where the runtime never touches the CLI's GitHub login. `anthropic` speaks Claude's
+  Messages API and `openai` the Responses API (OpenAI, or Azure OpenAI and Foundry with a key or `entra = true`
+  for an Entra token from `az`), both over the standard library with nothing to install but a key. The
+  Socratic behaviour, the tools, and what reaches the study log are the same on every runtime (`runtimes/`
+  holds the engines; `assistants.py` the behaviour), so the GitHub forge and the AI behind studying are no
+  longer one credential: a repo on Azure DevOps can be studied with no GitHub account at all. `auto` takes
+  the Copilot SDK when installed, else the first runtime whose key is set; `doctor` names the one in use.
+  Checked live on the same PR with all of GitHub Copilot (Claude Sonnet 5 through the SDK) and Azure OpenAI
+  `gpt-4.1` through both the SDK's provider mode and the Responses API with an Entra token.
 - Every model call is recorded in the repo's usage ledger (`usage.jsonl`), one line per call keyed by the
   provider's call id: the model, tokens in the provider's own units, Copilot's premium-request multiplier and
   AI-credit consumption when it was Copilot, who was billed (`copilot:<login>` or `<provider>:<host>`), and

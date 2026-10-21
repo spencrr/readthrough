@@ -639,16 +639,32 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
         detail + (" (starts at logon)" if server_task.installed else ""),
         "readthrough install server",
     )
-    assistant = assistants.resolve(settings.assistant)
+    assistant = assistants.resolve(
+        settings.assistant, runtime=settings.runtime, runtime_options=settings.runtime_options
+    )
     chosen = ", chosen automatically" if settings.assistant == assistants.AUTO else ""
     if not assistant.available:
         check(
             False, "assistant", f"{assistant.name}: {assistant.reason}", 'set assistant = "rules", or install [study]'
         )
     elif assistant.name == "rules" and settings.assistant == assistants.AUTO:
-        check(None, "assistant", f"rules{chosen}", "install the [study] extra for Copilot, which reads the code")
+        check(
+            None,
+            "assistant",
+            f"rules{chosen}",
+            "install the [study] extra, or set an API key, for an assistant that reads the code",
+        )
     else:
         check(True, "assistant", f"{assistant.name}{chosen}")
+    if assistant.available and assistant.name != "rules":
+        from readthrough import runtimes
+
+        name, ok, why = runtimes.resolve(settings.runtime, settings.runtime_options)
+        auto = ", chosen automatically" if settings.runtime == assistants.AUTO else ""
+        if ok:
+            check(True, "runtime", f"{runtimes.make(name, settings.runtime_options).describe()}{auto}")
+        else:
+            check(False, "runtime", f"{name}: {why}", "set runtime = ... in config.toml, or an API key")
     terminal = terminals.describe(settings.terminal)
     check(not terminal.startswith("No terminal"), "terminal", terminal, "set terminal = ... in config.toml")
 

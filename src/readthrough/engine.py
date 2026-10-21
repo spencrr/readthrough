@@ -50,7 +50,9 @@ class StudyEngine:
     @property
     def resolved(self) -> assistants.Resolved:
         """Which assistant is in use and whether it can run, for the page and `doctor`."""
-        return assistants.resolve(self.cfg.assistant)
+        return assistants.resolve(
+            self.cfg.assistant, runtime=self.cfg.runtime, runtime_options=self.cfg.runtime_options
+        )
 
     @property
     def assistant(self) -> assistants.Assistant:

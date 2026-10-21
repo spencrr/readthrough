@@ -60,9 +60,11 @@ class Config:
     # The option dicts map a plugin name to its validated options object.
     terminal: str = AUTO
     assistant: str = AUTO
+    runtime: str = AUTO  # the model the study assistant and the drafter run on; see runtimes/
     agent: str = AUTO
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
+    runtime_options: dict[str, Any] = field(default_factory=dict)
     agent_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
     forge_options: dict[str, Any] = field(default_factory=dict)
@@ -121,11 +123,12 @@ class Config:
         return self.home / "config.toml"
 
 
-MACHINE_CHOICES = ("terminal", "assistant", "agent")  # `name = "..."` keys at the top of config.toml
+MACHINE_CHOICES = ("terminal", "assistant", "runtime", "agent")  # `name = "..."` keys at the top of config.toml
 MACHINE_KEYS = {
     *MACHINE_CHOICES,
     "terminal_options",
     "assistant_options",
+    "runtime_options",
     "agent_options",
     "profile_source_options",
     "forge_options",
@@ -133,13 +136,14 @@ MACHINE_KEYS = {
 REPO_KEYS = ({f.name for f in fields(Config)} - {"home", "repo", "port", "refresh_minutes"} - MACHINE_KEYS) | {"name"}
 GLOBAL_KEYS = {
     "schema", "default_repo", "port", "refresh_minutes", "defaults", "tuning", "repos",
-    *MACHINE_CHOICES, "terminals", "assistants", "agents", "profile_sources", "forges",
+    *MACHINE_CHOICES, "terminals", "assistants", "runtimes", "agents", "profile_sources", "forges",
 }  # fmt: skip
 PATH_KEYS = {"clone", "profile"}
 # config.toml table -> the Settings attribute holding its validated per-plugin options.
 PLUGIN_TABLES = {
     "terminals": "terminal_options",
     "assistants": "assistant_options",
+    "runtimes": "runtime_options",
     "agents": "agent_options",
     "profile_sources": "profile_source_options",
     "forges": "forge_options",
@@ -158,9 +162,11 @@ class Settings:
     config_file: Path | None = None
     terminal: str = AUTO
     assistant: str = AUTO
+    runtime: str = AUTO  # the model the study assistant and the drafter run on; see runtimes/
     agent: str = AUTO
     terminal_options: dict[str, Any] = field(default_factory=dict)
     assistant_options: dict[str, Any] = field(default_factory=dict)
+    runtime_options: dict[str, Any] = field(default_factory=dict)
     agent_options: dict[str, Any] = field(default_factory=dict)
     profile_source_options: dict[str, Any] = field(default_factory=dict)
     forge_options: dict[str, Any] = field(default_factory=dict)
@@ -384,10 +390,11 @@ def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
     from readthrough.assistants import ASSISTANTS
     from readthrough.forges import FORGES
     from readthrough.profile import PROFILE_SOURCES
+    from readthrough.runtimes import RUNTIMES
     from readthrough.terminals import TERMINALS
 
     base = settings.path.parent
-    for key, registry in (("terminal", TERMINALS), ("assistant", ASSISTANTS), ("agent", AGENTS)):
+    for key, registry in (("terminal", TERMINALS), ("assistant", ASSISTANTS), ("runtime", RUNTIMES), ("agent", AGENTS)):
         name = raw.get(key, AUTO)
         if not isinstance(name, str):
             raise ConfigError(f"{key} must be a name, not {name!r}")
@@ -397,6 +404,7 @@ def _load_plugins(settings: Settings, raw: dict[str, Any]) -> None:
     registries = {
         "terminals": TERMINALS,
         "assistants": ASSISTANTS,
+        "runtimes": RUNTIMES,
         "agents": AGENTS,
         "profile_sources": PROFILE_SOURCES,
         "forges": FORGES,

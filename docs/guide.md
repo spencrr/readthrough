@@ -251,23 +251,32 @@ To burn down a whole session, ask Copilot for "burn down session 2 of OWNER/NAME
 
 The deep review is a long, guided conversation in a terminal. The **Study** tab in the PR panel is the lighter version, right in the dashboard, for building understanding a question at a time. It needs the live dashboard.
 
-Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. With the `[study]` install, it's **Copilot**: it reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. Without it, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when Copilot is installed. The rest of this section describes the Copilot assistant; the stages, the log, and the brief are the same for both.
+Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. The **model assistant** (named `copilot`, after its first engine) reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. It runs on whichever **model runtime** you have: the Copilot SDK (the `[study]` extra; GitHub Copilot through its sign-in, or a provider of your own), Anthropic's API with a key, or OpenAI's (OpenAI itself, or Azure OpenAI and Foundry with a key or an Entra sign-in). Without any of those, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when a runtime is available. The rest of this section describes the model assistant; the stages, the log, and the brief are the same for both.
 
-The Copilot assistant doesn't have to talk to GitHub Copilot. Its runtime (the Copilot CLI, which the `[study]` extra brings) can be pointed at a model provider of your own, and then no GitHub sign-in is involved anywhere in studying: the Study tab works for a repo on Azure DevOps or GitLab without a GitHub account, and the bill goes to that provider instead of a Copilot plan.
+The runtime is a machine-wide choice, `runtime = "auto" | "copilot" | "anthropic" | "openai"`, where `auto` takes the first that can run (the Copilot SDK when installed, else a runtime whose key is set). Each has a `[runtimes.NAME]` table; the key itself never goes in the config, only the name of the variable holding it:
 
 ```toml
-[assistants.copilot]
-provider = "azure"                                        # openai, azure, or anthropic
+runtime = "openai"
+
+[runtimes.copilot]                                        # the Copilot SDK; GitHub Copilot unless provider is set
+# provider = "anthropic"                                  # openai, azure, or anthropic: a provider of your own, no GitHub sign-in
+# base_url = "https://api.anthropic.com"
+# model = "claude-sonnet-5-5"
+# api_key_env = "READTHROUGH_MODEL_API_KEY"
+
+[runtimes.anthropic]                                      # Claude, straight to the Messages API
+model = "claude-sonnet-5-5"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[runtimes.openai]                                         # OpenAI, or Azure OpenAI / Foundry
 base_url = "https://my-resource.openai.azure.com/openai/v1"
-model = "gpt-4.1"                                         # the provider's name for it; a repo's study_model still wins
-entra = true                                              # azure only: sign in with az instead of a key
-# api_key_env = "READTHROUGH_MODEL_API_KEY"               # otherwise, the variable holding the provider's key
+model = "gpt-4.1"                                         # on Azure, the deployment name
+entra = true                                              # Azure only: an Entra token from the signed-in az instead of a key
 ```
 
-The key itself never goes in the config. With `entra = true`, the token comes from the signed-in `az` whenever the runtime asks for one, which is how Azure OpenAI resources with key auth disabled by policy are reached. The study log records which model reached each verdict, and the brief names it ("assessed by gpt-4.1 (through Copilot)"), since a verdict's weight depends on who gave it.
+A repo's `study_model` still wins over the runtime's model. With `entra = true` the token comes from `az` whenever a call needs one, which is how Azure OpenAI resources with key auth disabled by policy are reached. The study log records which model reached each verdict, and the brief names it ("assessed by gpt-4.1 (through Copilot)"), since a verdict's weight depends on who gave it. The onboarding drafter (`--copilot`, and the setup page's **Draft with Copilot**) runs on the same runtime, so it can draft with Claude or GPT too.
 
-Every model call, whoever pays for it, is one line in the repo's **usage ledger** (`usage.jsonl` in its data directory): the model, the tokens in the provider's own units, Copilot's premium-request multiplier and AI-credit consumption when it was Copilot, and who was billed (`copilot:<login>` or `<provider>:<host>`). Nothing is converted into anything else, and a quantity the provider didn't report is left out rather than written as zero. `readthrough doctor` sums the last thirty days per repo.
-
+Every model call, whoever pays for it, is one line in the repo's **usage ledger** (`usage.jsonl` in its data directory): the model, the tokens in the provider's own units, Copilot's premium-request multiplier and AI-credit consumption when it was Copilot, and who was billed (`copilot:<login>`, `anthropic:api.anthropic.com`, `azure:<resource host>`). Nothing is converted into anything else, and a quantity the provider didn't report is left out rather than written as zero. `readthrough doctor` sums the last thirty days per repo.
 ![The study tab after a quiz question was answered and assessed](img/study.webp)
 
 It's one conversation with a single box underneath, and a small indicator at the top shows how far you've got: Predict, Quiz, Teach back. What the box does follows where you are:
@@ -342,7 +351,8 @@ default_repo = "pallets/click"     # used when you leave out --repo
 port = 8765                        # live server
 refresh_minutes = 10               # live server refresh interval
 terminal = "auto"                  # where deep reviews open: auto, wt, console, terminal-app, x-terminal-emulator, gnome-terminal
-assistant = "auto"                 # who answers in the Study tab: auto, copilot, rules
+assistant = "auto"                 # who answers in the Study tab: auto, copilot (the model assistant), rules
+runtime = "auto"                   # the model it runs on: auto, copilot (the SDK), anthropic, openai
 agent = "auto"                     # which agent runs deep reviews: auto, copilot, claude
 
 [agents.claude]                    # options for one review agent
@@ -370,7 +380,7 @@ internal_authors = ["contractor-login"]
 agent_args = ["--model", "claude-opus-4.8"]
 ```
 
-`terminal` and `assistant` are choices for the whole machine, and so are the `[terminals.*]`, `[assistants.*]`, and `[profile_sources.*]` option tables. Each name and each option is checked when the file is read: a typo fails with a suggestion rather than being ignored, and relative paths in options are taken from the config file's directory.
+`terminal`, `assistant`, `runtime`, and `agent` are choices for the whole machine, and so are the `[terminals.*]`, `[assistants.*]`, `[runtimes.*]`, `[agents.*]`, `[forges.*]`, and `[profile_sources.*]` option tables. Each name and each option is checked when the file is read: a typo fails with a suggestion rather than being ignored, and relative paths in options are taken from the config file's directory.
 
 Per-repo keys, which can also go under `[defaults]`:
 

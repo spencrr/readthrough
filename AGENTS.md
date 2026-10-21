@@ -49,17 +49,23 @@ would fail there except for the browser tests, which skip when no Chromium-famil
   separate markers for "too large" and "legitimately empty" so neither is re-asked until the head changes.
   Failures are never cached.
 - **Pluggable things go through a registry** (`registry.Registry`): forges, profile sources, terminal
-  launchers, study assistants. A plugin has a name, a one-line summary, an implementation, and a dataclass of
-  options that the config loader validates with did-you-mean errors. Never add a name-based `if/elif` for one
-  of these; what a forge can't do is a missing entry in its `capabilities`, which the build reads.
+  launchers, study assistants, model runtimes, review agents. A plugin has a name, a one-line summary, an
+  implementation, and a dataclass of options that the config loader validates with did-you-mean errors. Never
+  add a name-based `if/elif` for one of these; what a forge can't do is a missing entry in its `capabilities`,
+  which the build reads.
+- **The model behind studying is a `runtimes.Runtime`, never a forge's credential.** The assistant and the
+  onboarding drafter describe their tools once as `ToolSpec`s and consume `Event`s; a runtime (`copilot` for
+  the SDK, `anthropic`, `openai` incl. Azure) owns the wire format, the tool loop, and the session store, and
+  reports `Usage` in its provider's own units with nothing unreported written as zero. New providers are new
+  modules under `runtimes/`; nothing in `assistants.py` names one.
 - **Settings have one home each.** Per-machine or per-repo choices live in `config.toml` (`config.py`);
   operational numbers are `[tuning.*]` with defaults and documentation in `assets/defaults.toml` (a test keeps
   the two in step); safety limits are constants in `limits.py` and change only by a deliberate commit.
 - **The study log is append-only and truthful about authorship.** Every entry's `by` is who wrote it (`you`,
   `copilot`, `rules`; `readthrough` only for a `failure`, the record that a turn ended in an error). Only an
   assistant that read the code writes verdicts; the rules assistant never grades. What an assistant writes
-  carries the `model` the runtime reported, since the Copilot assistant may be talking to GitHub Copilot or
-  to a provider of yours (`[assistants.copilot] provider`). Answers are tagged with the aids that preceded
+  carries the `model` the runtime reported, since the same assistant may be talking to GitHub Copilot, Claude,
+  or a deployment of yours. Answers are tagged with the aids that preceded
   them (`hint`, `brief`) from the log itself, never asserted.
 - **Model usage goes to the ledger (`usage.py`), in the provider's units.** One line per call, idempotent
   by call id; tokens, Copilot's multiplier, and AI credits stay separate, a dollar figure must name its price

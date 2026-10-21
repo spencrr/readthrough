@@ -4,7 +4,7 @@ Busy repos have fifty-plus open pull requests. I wanted two things from a queue 
 
 readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
-From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. With the Copilot SDK installed the assistant reads the code and grades your answers; without it, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
+From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before Copilot shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
 ![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](docs/img/map.webp)
 
@@ -40,7 +40,7 @@ That gives you a static dashboard you rebuild when you want. For one that stays 
 
 ## How it's put together
 
-One package, `src/readthrough`, with no runtime dependencies beyond the standard library (and the `gh` CLI for GitHub repos); the `[study]` extra adds the GitHub Copilot SDK.
+One package, `src/readthrough`, with no runtime dependencies beyond the standard library (and the `gh` CLI for GitHub repos); the `[study]` extra adds the GitHub Copilot SDK (one of the model runtimes the study assistant can run on; the Anthropic and OpenAI ones need only a key).
 
 ```
 cli.py            the commands; every failure ends in one line or an error id
@@ -62,7 +62,9 @@ review.py         deep-review sessions, worktrees, and the index linking agent s
 agents.py         a registry of review agents: copilot (the Copilot CLI) and claude (Claude Code)
 study.py          the append-only study log and its rendering into the brief
 engine.py         the Study tab's loop: records the learner's side, runs the assistant
-assistants.py     a registry of study assistants: copilot (reads code, grades) and rules (no model)
+assistants.py     a registry of study assistants: the model one (reads code, grades) and rules (no model)
+runtimes/         a registry of model runtimes the assistant runs on: copilot (the SDK), anthropic, openai
+usage.py          the usage ledger: every model call, in the provider's own units, and who paid
 terminals.py      a registry of terminal launchers for review sessions
 registry.py       the generic plugin registry with validated per-plugin options
 serve.py          the live server: refreshes, pushes changes to open pages, watches the config

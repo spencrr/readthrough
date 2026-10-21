@@ -79,7 +79,9 @@ def test_submit_validates_inputs_and_schedules_a_turn(cfg, monkeypatch: pytest.M
 
 def test_submit_refuses_when_the_assistant_is_unavailable(cfg, monkeypatch: pytest.MonkeyPatch):
     engine = _engine(cfg)
-    monkeypatch.setattr(assistants, "resolve", lambda name: assistants.Resolved("copilot", False, "needs the SDK"))
+    monkeypatch.setattr(
+        assistants, "resolve", lambda name, **kw: assistants.Resolved("copilot", False, "needs the SDK")
+    )
     with pytest.raises(RuntimeError, match="needs the SDK"):
         engine.submit(7, "quiz")
 

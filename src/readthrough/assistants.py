@@ -2,11 +2,12 @@
 
 Two are built in, and ``assistant = "auto"`` in ``config.toml`` picks the first that works:
 
-* ``copilot`` runs one GitHub Copilot session per PR through the Copilot SDK (the ``[study]`` extra). The
-  session runs in the PR's worktree but can't touch it: every built-in tool is off and permission requests
-  are refused. It has read-only tools (``get_diff``, ``read_file``, ``search_code``) and append-only ones
-  that write to the study log (``ask_quiz_question``, ``assess_answer``, ``assess_teachback``,
-  ``append_to_brief``, ``record_finding``). It grades answers against the code.
+* ``copilot`` is the Socratic assistant: one conversation per PR on whichever model runtime is configured
+  (``runtime = ...``: the Copilot SDK, Anthropic, or OpenAI; see ``runtimes/``). The conversation runs in the
+  PR's worktree but can't touch it: the only tools are read-only ones (``get_diff``, ``read_file``,
+  ``search_code``) and append-only ones that write to the study log (``ask_quiz_question``,
+  ``assess_answer``, ``assess_teachback``, ``append_to_brief``, ``record_finding``). It grades answers
+  against the code, and each entry it writes names the model that reached it.
 * ``rules`` needs nothing installed. It asks the questions the repo's profile already carries (the
   always-questions, each touched component's questions, the author-kind questions, and one per signal),
   points at files for hints, and assembles a briefing from the PR's metadata. It never grades: there is no
@@ -14,30 +15,27 @@ Two are built in, and ``assistant = "auto"`` in ``config.toml`` picks the first 
   shows that component's contract so you can check yourself, and the log keeps your answers and any
   "what I missed" notes.
 
-Every entry an assistant writes carries its name in ``by``, so the log always shows who said what.
+Every entry an assistant writes carries its name in ``by``, so the log always shows who said what, and every
+model call goes to the usage ledger (``usage.py``).
 The engine (``engine.py``) owns the loop, the busy state, and the learner's side of the log; an assistant
 only gets a ``Harness`` to append entries and broadcast progress through.
 """
 
-# No `from __future__ import annotations` here: the Copilot SDK reads tool parameter types with
-# get_type_hints, and the parameter models are local classes that string annotations can't resolve.
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlsplit
 
-from readthrough import review, study, usage
-from readthrough.agents import Copilot
+from readthrough import review, runtimes, study, usage
 from readthrough.config import AUTO, Config
 from readthrough.limits import MAX_SEARCH_OUTPUT
-from readthrough.process import quiet_output, run
+from readthrough.process import run
 from readthrough.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -84,22 +82,21 @@ class Resolved:
     reason: str  # why it isn't available, or ""
 
 
-def available(name: str) -> tuple[bool, str]:
+def available(name: str, *, runtime: str = AUTO, runtime_options: dict[str, Any] | None = None) -> tuple[bool, str]:
+    """Whether ``name`` can run here. The model assistant can when some model runtime can."""
     if name == "copilot":
-        try:
-            import copilot  # noqa: F401
-        except ImportError:
-            return False, "The Copilot assistant needs the Copilot SDK: install readthrough with the [study] extra."
+        _, ok, why = runtimes.resolve(runtime, runtime_options)
+        return ok, ("" if ok else f"The study assistant has no model to run on: {why}.")
     return True, ""
 
 
-def resolve(name: str = AUTO) -> Resolved:
-    """Which assistant ``name`` means right now. ``auto`` is the first available one, Copilot first."""
+def resolve(name: str = AUTO, *, runtime: str = AUTO, runtime_options: dict[str, Any] | None = None) -> Resolved:
+    """Which assistant ``name`` means right now. ``auto`` is the first available one, the model assistant first."""
     if name != AUTO:
         ASSISTANTS.get(name)
-        return Resolved(name, *available(name))
+        return Resolved(name, *available(name, runtime=runtime, runtime_options=runtime_options))
     for candidate in AUTO_ORDER:
-        ok, _ = available(candidate)
+        ok, _ = available(candidate, runtime=runtime, runtime_options=runtime_options)
         if ok:
             return Resolved(candidate, True, "")
     return Resolved(AUTO_ORDER[-1], False, "no study assistant is available")
@@ -326,144 +323,9 @@ ASSISTANTS.add("rules", "the profile's own questions, hints, and briefing; no mo
 )
 
 
-# ---------------------------------------------------------------- copilot: the SDK
+# ---------------------------------------------------------------- model: the Socratic assistant on a runtime
 
-COPILOT_BY = "copilot"
-
-PROVIDER_TYPES = ("openai", "azure", "anthropic")
-
-
-@dataclass(frozen=True)
-class CopilotOptions:
-    """Where the Copilot assistant's model comes from.
-
-    By default, GitHub Copilot through the Copilot CLI's own sign-in. With ``provider`` set, the same
-    runtime talks to a model provider of yours instead (bring your own key), and no GitHub sign-in is
-    involved at all: the Study tab then works for repos on any forge without a GitHub account, and the
-    bill goes to that provider. The key is read from ``api_key_env``, never from the config file.
-    """
-
-    provider: str | None = None  # openai | azure | anthropic; unset means GitHub Copilot
-    base_url: str | None = None  # the provider's endpoint, e.g. https://api.anthropic.com or an Azure resource
-    model: str | None = None  # the provider's model name; `study_model` per repo still wins when set
-    api_key_env: str = "READTHROUGH_MODEL_API_KEY"  # the variable holding the provider's key
-    # azure only: sign in with `az` (an Entra token for Cognitive Services) instead of a key. Many Azure
-    # OpenAI resources have key auth disabled by policy, so this is often the only way in.
-    entra: bool = False
-    wire_api: str | None = None  # openai only: completions | responses (the SDK's default when unset)
-    azure_api_version: str | None = None  # azure only
-
-    def __post_init__(self) -> None:
-        if self.provider is not None and self.provider not in PROVIDER_TYPES:
-            raise ValueError(f"provider must be one of {', '.join(PROVIDER_TYPES)}, not {self.provider!r}")
-        if self.provider is not None and not self.base_url:
-            raise ValueError("a provider needs base_url")
-        if self.provider is not None and not self.model:
-            raise ValueError("a provider needs model: the model name it serves")
-        if self.entra and self.provider != "azure":
-            raise ValueError("entra sign-in applies to the azure provider only")
-
-    @property
-    def byok(self) -> bool:
-        return self.provider is not None
-
-    def provider_config(self) -> dict[str, Any] | None:
-        """The SDK's ``ProviderConfig`` for a provider of your own: the key from the environment, or for Azure
-        with ``entra``, a callback that fetches a fresh Entra token from ``az`` whenever the runtime asks."""
-        if self.provider is None:
-            return None
-        config: dict[str, Any] = {"type": self.provider, "base_url": self.base_url}
-        if self.entra:
-            config["bearer_token_provider"] = lambda _args: entra_token()
-        else:
-            key = os.environ.get(self.api_key_env, "").strip()
-            if not key:
-                raise RuntimeError(
-                    f"The Copilot assistant is set to use {self.provider} at {self.base_url}, but {self.api_key_env} "
-                    "isn't set. Put the provider's API key in that variable (never in config.toml)."
-                )
-            config["api_key"] = key
-        if self.wire_api:
-            config["wire_api"] = self.wire_api
-        if self.provider == "azure" and self.azure_api_version:
-            config["azure"] = {"api_version": self.azure_api_version}
-        return config
-
-    def billed_to(self) -> str:
-        """Who pays for a turn: the provider, or GitHub Copilot through whoever is signed in."""
-        return f"{self.provider}:{urlsplit(self.base_url or '').hostname or self.base_url}" if self.byok else "copilot"
-
-
-COGNITIVE_SERVICES = "https://cognitiveservices.azure.com"
-
-
-def entra_token() -> str:
-    """A bearer token for Azure OpenAI from a signed-in ``az``. Asked for on demand; az caches and refreshes."""
-    out, why = quiet_output(
-        ["az", "account", "get-access-token", "--resource", COGNITIVE_SERVICES, "--query", "accessToken", "-o", "tsv"],
-        with_failure=True,
-    )
-    if not out or not out.strip():
-        raise RuntimeError(
-            f"az has no token for Azure OpenAI ({why.splitlines()[0][:160] if why else 'not signed in'}); run az login"
-        )
-    return out.strip()
-
-
-def copilot_options(cfg: Config) -> CopilotOptions:
-    """The ``[assistants.copilot]`` options in effect, for anything that opens a Copilot SDK session."""
-    opts = (cfg.assistant_options or {}).get("copilot")
-    return opts if isinstance(opts, CopilotOptions) else CopilotOptions()
-
-
-def copilot_client(options: CopilotOptions) -> Any:
-    """A Copilot SDK client that, with a provider of our own, never falls back to the CLI's GitHub sign-in."""
-    from copilot import CopilotClient
-
-    return CopilotClient(use_logged_in_user=False) if options.byok else CopilotClient()
-
-
-def record_sdk_usage(
-    cfg: Config, data: Any, *, purpose: str, ref: str, by: str, options: CopilotOptions
-) -> dict[str, Any] | None:
-    """Append what a Copilot SDK ``assistant.usage`` event reports to the repo's usage ledger.
-
-    Who is billed comes from the options, not the event: a provider of ours by host, else GitHub Copilot
-    through whoever the dashboard's build saw signed in (the forge's viewer), else just ``copilot``.
-    """
-    fields = usage.from_sdk_usage(data)
-    if not fields["call_id"]:
-        return None  # an event with no call id can't be recorded idempotently; the SDK always sends one
-    billed_to = options.billed_to()
-    if not options.byok:
-        viewer = _viewer(cfg)
-        billed_to = f"copilot:{viewer}" if viewer else "copilot"
-    return usage.record(
-        cfg, call_id=fields["call_id"], purpose=purpose, ref=ref, model=fields["model"], billed_to=billed_to,
-        by=by, tokens=fields["tokens"], multiplier=fields["multiplier"], nano_aiu=fields["nano_aiu"],
-    )  # fmt: skip
-
-
-def _viewer(cfg: Config) -> str:
-    """The login the last build saw, from data.json; "" when there is no build or the forge reports none."""
-    try:
-        return str(json.loads(cfg.data_path.read_text(encoding="utf-8")).get("viewer") or "")
-    except (OSError, ValueError):
-        return ""
-
-
-def model_options(cfg: Config, options: CopilotOptions) -> dict[str, Any]:
-    """Session options that pick the model: the provider when configured, and the model name, where the repo's
-    ``study_model`` beats the provider's default."""
-    out: dict[str, Any] = {}
-    provider = options.provider_config()
-    if provider is not None:
-        out["provider"] = provider
-    model = cfg.study_model or options.model
-    if model:
-        out["model"] = model
-    return out
-
+MODEL_BY = "copilot"  # the name assistants on a model runtime write under; kept so older logs keep their meaning
 
 SYSTEM_MESSAGE = """\
 You are the study assistant inside readthrough. You help a maintainer of {repo} genuinely understand one
@@ -472,8 +334,10 @@ pull request before they review it. Your job is to make them think, not to think
 How you work:
 - Socratic first. Ask, don't tell. Never reveal an answer or the expected points of a question
   before the learner has answered it.
-- Quiz questions go through the ask_quiz_question tool, one at a time. That tool ends your turn,
-  so put any lead-in in a sentence before calling it. Target what a reviewer must understand:
+- A quiz question is only asked by calling the ask_quiz_question tool, never by writing the question
+  as text: a question in plain text has no id, so the learner can't answer it and you can't grade it.
+  One question per call, one call per turn. That tool ends your turn, so put any lead-in in a sentence
+  before calling it. Target what a reviewer must understand:
   intent, control flow, which component owns what (the architecture contracts in the brief),
   unhappy paths, whether the tests would fail without the change, and real risks. Mix easy and
   hard, and start with intent.
@@ -498,40 +362,45 @@ def system_message(repo: str, guidance: str) -> str:
     return text + (f"\nAbout this repository:\n{guidance.strip()}\n" if guidance.strip() else "")
 
 
-def study_session_id(cfg: Config, number: int) -> str:
-    """Derived from the PR's URL like the review session's id, but never the same one."""
+def study_conversation_key(cfg: Config, number: int) -> str:
+    """Stable per PR, derived from its URL like the review session's id, but never the same one."""
     from readthrough import forges
 
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, forges.make(cfg).pr_url(number) + "#study"))
+    return forges.make(cfg).pr_url(number) + "#study"
 
 
-class CopilotAssistant:
-    """One persistent Copilot session per PR (a fixed id, so it resumes across server restarts)."""
+def study_session_id(cfg: Config, number: int) -> str:
+    """The Copilot runtime's session id for a PR's study conversation (what the CLI's session store holds)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, study_conversation_key(cfg, number)))
 
-    name = COPILOT_BY
+
+class ModelAssistant:
+    """The Socratic assistant: one persistent conversation per PR on whichever model runtime is configured.
+
+    It owns the behaviour (the system message, the eight tools, what gets written to the study log and the
+    usage ledger) and borrows the engine from a ``runtimes.Runtime``. What it writes carries the model the
+    runtime last reported, so a verdict says who reached it.
+    """
+
+    name = MODEL_BY
 
     def __init__(self, harness: Harness, options: Any) -> None:
         self.h = harness
         self.cfg = harness.cfg
-        self.options: CopilotOptions = options if isinstance(options, CopilotOptions) else CopilotOptions()
-        self._client: Any = None
-        self._client_lock: asyncio.Lock | None = None
-        self._sessions: dict[int, Any] = {}
-        self._pr_by_session: dict[str, int] = {}
+        self.runtime: runtimes.Runtime = runtimes.make(self.cfg.runtime, self.cfg.runtime_options)
+        self._sessions: dict[int, runtimes.Session] = {}
         self._worktrees: dict[int, tuple[Path, str]] = {}
-        self._tools: list[Any] | None = None
         self._model_in_use: dict[int, str] = {}  # per PR, the model the runtime last reported using
+        self._pending: dict[int, list[str]] = {}  # per PR, reply text not yet written to the log
 
     async def stop(self) -> None:
-        for session in self._sessions.values():
-            await session.disconnect()
-        if self._client is not None:
-            await self._client.stop()
+        await self.runtime.stop()
+        self._sessions.clear()
 
     async def turn(self, turn: Turn) -> None:
-        session, created = await self._session_for(turn.number)
+        session = await self._session_for(turn.number)
         prompt = turn.prompt
-        if created:
+        if session.fresh:
             prompt = self._first_turn_context(turn.number) + "\n\n" + prompt
         text = await self._send(turn.number, session, prompt)
         if text.strip():
@@ -541,88 +410,66 @@ class CopilotAssistant:
         """Append in the assistant's name, recording which model wrote it. ``by`` says who ran the conversation
         (this assistant); ``model`` says whose judgement it is, which is what a verdict's weight depends on."""
         model = self._model_in_use.get(number)
-        return self.h.append(number, kind, by=COPILOT_BY, **({"model": model} if model else {}), **fields)
+        return self.h.append(number, kind, by=MODEL_BY, **({"model": model} if model else {}), **fields)
 
-    async def _send(self, number: int, session: Any, prompt: str) -> str:
-        loop = asyncio.get_running_loop()
-        done = asyncio.Event()
-        parts: list[str] = []
-        error: list[str] = []
+    async def _send(self, number: int, session: runtimes.Session, prompt: str) -> str:
+        parts = self._pending[number] = []
+        error: str | None = None
+        final = ""
+        streamed = False
+        timeout = self.cfg.tuning.study.turn_timeout_seconds
 
-        def on_event(event: Any) -> None:
-            kind = getattr(event.type, "value", str(event.type))
-            data = event.data
-            if kind == "assistant.usage":
-                if model := getattr(data, "model", None):
-                    self._model_in_use[number] = str(model)
-                self._record_usage(number, data)
-            elif kind == "assistant.message_delta":
-                delta = getattr(data, "delta_content", None) or ""
-                parts.append(delta)
-                self.h.broadcast("study", {"pr": number, "type": "delta", "text": delta})
-            elif kind == "assistant.message" and parts and not parts[-1].endswith("\n"):
-                parts.append("\n\n")  # separate the text before and after a tool call
-            elif kind == "tool.execution_start":
-                name = getattr(data, "tool_name", "?")
-                if name == "ask_quiz_question" and "".join(parts).strip():
-                    # Keep the lead-in above the question card it introduces.
-                    self._write(number, "chat", role="assistant", text="".join(parts).strip())
-                    parts.clear()
-                self.h.broadcast("study", {"pr": number, "type": "tool", "name": name})
-            elif kind == "session.error":
-                error.append(getattr(data, "message", None) or "Copilot reported an error")
-                loop.call_soon_threadsafe(done.set)
-            elif kind == "session.idle":
-                loop.call_soon_threadsafe(done.set)
+        async def consume() -> None:
+            nonlocal error, final, streamed
+            async for event in session.send(prompt):
+                if event.kind == "text":
+                    streamed = True
+                    parts.append(event.text)
+                    self.h.broadcast("study", {"pr": number, "type": "delta", "text": event.text})
+                elif event.kind == "tool":
+                    self.h.broadcast("study", {"pr": number, "type": "tool", "name": event.name})
+                elif event.kind == "usage" and event.usage is not None:
+                    self._model_in_use[number] = event.usage.model
+                    self._record_usage(number, event.usage)
+                elif event.kind == "error":
+                    error = event.text
+                elif event.kind == "done":
+                    final = event.text
 
-        unsubscribe = session.on(on_event)
-        try:
-            await session.send(prompt)
-            await asyncio.wait_for(done.wait(), timeout=self.cfg.tuning.study.turn_timeout_seconds)
-        finally:
-            unsubscribe()
+        await asyncio.wait_for(consume(), timeout=timeout)
         if error:
-            raise RuntimeError(error[0])
-        return "".join(parts)
+            raise RuntimeError(error)
+        # When the runtime streamed, the deltas are the reply: a lead-in may already have been written above a
+        # question card, and only this side knows that. A runtime that only reports the whole at the end gives done.
+        return "".join(parts) if streamed else final
 
-    async def _session_for(self, number: int) -> tuple[Any, bool]:
+    def _flush_lead_in(self, number: int) -> None:
+        """Keep any reply text so far above the question card it introduces (called from ask_quiz_question)."""
+        parts = self._pending.get(number) or []
+        text = "".join(parts).strip()
+        if text:
+            self._write(number, "chat", role="assistant", text=text)
+            parts.clear()
+
+    async def _session_for(self, number: int) -> runtimes.Session:
         if number in self._sessions:
-            return self._sessions[number], False
-        from copilot.generated.rpc import PermissionDecisionUserNotAvailable
-
-        if self._client_lock is None:
-            self._client_lock = asyncio.Lock()
-        async with self._client_lock:
-            if self._client is None:
-                client = copilot_client(self.options)
-                await client.start()
-                self._client = client
+            return self._sessions[number]
         worktree, _ = await self._worktree(number)
-        session_id = study_session_id(self.cfg, number)
-        self._pr_by_session[session_id] = number
-        tools = self._build_tools()
-        options: dict[str, Any] = {
-            "tools": tools,
-            "available_tools": [t.name for t in tools],
-            "on_permission_request": lambda _req, _ctx: PermissionDecisionUserNotAvailable(),
-            "client_name": "readthrough",
-            "working_directory": str(worktree),
-            "enable_skills": False,
-            "streaming": True,
-            "system_message": {"mode": "append", "content": system_message(self.cfg.repo, self._study_guidance())},
-        }
-        options.update(model_options(self.cfg, self.options))
-        exists = Copilot().session_info(session_id).exists  # the SDK shares the Copilot CLI's session store
-        session, session_id, created = await open_study_session(self._client, session_id, options, resume=exists)
-        self._pr_by_session[session_id] = number
+        conversation = runtimes.Conversation(
+            key=study_conversation_key(self.cfg, number),
+            system=system_message(self.cfg.repo, self._study_guidance()),
+            tools=self._tools(number),
+            working_directory=str(worktree),
+            model=self.cfg.study_model,
+        )
+        session = await self.runtime.open(conversation)
         self._sessions[number] = session
-        return session, created
+        return session
 
-    def _record_usage(self, number: int, data: Any) -> None:
-        """One ledger line per model call, from the SDK's usage event. A failure to record never fails the turn."""
+    def _record_usage(self, number: int, used: runtimes.Usage) -> None:
+        """One ledger line per model call. A failure to record never fails the turn."""
         try:
-            entry = record_sdk_usage(self.cfg, data, purpose="study", ref=f"#{number}", by=COPILOT_BY,
-                                     options=self.options)  # fmt: skip
+            entry = record_usage(self.cfg, used, purpose="study", ref=f"#{number}", by=MODEL_BY)
         except Exception:
             log.exception("Couldn't record model usage for #%d", number)
             return
@@ -656,206 +503,161 @@ class CopilotAssistant:
             f"and any earlier study log):\n\n<brief>\n{brief_text[:40_000]}\n</brief>"
         )
 
-    # ---- tools
+    # ---- tools: declared once, in readthrough's own schema; each runtime translates them
 
-    def _number_for(self, invocation: Any) -> int:
-        number = self._pr_by_session.get(getattr(invocation, "session_id", ""))
-        if number is None:
-            raise RuntimeError("This tool only works inside a readthrough study session.")
-        return number
+    def _tools(self, number: int) -> list[runtimes.ToolSpec]:
+        limit = self.cfg.tuning.study.max_tool_output_chars
 
-    def _build_tools(self) -> list[Any]:
-        if self._tools is not None:
-            return self._tools
-        from copilot import define_tool
-        from pydantic import BaseModel, Field
-
-        assistant = self
-
-        class DiffParams(BaseModel):
-            path: str | None = Field(
-                None, description="Limit the diff to this repo-relative file. Omit for the whole PR."
-            )
-
-        class ReadParams(BaseModel):
-            path: str = Field(description="Repo-relative file path, e.g. src/app/module.py")
-            start_line: int = Field(1, ge=1)
-            end_line: int = Field(200, ge=1)
-
-        class SearchParams(BaseModel):
-            pattern: str = Field(description="Extended regex, passed to git grep -E")
-            path_glob: str | None = Field(None, description="Optional pathspec, e.g. 'src/app/**'")
-
-        class QuestionParams(BaseModel):
-            question: str = Field(description="One question for the learner. Don't hint at the answer.")
-            focus: str = Field(
-                description="What it tests: intent, control-flow, responsibility, unhappy-path, tests, or risk"
-            )
-            refs: list[str] = Field(default_factory=list, description="path:line locations the answer depends on")
-            expected_points: list[str] = Field(
-                description="What a good answer covers. Hidden from the learner until they answer."
-            )
-
-        class AssessParams(BaseModel):
-            qid: str = Field(description="The question id, e.g. Q2")
-            verdict: str = Field(description="correct, partial, or incorrect")
-            feedback: str = Field(
-                description="One to three sentences. For partial or incorrect, a hint, not the answer."
-            )
-            evidence: list[str] = Field(default_factory=list, description="path:line references supporting the verdict")
-
-        class TeachbackParams(BaseModel):
-            verdict: str = Field(description="correct, partial, or incorrect")
-            feedback: str = Field(description="What they got right and the specific gaps")
-            gaps: list[str] = Field(default_factory=list)
-
-        class NoteParams(BaseModel):
-            text: str = Field(description="A short, durable insight in markdown")
-            section: str | None = Field(None, description="Which brief section it relates to, if any")
-
-        class FindingParams(BaseModel):
-            severity: str = Field(description="blocker, major, minor, or question")
-            summary: str
-            path: str | None = None
-            line: int | None = None
-
-        @define_tool(
-            name="get_diff",
-            description="The PR's diff against its merge base, optionally for one file.",
-            skip_permission=True,
-        )
-        async def get_diff(params: DiffParams, invocation: Any) -> str:
-            number = assistant._number_for(invocation)
-            worktree, merge_base = await assistant._worktree(number)
+        async def get_diff(args: dict[str, Any]) -> str:
+            worktree, merge_base = await self._worktree(number)
             cmd = ["git", "-C", str(worktree), "diff", f"{merge_base}..HEAD"]
-            if params.path:
-                cmd += ["--", assistant._safe_rel(worktree, params.path)]
-            return _clip(
-                await asyncio.to_thread(run, cmd, check=False), limit=assistant.cfg.tuning.study.max_tool_output_chars
-            )
+            if args.get("path"):
+                cmd += ["--", _safe_rel(worktree, args["path"])]
+            return _clip(await asyncio.to_thread(run, cmd, check=False), limit=limit)
 
-        @define_tool(
-            name="read_file",
-            description="Read lines of a file at the PR's head commit. Lines are numbered.",
-            skip_permission=True,
-        )
-        async def read_file(params: ReadParams, invocation: Any) -> str:
-            worktree, _ = await assistant._worktree(assistant._number_for(invocation))
-            path = worktree / assistant._safe_rel(worktree, params.path)
+        async def read_file(args: dict[str, Any]) -> str:
+            worktree, _ = await self._worktree(number)
+            path = worktree / _safe_rel(worktree, args["path"])
             if not path.is_file():
-                return f"No such file: {params.path}"
+                return f"No such file: {args['path']}"
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            end = min(params.end_line, params.start_line + 399, len(lines))
-            body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(params.start_line, end + 1))
-            return f"{params.path} lines {params.start_line}-{end} of {len(lines)}\n{body}"
+            start = max(1, int(args.get("start_line") or 1))
+            end = min(int(args.get("end_line") or 200), start + 399, len(lines))
+            body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))
+            return f"{args['path']} lines {start}-{end} of {len(lines)}\n{body}"
 
-        @define_tool(
-            name="search_code",
-            description="git grep the PR's head commit. Returns path:line:text matches.",
-            skip_permission=True,
-        )
-        async def search_code(params: SearchParams, invocation: Any) -> str:
-            worktree, _ = await assistant._worktree(assistant._number_for(invocation))
-            cmd = ["git", "-C", str(worktree), "grep", "-n", "-I", "-E", "--max-count=50", "-e", params.pattern]
-            if params.path_glob:
-                cmd += ["--", params.path_glob]
+        async def search_code(args: dict[str, Any]) -> str:
+            worktree, _ = await self._worktree(number)
+            cmd = ["git", "-C", str(worktree), "grep", "-n", "-I", "-E", "--max-count=50", "-e", args["pattern"]]
+            if args.get("path_glob"):
+                cmd += ["--", args["path_glob"]]
             out = await asyncio.to_thread(run, cmd, check=False)
-            return (
-                _clip(out, limit=min(MAX_SEARCH_OUTPUT, assistant.cfg.tuning.study.max_tool_output_chars))
-                or "No matches."
-            )
+            return _clip(out, limit=min(MAX_SEARCH_OUTPUT, limit)) or "No matches."
 
-        @define_tool(
-            name="ask_quiz_question",
-            description="Ask the learner one quiz question. Ends your turn.",
-            skip_permission=True,
-            is_terminal=True,
-        )
-        def ask_quiz_question(params: QuestionParams, invocation: Any) -> str:
-            entry = assistant._write(assistant._number_for(invocation), "question", **params.model_dump())
+        async def ask_quiz_question(args: dict[str, Any]) -> str:
+            self._flush_lead_in(number)
+            entry = self._write(number, "question", **args)
             return f"Asked {entry['qid']}. Wait for the learner's answer."
 
-        @define_tool(
-            name="assess_answer",
-            description="Record your assessment of the learner's answer to a question.",
-            skip_permission=True,
-        )
-        def assess_answer(params: AssessParams, invocation: Any) -> str:
-            assistant._write(assistant._number_for(invocation), "assessment", **params.model_dump())
+        async def assess_answer(args: dict[str, Any]) -> str:
+            self._write(number, "assessment", **args)
             return "Recorded."
 
-        @define_tool(
-            name="assess_teachback",
-            description="Record your assessment of the learner's teach-back.",
-            skip_permission=True,
-        )
-        def assess_teachback(params: TeachbackParams, invocation: Any) -> str:
-            assistant._write(assistant._number_for(invocation), "teachback_assessment", **params.model_dump())
+        async def assess_teachback(args: dict[str, Any]) -> str:
+            self._write(number, "teachback_assessment", **args)
             return "Recorded."
 
-        @define_tool(
-            name="append_to_brief", description="Append a short insight to the PR's study brief.", skip_permission=True
-        )
-        def append_to_brief(params: NoteParams, invocation: Any) -> str:
-            assistant._write(assistant._number_for(invocation), "note", **params.model_dump(exclude_none=True))
+        async def append_to_brief(args: dict[str, Any]) -> str:
+            self._write(number, "note", **args)
             return "Appended."
 
-        @define_tool(
-            name="record_finding",
-            description="Record a concrete problem in the PR, with its location.",
-            skip_permission=True,
-        )
-        def record_finding(params: FindingParams, invocation: Any) -> str:
-            assistant._write(assistant._number_for(invocation), "finding", **params.model_dump(exclude_none=True))
+        async def record_finding(args: dict[str, Any]) -> str:
+            self._write(number, "finding", **args)
             return "Recorded."
 
-        self._tools = [
-            get_diff,
-            read_file,
-            search_code,
-            ask_quiz_question,
-            assess_answer,
-            assess_teachback,
-            append_to_brief,
-            record_finding,
-        ]
-        return self._tools
+        s = runtimes.ToolSpec
+        return [
+            s("get_diff", "The PR's diff against its merge base, optionally for one file.", {
+                "properties": {"path": {"type": "string", "description": "Limit the diff to this repo-relative file. Omit for the whole PR."}},
+            }, get_diff),
+            s("read_file", "Read lines of a file at the PR's head commit. Lines are numbered.", {
+                "properties": {
+                    "path": {"type": "string", "description": "Repo-relative file path, e.g. src/app/module.py"},
+                    "start_line": {"type": "integer", "minimum": 1, "default": 1},
+                    "end_line": {"type": "integer", "minimum": 1, "default": 200},
+                },
+                "required": ["path"],
+            }, read_file),
+            s("search_code", "git grep the PR's head commit. Returns path:line:text matches.", {
+                "properties": {
+                    "pattern": {"type": "string", "description": "Extended regex, passed to git grep -E"},
+                    "path_glob": {"type": "string", "description": "Optional pathspec, e.g. 'src/app/**'"},
+                },
+                "required": ["pattern"],
+            }, search_code),
+            s("ask_quiz_question", "Ask the learner one quiz question. Ends your turn.", {
+                "properties": {
+                    "question": {"type": "string", "description": "One question for the learner. Don't hint at the answer."},
+                    "focus": {"type": "string", "description": "What it tests: intent, control-flow, responsibility, unhappy-path, tests, or risk"},
+                    "refs": {"type": "array", "items": {"type": "string"}, "description": "path:line locations the answer depends on"},
+                    "expected_points": {"type": "array", "items": {"type": "string"}, "description": "What a good answer covers. Hidden from the learner until they answer."},
+                },
+                "required": ["question", "focus", "expected_points"],
+            }, ask_quiz_question, terminal=True),
+            s("assess_answer", "Record your assessment of the learner's answer to a question.", {
+                "properties": {
+                    "qid": {"type": "string", "description": "The question id, e.g. Q2"},
+                    "verdict": {"type": "string", "enum": ["correct", "partial", "incorrect"]},
+                    "feedback": {"type": "string", "description": "One to three sentences. For partial or incorrect, a hint, not the answer."},
+                    "evidence": {"type": "array", "items": {"type": "string"}, "description": "path:line references supporting the verdict"},
+                },
+                "required": ["qid", "verdict", "feedback"],
+            }, assess_answer),
+            s("assess_teachback", "Record your assessment of the learner's teach-back.", {
+                "properties": {
+                    "verdict": {"type": "string", "enum": ["correct", "partial", "incorrect"]},
+                    "feedback": {"type": "string", "description": "What they got right and the specific gaps"},
+                    "gaps": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["verdict", "feedback"],
+            }, assess_teachback),
+            s("append_to_brief", "Append a short insight to the PR's study brief.", {
+                "properties": {
+                    "text": {"type": "string", "description": "A short, durable insight in markdown"},
+                    "section": {"type": "string", "description": "Which brief section it relates to, if any"},
+                },
+                "required": ["text"],
+            }, append_to_brief),
+            s("record_finding", "Record a concrete problem in the PR, with its location.", {
+                "properties": {
+                    "severity": {"type": "string", "enum": ["blocker", "major", "minor", "question"]},
+                    "summary": {"type": "string"},
+                    "path": {"type": "string"},
+                    "line": {"type": "integer"},
+                },
+                "required": ["severity", "summary"],
+            }, record_finding),
+        ]  # fmt: skip
 
-    @staticmethod
-    def _safe_rel(worktree: Path, rel: str) -> str:
-        """Resolve a model-supplied path and refuse anything outside the worktree."""
-        target = (worktree / rel).resolve()
-        if not target.is_relative_to(worktree.resolve()):
-            raise ValueError(f"{rel} is outside the PR checkout")
-        return target.relative_to(worktree.resolve()).as_posix()
+
+def _safe_rel(worktree: Path, rel: str) -> str:
+    """Resolve a model-supplied path and refuse anything outside the worktree."""
+    target = (worktree / rel).resolve()
+    if not target.is_relative_to(worktree.resolve()):
+        raise ValueError(f"{rel} is outside the PR checkout")
+    return target.relative_to(worktree.resolve()).as_posix()
 
 
-ASSISTANTS.add(
-    "copilot",
-    "a Copilot SDK session per PR that reads the code and grades answers: GitHub Copilot, or your own model provider (needs [study])",
-    options=CopilotOptions,
-)(CopilotAssistant)
+def record_usage(cfg: Config, used: runtimes.Usage, *, purpose: str, ref: str, by: str) -> dict[str, Any] | None:
+    """Append one model call to the repo's usage ledger. Who is billed comes from the runtime; for GitHub
+    Copilot that's whoever the dashboard's build saw signed in (the forge's viewer), when known."""
+    if not used.call_id:
+        return None  # a call with no id can't be recorded idempotently
+    billed_to = used.billed_to or "unknown"
+    if billed_to == "copilot":
+        viewer = _viewer(cfg)
+        billed_to = f"copilot:{viewer}" if viewer else "copilot"
+    return usage.record(
+        cfg, call_id=used.call_id, purpose=purpose, ref=ref, model=used.model, billed_to=billed_to, by=by,
+        tokens=used.tokens(), multiplier=used.multiplier, nano_aiu=used.nano_aiu,
+    )  # fmt: skip
 
 
-async def open_study_session(
-    client: Any, session_id: str, options: dict[str, Any], *, resume: bool
-) -> tuple[Any, str, bool]:
-    """Resume the PR's study session, or start one. Returns (session, its id, whether it's new).
-
-    A session whose history Copilot can't read back (say its folder was half-deleted) would otherwise break
-    the Study tab for that PR for good. Fall back to a fresh session: the study log, not the chat history,
-    is the record, and a new session is handed the brief with the log at its end.
-    """
-    if resume:
-        try:
-            return await client.resume_session(session_id, **options), session_id, False
-        except Exception as exc:  # noqa: BLE001 - SDK errors have no common type
-            log.warning("Couldn't resume study session %s (%s); starting a fresh one", session_id, str(exc)[:200])
-            session_id = str(uuid.uuid4())
-    return await client.create_session(session_id=session_id, **options), session_id, True
+def _viewer(cfg: Config) -> str:
+    """The login the last build saw, from data.json; "" when there is no build or the forge reports none."""
+    try:
+        return str(json.loads(cfg.data_path.read_text(encoding="utf-8")).get("viewer") or "")
+    except (OSError, ValueError):
+        return ""
 
 
 def _clip(text: str, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n... [truncated {len(text) - limit} characters; narrow the request]"
+
+
+ASSISTANTS.add(
+    "copilot",
+    "a Socratic assistant that reads the code and grades answers, on the configured model runtime (needs a runtime)",
+)(ModelAssistant)
