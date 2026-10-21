@@ -93,6 +93,12 @@ def main() -> int:
         shot("review")
         page.click('[data-dtab="study"]')
         page.wait_for_selector(".transcript")
+        # The tab opens at the end of the conversation; the shot is about the latest question, the answer, and
+        # the verdict with its evidence, so bring that card to the top of the panel when there is one.
+        page.evaluate(
+            "(() => { const cards = document.querySelectorAll('.qcard'); const last = cards[cards.length - 1];"
+            " if (last) last.scrollIntoView({block: 'start'}); })()"
+        )
         shot("study")
         browser.close()
     httpd.shutdown()
