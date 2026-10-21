@@ -234,7 +234,9 @@ def _install_fake_copilot(monkeypatch: pytest.MonkeyPatch, client=None) -> None:
     monkeypatch.setitem(
         sys.modules,
         "copilot",
-        types.SimpleNamespace(define_tool=define_tool, CopilotClient=(lambda: client) if client else object),
+        types.SimpleNamespace(
+            define_tool=define_tool, CopilotClient=(lambda **kw: client.built(kw)) if client else object
+        ),
     )
     monkeypatch.setitem(sys.modules, "copilot.generated", types.SimpleNamespace())
     monkeypatch.setitem(
@@ -325,6 +327,11 @@ def test_session_for_starts_client_builds_options_and_caches_session(harness, tm
         def __init__(self):
             self.started = False
             self.resumed = []
+            self.construction: dict = {}
+
+        def built(self, kwargs):
+            self.construction = kwargs
+            return self
 
         async def start(self):
             self.started = True
@@ -355,6 +362,171 @@ def test_session_for_starts_client_builds_options_and_caches_session(harness, tm
     assert options["available_tools"] == [tool.name for tool in copilot._tools or []]
     assert "The learner maintains Courier" in options["system_message"]["content"]
     assert options["on_permission_request"](None, None).__class__.__name__ == "PermissionDecisionUserNotAvailable"
+
+
+def test_copilot_options_describe_a_provider_of_your_own(monkeypatch):
+    from readthrough.assistants import CopilotOptions
+
+    default = CopilotOptions()
+    assert not default.byok and default.provider_config() is None and default.billed_to() == "copilot"
+    with pytest.raises(ValueError, match="provider must be one of"):
+        CopilotOptions(provider="gemini", base_url="https://x", model="m")
+    with pytest.raises(ValueError, match="needs base_url"):
+        CopilotOptions(provider="anthropic", model="claude-sonnet-4-5")
+    with pytest.raises(ValueError, match="needs model"):
+        CopilotOptions(provider="anthropic", base_url="https://api.anthropic.com")
+    opts = CopilotOptions(
+        provider="anthropic", base_url="https://api.anthropic.com", model="claude-sonnet-4-5", api_key_env="MY_KEY"
+    )
+    assert opts.byok and opts.billed_to() == "anthropic:api.anthropic.com"
+    monkeypatch.delenv("MY_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="MY_KEY isn't set"):
+        opts.provider_config()
+    monkeypatch.setenv("MY_KEY", "sk-ant-test")
+    assert opts.provider_config() == {
+        "type": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "api_key": "sk-ant-test",
+    }
+    azure = CopilotOptions(
+        provider="azure",
+        base_url="https://r.openai.azure.com",
+        model="gpt-5",
+        api_key_env="MY_KEY",
+        azure_api_version="2025-04-01",
+    )
+    assert (azure.provider_config() or {})["azure"] == {"api_version": "2025-04-01"}
+    # The config loader validates the table like any plugin's, so a typo is caught there.
+    from readthrough.assistants import ASSISTANTS
+
+    with pytest.raises(Exception, match="base_ur"):
+        ASSISTANTS.options_for(
+            "copilot", {"provider": "openai", "base_ur": "https://x", "model": "m"}, where="[assistants.copilot]"
+        )
+
+
+def test_a_provider_of_your_own_means_no_github_sign_in(harness, tmp_path, monkeypatch):
+    """With [assistants.copilot] provider set, the runtime talks to that provider and never falls back to the
+    Copilot CLI's GitHub login; the repo's study_model still wins over the provider's model."""
+    from readthrough.assistants import CopilotOptions
+
+    class Client:
+        def __init__(self):
+            self.created = []
+            self.construction: dict = {}
+
+        def built(self, kwargs):
+            self.construction = kwargs
+            return self
+
+        async def start(self):
+            pass
+
+        async def create_session(self, session_id, **options):
+            self.created.append(options)
+            return SimpleNamespace(session_id=session_id)
+
+    client = Client()
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    _install_fake_copilot(monkeypatch, client)
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
+    monkeypatch.setattr(assistants.Copilot, "session_info", lambda _self, sid: SessionInfo(sid, exists=False))
+    monkeypatch.setenv("READTHROUGH_MODEL_API_KEY", "sk-test")
+    opts = CopilotOptions(
+        provider="openai", base_url="https://api.openai.com/v1", model="gpt-5-codex", wire_api="responses"
+    )
+
+    copilot = CopilotAssistant(harness, opts)
+    asyncio.run(copilot._session_for(7))
+    assert client.construction == {"use_logged_in_user": False}
+    options = client.created[0]
+    assert options["provider"] == {
+        "type": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-test",
+        "wire_api": "responses",
+    }
+    assert options["model"] == "gpt-5-codex"
+
+    harness.cfg.study_model = "o4-mini"
+    other = CopilotAssistant(harness, opts)
+    asyncio.run(other._session_for(8))
+    assert client.created[1]["model"] == "o4-mini", "the repo's own model choice wins"
+
+    plain = CopilotAssistant(harness, None)
+    asyncio.run(plain._session_for(9))
+    assert client.construction == {}, "GitHub Copilot: the CLI's own sign-in, as before"
+    assert "provider" not in client.created[2]
+
+
+def test_usage_events_become_ledger_lines(harness, monkeypatch):
+    """Each assistant.usage event is one ledger line in the provider's own units, idempotent by call id, billed
+    to the Copilot viewer or to the provider; a line names what was measured and nothing else."""
+    from readthrough import usage
+    from readthrough.assistants import CopilotOptions
+
+    harness.cfg.data_path.parent.mkdir(parents=True, exist_ok=True)
+    harness.cfg.data_path.write_text('{"viewer": "spencrr"}', encoding="utf-8")
+    copilot_usage = SimpleNamespace(total_nano_aiu=1.5e9)
+    event = _event("assistant.usage", api_call_id="call-1", model="claude-sonnet-4-5", input_tokens=1200, output_tokens=300,
+                   cache_read_tokens=800, cache_write_tokens=None, reasoning_tokens=None, cost=1.0, is_byok=False,
+                   copilot_usage=copilot_usage)  # fmt: skip
+    session = FakeSession([event, event, _event("session.idle")])  # the same call reported twice
+    copilot = CopilotAssistant(harness, None)
+    asyncio.run(copilot._send(7, session, "prompt"))
+    entries = usage.load(harness.cfg)
+    assert len(entries) == 1, "idempotent by call id"
+    line = entries[0]
+    assert line["id"] == "call-1" and line["purpose"] == "study" and line["ref"] == "#7" and line["by"] == "copilot"
+    assert line["billed_to"] == "copilot:spencrr" and line["via"] == "local"
+    assert line["tokens"] == {"input": 1200, "output": 300, "cache_read": 800}, "unreported counts are absent, not 0"
+    assert line["multiplier"] == 1.0 and line["nano_aiu"] == 1.5e9 and "usd" not in line
+    assert sum(1 for e, d in harness.events if d.get("type") == "usage") == 1
+
+    byok = CopilotAssistant(
+        harness, CopilotOptions(provider="anthropic", base_url="https://api.anthropic.com", model="m")
+    )
+    byok_event = _event("assistant.usage", api_call_id="call-2", model="claude-opus-4-8", input_tokens=10, output_tokens=5,
+                        cache_read_tokens=None, cache_write_tokens=None, reasoning_tokens=None, cost=None, is_byok=True,
+                        copilot_usage=None)  # fmt: skip
+    asyncio.run(byok._send(8, FakeSession([byok_event, _event("session.idle")]), "prompt"))
+    line = usage.load(harness.cfg)[1]
+    assert line["billed_to"] == "anthropic:api.anthropic.com" and "nano_aiu" not in line and "multiplier" not in line
+
+    summary = usage.summarize(usage.load(harness.cfg))
+    assert summary["calls"] == 2 and summary["tokens"] == {"input": 1210, "output": 305, "cache_read": 800}
+    assert summary["nano_aiu"] == 1.5e9 and summary["usd"] is None and summary["unpriced_calls"] == 1
+    assert summary["by_payer"] == {"copilot:spencrr": 1, "anthropic:api.anthropic.com": 1}
+    assert usage.describe(summary) == "2 model calls, 1,515 tokens, 1.50 AIU, 1 calls with no price reported"
+    assert usage.describe(usage.summarize([])) == "no model calls recorded"
+    with pytest.raises(ValueError, match="price table"):
+        usage.record(
+            harness.cfg, call_id="x", purpose="study", ref="#1", model="m", billed_to="b", by="copilot", usd=1.0
+        )
+
+
+def test_verdicts_name_the_model_that_reached_them(harness):
+    """The runtime reports the model in use with each call; what the assistant writes afterwards carries it, and the
+    brief says which model graded rather than just "Copilot"."""
+    copilot = CopilotAssistant(harness, None)
+    study.append(harness.cfg, 7, "question", by="copilot", question="Why?")
+    study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
+    usage_event = _event("assistant.usage", api_call_id="c1", model="gpt-4.1", input_tokens=1, output_tokens=1,
+                         cache_read_tokens=None, cache_write_tokens=None, reasoning_tokens=None, cost=None,
+                         is_byok=True, copilot_usage=None)  # fmt: skip
+    text = asyncio.run(copilot._send(7, FakeSession([usage_event, _event("assistant.message_delta", delta_content="Right."),
+                                                     _event("session.idle")]), "prompt"))  # fmt: skip
+    copilot._write(7, "assessment", qid="Q1", verdict="correct", feedback="Yes.")
+    copilot._write(7, "chat", role="assistant", text=text)  # as turn() does with what _send returns
+    entries = study.load(harness.cfg, 7)
+    assert entries[-1]["model"] == "gpt-4.1" and entries[-1]["kind"] == "chat"
+    assert entries[-2]["model"] == "gpt-4.1" and entries[-2]["by"] == "copilot" and entries[-2]["kind"] == "assessment"
+    assert "assessed by gpt-4.1 (through Copilot)" in study.render_appendix(entries)
+    assert study.graders([{"kind": "assessment", "by": "copilot"}]) == "Copilot", (
+        "an older log, before models were recorded"
+    )
+    assert study.graders([]) == "nobody"
 
 
 def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkeypatch):

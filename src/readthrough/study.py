@@ -4,8 +4,9 @@ Everything that shows understanding (or the lack of it) is appended here: your p
 reading (or that you skipped it), whether you asked for a briefing, quiz questions and your answers (each
 tagged with whether a hint or a briefing came first), the assistant's assessments with code evidence, your
 teach-back, your "what I missed" reflections, pinned notes, and findings. Entries are never edited or
-deleted, so the log is an honest trail. Only Copilot writes verdicts; the rules assistant never does, so a
-score always comes from one grader that read the code.
+deleted, so the log is an honest trail. Only an assistant that read the code writes verdicts; the rules
+assistant never does. A verdict carries the model that reached it when the runtime says which, since the
+same assistant may be talking to GitHub Copilot or to a model provider of yours, and the brief names it.
 
 The log lives in the repo's data directory (``study/pr-<n>.jsonl``), and its evidence is rendered as the last
 section of the brief, so a terminal deep review reads the same evidence the dashboard shows.
@@ -152,6 +153,19 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def graders(entries: list[dict[str, Any]]) -> str:
+    """Who graded, as precisely as the log knows: the models named on the verdicts, else the assistant's name.
+
+    A verdict's weight depends on which model reached it, so a brief that says "assessed by Copilot" when the
+    runtime was talking to a model of yours would be hiding the thing a reader most needs to know.
+    """
+    verdicts = [e for e in entries if e["kind"] in ("assessment", "teachback_assessment")]
+    models = sorted({e["model"] for e in verdicts if e.get("model")})
+    if models:
+        return ", ".join(models) + (" (through Copilot)" if all(e["by"] == "copilot" for e in verdicts) else "")
+    return ", ".join(sorted({e["by"].capitalize() for e in verdicts})) or "nobody"
+
+
 def _handoff(entries: list[dict[str, Any]]) -> str:
     """One line for whoever picks this up next (a deep review): where understanding is solid and where it isn't."""
     focus = {e["qid"]: e.get("focus") or "" for e in entries if e["kind"] == "question"}
@@ -188,7 +202,7 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
     s = summarize(entries)
     out = [MARKER, "", "## 9. Study log (evidence of understanding)", ""]
     if s["assessed"]:
-        score = f"{s['correct']} correct, {s['partial']} partial, {s['incorrect']} incorrect of {s['assessed']} assessed by Copilot"
+        score = f"{s['correct']} correct, {s['partial']} partial, {s['incorrect']} incorrect of {s['assessed']} assessed by {graders(entries)}"
     elif s["answered"]:
         aided = s["answered"] - s["unaided"]
         score = f"{s['answered']} answered, not graded" + (f" ({aided} after a hint or briefing)" if aided else "")

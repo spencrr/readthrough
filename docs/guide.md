@@ -253,6 +253,21 @@ The deep review is a long, guided conversation in a terminal. The **Study** tab 
 
 Two assistants can sit on the other side of it, and `readthrough doctor` tells you which one you have. With the `[study]` install, it's **Copilot**: it reads the PR's code, asks questions about what it finds, and grades your answers with file and line evidence. Without it, it's the **rules** assistant, which needs nothing installed: it asks the questions the repo's profile already carries (the shared ones, each touched component's, the author kind's, and one per signal), points you at files for hints, and assembles a briefing from the PR's metadata. It never grades, because it has no answer key and a self-awarded "correct" isn't evidence; instead, after you've answered the last question about a component, it shows that component's contract once so you can check yourself, and the box offers a "what I missed" note. `assistant = "rules"` in `config.toml` picks it even when Copilot is installed. The rest of this section describes the Copilot assistant; the stages, the log, and the brief are the same for both.
 
+The Copilot assistant doesn't have to talk to GitHub Copilot. Its runtime (the Copilot CLI, which the `[study]` extra brings) can be pointed at a model provider of your own, and then no GitHub sign-in is involved anywhere in studying: the Study tab works for a repo on Azure DevOps or GitLab without a GitHub account, and the bill goes to that provider instead of a Copilot plan.
+
+```toml
+[assistants.copilot]
+provider = "azure"                                        # openai, azure, or anthropic
+base_url = "https://my-resource.openai.azure.com/openai/v1"
+model = "gpt-4.1"                                         # the provider's name for it; a repo's study_model still wins
+entra = true                                              # azure only: sign in with az instead of a key
+# api_key_env = "READTHROUGH_MODEL_API_KEY"               # otherwise, the variable holding the provider's key
+```
+
+The key itself never goes in the config. With `entra = true`, the token comes from the signed-in `az` whenever the runtime asks for one, which is how Azure OpenAI resources with key auth disabled by policy are reached. The study log records which model reached each verdict, and the brief names it ("assessed by gpt-4.1 (through Copilot)"), since a verdict's weight depends on who gave it.
+
+Every model call, whoever pays for it, is one line in the repo's **usage ledger** (`usage.jsonl` in its data directory): the model, the tokens in the provider's own units, Copilot's premium-request multiplier and AI-credit consumption when it was Copilot, and who was billed (`copilot:<login>` or `<provider>:<host>`). Nothing is converted into anything else, and a quantity the provider didn't report is left out rather than written as zero. `readthrough doctor` sums the last thirty days per repo.
+
 ![The study tab after a quiz question was answered and assessed](img/study.webp)
 
 It's one conversation with a single box underneath, and a small indicator at the top shows how far you've got: Predict, Quiz, Teach back. What the box does follows where you are:

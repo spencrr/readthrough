@@ -44,6 +44,19 @@
   the "can't tell us the association" warning is gone and authors are classified the way they are on GitHub.
 - A token a CLI prints is used only if it looks like one (a line of printable characters). A stand-in that
   printed a banner used to end up in an `Authorization` header, which `urllib` rejects by crashing the call.
+- The Copilot study assistant can talk to a model provider of your own instead of GitHub Copilot
+  (`[assistants.copilot] provider = "openai" | "azure" | "anthropic"`, with `base_url`, `model`, and the key in
+  the variable `api_key_env` names, or `entra = true` on Azure to sign in with `az`). The runtime then never
+  touches the Copilot CLI's GitHub login, so studying works for repos on any forge without a GitHub account,
+  and the onboarding drafter uses the same provider. Checked live against Azure OpenAI with an Entra token on
+  a resource that has key auth disabled: a full predict, quiz, answer, grade loop on `gpt-4.1`.
+- Every model call is recorded in the repo's usage ledger (`usage.jsonl`), one line per call keyed by the
+  provider's call id: the model, tokens in the provider's own units, Copilot's premium-request multiplier and
+  AI-credit consumption when it was Copilot, who was billed (`copilot:<login>` or `<provider>:<host>`), and
+  what for (`study` on a PR, or the onboarding `draft`). Units are never converted into one another and an
+  unreported quantity is absent, not zero. `doctor` sums the last thirty days per repo.
+- Study-log entries an assistant writes carry the model that reached them, and the brief says "assessed by
+  gpt-4.1 (through Copilot)" rather than just "by Copilot", since a verdict's weight depends on who gave it.
 - A study turn that ends in an error is written to the study log as a `failure` entry (by `readthrough`, naming
   the assistant and the error), so a "Quiz me" with no reply is never read as one you abandoned. The Study tab
   shows it as a line in the transcript.

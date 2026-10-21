@@ -94,10 +94,12 @@ class _Drafter:
     # ---- the session
 
     async def run(self) -> None:
-        from copilot import CopilotClient
         from copilot.generated.rpc import PermissionDecisionUserNotAvailable
 
-        client = CopilotClient()
+        from readthrough.assistants import copilot_client, copilot_options, model_options
+
+        options_for = copilot_options(self.cfg)
+        client = copilot_client(options_for)
         await client.start()
         try:
             tools = self._tools()
@@ -110,8 +112,7 @@ class _Drafter:
                 "enable_skills": False,
                 "system_message": {"mode": "append", "content": SYSTEM_MESSAGE.format(repo=self.facts.repo)},
             }
-            if self.cfg.study_model:
-                options["model"] = self.cfg.study_model
+            options.update(model_options(self.cfg, options_for))
             session = await client.create_session(session_id=str(uuid.uuid4()), **options)
             try:
                 self.summary = await self._send(session, self._first_prompt())
@@ -119,6 +120,15 @@ class _Drafter:
                 await session.disconnect()
         finally:
             await client.stop()
+
+    def _record_usage(self, data: Any) -> None:
+        from readthrough.assistants import copilot_options, record_sdk_usage
+
+        try:
+            record_sdk_usage(self.cfg, data, purpose="draft", ref="onboarding", by="copilot",
+                             options=copilot_options(self.cfg))  # fmt: skip
+        except Exception:
+            log.exception("Couldn't record model usage for the onboarding draft")
 
     async def _send(self, session: Any, prompt: str) -> str:
         loop = asyncio.get_running_loop()
@@ -129,7 +139,9 @@ class _Drafter:
         def on_event(event: Any) -> None:
             kind = getattr(event.type, "value", str(event.type))
             data = event.data
-            if kind == "assistant.message":
+            if kind == "assistant.usage":
+                self._record_usage(data)
+            elif kind == "assistant.message":
                 last[:] = [getattr(data, "content", None) or ""]
             elif kind == "tool.execution_start":
                 name = getattr(data, "tool_name", "?")

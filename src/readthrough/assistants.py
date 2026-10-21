@@ -23,18 +23,21 @@ only gets a ``Harness`` to append entries and broadcast progress through.
 # get_type_hints, and the parameter models are local classes that string annotations can't resolve.
 
 import asyncio
+import json
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
-from readthrough import review, study
+from readthrough import review, study, usage
 from readthrough.agents import Copilot
 from readthrough.config import AUTO, Config
 from readthrough.limits import MAX_SEARCH_OUTPUT
-from readthrough.process import run
+from readthrough.process import quiet_output, run
 from readthrough.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -327,6 +330,141 @@ ASSISTANTS.add("rules", "the profile's own questions, hints, and briefing; no mo
 
 COPILOT_BY = "copilot"
 
+PROVIDER_TYPES = ("openai", "azure", "anthropic")
+
+
+@dataclass(frozen=True)
+class CopilotOptions:
+    """Where the Copilot assistant's model comes from.
+
+    By default, GitHub Copilot through the Copilot CLI's own sign-in. With ``provider`` set, the same
+    runtime talks to a model provider of yours instead (bring your own key), and no GitHub sign-in is
+    involved at all: the Study tab then works for repos on any forge without a GitHub account, and the
+    bill goes to that provider. The key is read from ``api_key_env``, never from the config file.
+    """
+
+    provider: str | None = None  # openai | azure | anthropic; unset means GitHub Copilot
+    base_url: str | None = None  # the provider's endpoint, e.g. https://api.anthropic.com or an Azure resource
+    model: str | None = None  # the provider's model name; `study_model` per repo still wins when set
+    api_key_env: str = "READTHROUGH_MODEL_API_KEY"  # the variable holding the provider's key
+    # azure only: sign in with `az` (an Entra token for Cognitive Services) instead of a key. Many Azure
+    # OpenAI resources have key auth disabled by policy, so this is often the only way in.
+    entra: bool = False
+    wire_api: str | None = None  # openai only: completions | responses (the SDK's default when unset)
+    azure_api_version: str | None = None  # azure only
+
+    def __post_init__(self) -> None:
+        if self.provider is not None and self.provider not in PROVIDER_TYPES:
+            raise ValueError(f"provider must be one of {', '.join(PROVIDER_TYPES)}, not {self.provider!r}")
+        if self.provider is not None and not self.base_url:
+            raise ValueError("a provider needs base_url")
+        if self.provider is not None and not self.model:
+            raise ValueError("a provider needs model: the model name it serves")
+        if self.entra and self.provider != "azure":
+            raise ValueError("entra sign-in applies to the azure provider only")
+
+    @property
+    def byok(self) -> bool:
+        return self.provider is not None
+
+    def provider_config(self) -> dict[str, Any] | None:
+        """The SDK's ``ProviderConfig`` for a provider of your own: the key from the environment, or for Azure
+        with ``entra``, a callback that fetches a fresh Entra token from ``az`` whenever the runtime asks."""
+        if self.provider is None:
+            return None
+        config: dict[str, Any] = {"type": self.provider, "base_url": self.base_url}
+        if self.entra:
+            config["bearer_token_provider"] = lambda _args: entra_token()
+        else:
+            key = os.environ.get(self.api_key_env, "").strip()
+            if not key:
+                raise RuntimeError(
+                    f"The Copilot assistant is set to use {self.provider} at {self.base_url}, but {self.api_key_env} "
+                    "isn't set. Put the provider's API key in that variable (never in config.toml)."
+                )
+            config["api_key"] = key
+        if self.wire_api:
+            config["wire_api"] = self.wire_api
+        if self.provider == "azure" and self.azure_api_version:
+            config["azure"] = {"api_version": self.azure_api_version}
+        return config
+
+    def billed_to(self) -> str:
+        """Who pays for a turn: the provider, or GitHub Copilot through whoever is signed in."""
+        return f"{self.provider}:{urlsplit(self.base_url or '').hostname or self.base_url}" if self.byok else "copilot"
+
+
+COGNITIVE_SERVICES = "https://cognitiveservices.azure.com"
+
+
+def entra_token() -> str:
+    """A bearer token for Azure OpenAI from a signed-in ``az``. Asked for on demand; az caches and refreshes."""
+    out, why = quiet_output(
+        ["az", "account", "get-access-token", "--resource", COGNITIVE_SERVICES, "--query", "accessToken", "-o", "tsv"],
+        with_failure=True,
+    )
+    if not out or not out.strip():
+        raise RuntimeError(
+            f"az has no token for Azure OpenAI ({why.splitlines()[0][:160] if why else 'not signed in'}); run az login"
+        )
+    return out.strip()
+
+
+def copilot_options(cfg: Config) -> CopilotOptions:
+    """The ``[assistants.copilot]`` options in effect, for anything that opens a Copilot SDK session."""
+    opts = (cfg.assistant_options or {}).get("copilot")
+    return opts if isinstance(opts, CopilotOptions) else CopilotOptions()
+
+
+def copilot_client(options: CopilotOptions) -> Any:
+    """A Copilot SDK client that, with a provider of our own, never falls back to the CLI's GitHub sign-in."""
+    from copilot import CopilotClient
+
+    return CopilotClient(use_logged_in_user=False) if options.byok else CopilotClient()
+
+
+def record_sdk_usage(
+    cfg: Config, data: Any, *, purpose: str, ref: str, by: str, options: CopilotOptions
+) -> dict[str, Any] | None:
+    """Append what a Copilot SDK ``assistant.usage`` event reports to the repo's usage ledger.
+
+    Who is billed comes from the options, not the event: a provider of ours by host, else GitHub Copilot
+    through whoever the dashboard's build saw signed in (the forge's viewer), else just ``copilot``.
+    """
+    fields = usage.from_sdk_usage(data)
+    if not fields["call_id"]:
+        return None  # an event with no call id can't be recorded idempotently; the SDK always sends one
+    billed_to = options.billed_to()
+    if not options.byok:
+        viewer = _viewer(cfg)
+        billed_to = f"copilot:{viewer}" if viewer else "copilot"
+    return usage.record(
+        cfg, call_id=fields["call_id"], purpose=purpose, ref=ref, model=fields["model"], billed_to=billed_to,
+        by=by, tokens=fields["tokens"], multiplier=fields["multiplier"], nano_aiu=fields["nano_aiu"],
+    )  # fmt: skip
+
+
+def _viewer(cfg: Config) -> str:
+    """The login the last build saw, from data.json; "" when there is no build or the forge reports none."""
+    try:
+        return str(json.loads(cfg.data_path.read_text(encoding="utf-8")).get("viewer") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def model_options(cfg: Config, options: CopilotOptions) -> dict[str, Any]:
+    """Session options that pick the model: the provider when configured, and the model name, where the repo's
+    ``study_model`` beats the provider's default."""
+    out: dict[str, Any] = {}
+    provider = options.provider_config()
+    if provider is not None:
+        out["provider"] = provider
+    model = cfg.study_model or options.model
+    if model:
+        out["model"] = model
+    return out
+
+
 SYSTEM_MESSAGE = """\
 You are the study assistant inside readthrough. You help a maintainer of {repo} genuinely understand one
 pull request before they review it. Your job is to make them think, not to think for them.
@@ -375,12 +513,14 @@ class CopilotAssistant:
     def __init__(self, harness: Harness, options: Any) -> None:
         self.h = harness
         self.cfg = harness.cfg
+        self.options: CopilotOptions = options if isinstance(options, CopilotOptions) else CopilotOptions()
         self._client: Any = None
         self._client_lock: asyncio.Lock | None = None
         self._sessions: dict[int, Any] = {}
         self._pr_by_session: dict[str, int] = {}
         self._worktrees: dict[int, tuple[Path, str]] = {}
         self._tools: list[Any] | None = None
+        self._model_in_use: dict[int, str] = {}  # per PR, the model the runtime last reported using
 
     async def stop(self) -> None:
         for session in self._sessions.values():
@@ -395,7 +535,13 @@ class CopilotAssistant:
             prompt = self._first_turn_context(turn.number) + "\n\n" + prompt
         text = await self._send(turn.number, session, prompt)
         if text.strip():
-            self.h.append(turn.number, "chat", by=COPILOT_BY, role="assistant", text=text.strip())
+            self._write(turn.number, "chat", role="assistant", text=text.strip())
+
+    def _write(self, number: int, kind: str, **fields: Any) -> dict[str, Any]:
+        """Append in the assistant's name, recording which model wrote it. ``by`` says who ran the conversation
+        (this assistant); ``model`` says whose judgement it is, which is what a verdict's weight depends on."""
+        model = self._model_in_use.get(number)
+        return self.h.append(number, kind, by=COPILOT_BY, **({"model": model} if model else {}), **fields)
 
     async def _send(self, number: int, session: Any, prompt: str) -> str:
         loop = asyncio.get_running_loop()
@@ -406,7 +552,11 @@ class CopilotAssistant:
         def on_event(event: Any) -> None:
             kind = getattr(event.type, "value", str(event.type))
             data = event.data
-            if kind == "assistant.message_delta":
+            if kind == "assistant.usage":
+                if model := getattr(data, "model", None):
+                    self._model_in_use[number] = str(model)
+                self._record_usage(number, data)
+            elif kind == "assistant.message_delta":
                 delta = getattr(data, "delta_content", None) or ""
                 parts.append(delta)
                 self.h.broadcast("study", {"pr": number, "type": "delta", "text": delta})
@@ -416,7 +566,7 @@ class CopilotAssistant:
                 name = getattr(data, "tool_name", "?")
                 if name == "ask_quiz_question" and "".join(parts).strip():
                     # Keep the lead-in above the question card it introduces.
-                    self.h.append(number, "chat", by=COPILOT_BY, role="assistant", text="".join(parts).strip())
+                    self._write(number, "chat", role="assistant", text="".join(parts).strip())
                     parts.clear()
                 self.h.broadcast("study", {"pr": number, "type": "tool", "name": name})
             elif kind == "session.error":
@@ -438,14 +588,13 @@ class CopilotAssistant:
     async def _session_for(self, number: int) -> tuple[Any, bool]:
         if number in self._sessions:
             return self._sessions[number], False
-        from copilot import CopilotClient
         from copilot.generated.rpc import PermissionDecisionUserNotAvailable
 
         if self._client_lock is None:
             self._client_lock = asyncio.Lock()
         async with self._client_lock:
             if self._client is None:
-                client = CopilotClient()
+                client = copilot_client(self.options)
                 await client.start()
                 self._client = client
         worktree, _ = await self._worktree(number)
@@ -462,13 +611,23 @@ class CopilotAssistant:
             "streaming": True,
             "system_message": {"mode": "append", "content": system_message(self.cfg.repo, self._study_guidance())},
         }
-        if self.cfg.study_model:
-            options["model"] = self.cfg.study_model
+        options.update(model_options(self.cfg, self.options))
         exists = Copilot().session_info(session_id).exists  # the SDK shares the Copilot CLI's session store
         session, session_id, created = await open_study_session(self._client, session_id, options, resume=exists)
         self._pr_by_session[session_id] = number
         self._sessions[number] = session
         return session, created
+
+    def _record_usage(self, number: int, data: Any) -> None:
+        """One ledger line per model call, from the SDK's usage event. A failure to record never fails the turn."""
+        try:
+            entry = record_sdk_usage(self.cfg, data, purpose="study", ref=f"#{number}", by=COPILOT_BY,
+                                     options=self.options)  # fmt: skip
+        except Exception:
+            log.exception("Couldn't record model usage for #%d", number)
+            return
+        if entry is not None:
+            self.h.broadcast("study", {"pr": number, "type": "usage", "entry": entry})
 
     async def _worktree(self, number: int) -> tuple[Path, str]:
         if number not in self._worktrees:
@@ -613,9 +772,7 @@ class CopilotAssistant:
             is_terminal=True,
         )
         def ask_quiz_question(params: QuestionParams, invocation: Any) -> str:
-            entry = assistant.h.append(
-                assistant._number_for(invocation), "question", by=COPILOT_BY, **params.model_dump()
-            )
+            entry = assistant._write(assistant._number_for(invocation), "question", **params.model_dump())
             return f"Asked {entry['qid']}. Wait for the learner's answer."
 
         @define_tool(
@@ -624,7 +781,7 @@ class CopilotAssistant:
             skip_permission=True,
         )
         def assess_answer(params: AssessParams, invocation: Any) -> str:
-            assistant.h.append(assistant._number_for(invocation), "assessment", by=COPILOT_BY, **params.model_dump())
+            assistant._write(assistant._number_for(invocation), "assessment", **params.model_dump())
             return "Recorded."
 
         @define_tool(
@@ -633,18 +790,14 @@ class CopilotAssistant:
             skip_permission=True,
         )
         def assess_teachback(params: TeachbackParams, invocation: Any) -> str:
-            assistant.h.append(
-                assistant._number_for(invocation), "teachback_assessment", by=COPILOT_BY, **params.model_dump()
-            )
+            assistant._write(assistant._number_for(invocation), "teachback_assessment", **params.model_dump())
             return "Recorded."
 
         @define_tool(
             name="append_to_brief", description="Append a short insight to the PR's study brief.", skip_permission=True
         )
         def append_to_brief(params: NoteParams, invocation: Any) -> str:
-            assistant.h.append(
-                assistant._number_for(invocation), "note", by=COPILOT_BY, **params.model_dump(exclude_none=True)
-            )
+            assistant._write(assistant._number_for(invocation), "note", **params.model_dump(exclude_none=True))
             return "Appended."
 
         @define_tool(
@@ -653,9 +806,7 @@ class CopilotAssistant:
             skip_permission=True,
         )
         def record_finding(params: FindingParams, invocation: Any) -> str:
-            assistant.h.append(
-                assistant._number_for(invocation), "finding", by=COPILOT_BY, **params.model_dump(exclude_none=True)
-            )
+            assistant._write(assistant._number_for(invocation), "finding", **params.model_dump(exclude_none=True))
             return "Recorded."
 
         self._tools = [
@@ -679,9 +830,11 @@ class CopilotAssistant:
         return target.relative_to(worktree.resolve()).as_posix()
 
 
-ASSISTANTS.add("copilot", "a GitHub Copilot session per PR that reads the code and grades answers (needs [study])")(
-    CopilotAssistant
-)
+ASSISTANTS.add(
+    "copilot",
+    "a Copilot SDK session per PR that reads the code and grades answers: GitHub Copilot, or your own model provider (needs [study])",
+    options=CopilotOptions,
+)(CopilotAssistant)
 
 
 async def open_study_session(

@@ -15,7 +15,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, agents, forges, ledger, logs, review, system
+from readthrough import __version__, agents, forges, ledger, logs, review, system, usage
 from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
 from readthrough.faults import ForgeError
@@ -719,6 +719,15 @@ def _doctor_repo(cfg: Config, check: Any, accounts: list[str], live: dict[str, A
             )
     elif cfg.onboarded:
         check(False, "last build", "never", f"readthrough --repo {cfg.repo} build --open")
+    if usage.ledger_path(cfg).exists():
+        month = dt.datetime.now(dt.UTC) - dt.timedelta(days=30)
+        summary = usage.summarize(usage.load(cfg), since=month)
+        payers = ", ".join(f"{p} ({n})" for p, n in sorted(summary["by_payer"].items()))
+        check(
+            None,
+            "model usage",
+            f"last 30 days: {usage.describe(summary)}" + (f"; billed to {payers}" if payers else ""),
+        )
     if live and live.get("error"):
         err = live["error"]
         check(False, "server", f"{live['consecutive_failures']} failed refresh(es) in a row; last at {err['at']} "
