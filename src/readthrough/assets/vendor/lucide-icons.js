@@ -1,5 +1,7 @@
 /* Lucide icons 0.469.0 (https://lucide.dev), ISC License; see licenses/lucide-LICENSE. Inner SVG markup for a 24x24 viewBox. */
 var LUCIDE = {
+  "check": "<path d=\"M20 6 9 17l-5-5\" />",
+  "chevron-down": "<path d=\"m6 9 6 6 6-6\" />",
   "circle": "<circle cx=\"12\" cy=\"12\" r=\"10\" />",
   "circle-check": "<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"m9 12 2 2 4-4\" />",
   "circle-dot": "<circle cx=\"12\" cy=\"12\" r=\"10\" /><circle cx=\"12\" cy=\"12\" r=\"1\" />",

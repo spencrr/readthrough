@@ -135,8 +135,13 @@ def test_every_view_renders_without_script_errors(page):
 
 
 def test_warnings_from_the_build_are_shown(page):
+    """A standing fact about a big repo (only the most active PRs are fetched) is in the header's count, with the
+    explanation on hover, rather than a warning banner on every visit; the other warnings stay banners."""
     open_dashboard(page)
-    assert "most recently active of 40" in page.inner_text("#banners")
+    assert "3 of 40 open" in page.inner_text("#meta")
+    assert "most recently active of 40" in page.get_attribute("#meta span[title]", "title")
+    assert "most recently active" not in page.inner_text("#banners")
+    assert page.inner_text("#tabs").count("Architecture map") == 1, "the bold-width reservation isn't read as text"
 
 
 def test_lane_pills_select_only_then_restore(page):

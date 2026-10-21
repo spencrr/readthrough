@@ -7,3 +7,29 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 code,.mono{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:12.5px}
 .ico{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px;flex:none}
 .ico.sm{width:13px;height:13px;vertical-align:-2px;margin-right:4px}
+/* The header both pages share: the product first, then where you are, then the small print. */
+header{position:sticky;top:0;z-index:5;background:var(--glass-bg);-webkit-backdrop-filter:saturate(1.6) blur(16px);backdrop-filter:saturate(1.6) blur(16px);border-bottom:1px solid var(--glass-line);padding:10px 20px}
+h1{font-size:15px;margin:0;font-weight:400;flex:1;min-width:0;display:flex;align-items:center;gap:8px;white-space:nowrap;line-height:26px}
+.logo{width:26px;height:26px;flex:none;color:var(--acc)}
+.brand{font-weight:650;letter-spacing:-.01em;color:var(--fg)}
+.crumb{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.crumb-sep{color:var(--line-strong);font-weight:300;font-size:17px;position:relative;top:-1px}
+h1 small{color:var(--mut);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;min-width:0;margin-left:4px}
+/* The repo switcher: a quiet pill that opens the native select laid invisibly over it, so it's keyboard-reachable. */
+.switch{position:relative;display:inline-flex;align-items:center;gap:5px;padding:0 8px;height:26px;border-radius:7px;font-weight:500;color:var(--fg);max-width:40vw}
+.switch:not(.static){cursor:pointer}.switch:not(.static):hover{background:var(--glass-well)}
+.switch .ico.sm{margin:0;color:var(--mut)}.switch-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.switch select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;margin:0}
+.switch:has(select:focus-visible){outline:2px solid var(--acc);outline-offset:1px}
+.hactions{display:flex;gap:8px;align-items:center;flex:none}
+/* The live chip: a status, not a button. The dot pulses while connected; the colour says how things stand. */
+.live{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px 0 9px;border-radius:999px;font-size:12px;font-weight:500;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 35%,transparent);background:color-mix(in srgb,var(--good) 9%,transparent);cursor:default;white-space:nowrap}
+.live.busy{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 35%,transparent);background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.live.off{color:var(--mut);border-color:var(--line);background:var(--subtle)}
+.live.err{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.ping{position:relative;width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.live:not(.off) .ping::after{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid currentColor;animation:ping 2.4s ease-out infinite}
+@keyframes ping{0%{transform:scale(1);opacity:.9}70%,100%{transform:scale(2.6);opacity:0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.btn.icon.busy .ico{animation:spin 1s linear infinite}
+@media (prefers-reduced-motion: reduce){.live .ping::after,.btn.icon.busy .ico{animation:none}}

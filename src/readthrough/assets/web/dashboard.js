@@ -192,14 +192,26 @@ function visible(p){
 }
 
 // ---- header
+// "as of" in as few words as the moment allows: the time alone for today, the date too for anything older.
+function when(ts){
+  const d = new Date(ts), now = new Date();
+  const time = d.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], {month: "short", day: "numeric"})}, ${time}`;
+}
 function header(){
-  document.title = `${PROFILE.title} Readthrough`;
-  $("title").textContent = `${PROFILE.title} Readthrough`;
+  // The product first, the repo second, the small print third: readthrough / microsoft/vscode · 100 open · as of…
+  document.title = `${PROFILE.title} · readthrough`;
   $("repos").innerHTML = LIVE
-    ? `<select id="repoSwitch" title="Switch repo">${LIVE.repos.map(r => `<option value="${esc(r.slug)}" ${r.slug === SLUG ? "selected" : ""}>${esc(r.name)}</option>`).join("")}<option value="__setup">+ Onboard a repo…</option></select>
-       <a class="btn icon" href="/setup?repo=${encodeURIComponent(SLUG)}" title="Settings for ${esc(DATA.repo)}: account, clone, profile, authors" aria-label="Repo settings">${icon("settings")}</a>`
+    ? `<label class="switch" title="Switch repo (${esc(FORGE.label)})"><span class="switch-name">${esc(DATA.repo)}</span>${icon("chevron-down", "ico sm")}<select id="repoSwitch" aria-label="Switch repo">${LIVE.repos.map(r => `<option value="${esc(r.slug)}" ${r.slug === SLUG ? "selected" : ""}>${esc(r.name)}</option>`).join("")}<option value="__setup">+ Onboard a repo…</option></select></label>`
+    : `<span class="switch static" title="${esc(FORGE.label)}">${esc(DATA.repo)}</span>`;
+  $("tools").innerHTML = LIVE
+    ? `<a class="btn icon" href="/setup?repo=${encodeURIComponent(SLUG)}" title="Settings for ${esc(DATA.repo)}: account, clone, profile, authors" aria-label="Repo settings">${icon("settings")}</a>`
     : "";
-  $("meta").textContent = `${DATA.repo} · ${DATA.prs.length} open · as of ${new Date(DATA.generated).toLocaleString()} · you: @${DATA.viewer}`;
+  const shown = DATA.prs.length, open = DATA.stats?.open;
+  const openCount = open > shown
+    ? `<span title="Showing the ${shown} most recently active of ${open.toLocaleString()} open ${esc(FORGE.pr_noun)}s. Raise \`limit\` in this repo's settings to see more.">${shown} of ${open.toLocaleString()} open</span>`
+    : `${shown} open`;
+  $("meta").innerHTML = [openCount, `as of ${esc(when(DATA.generated))}`, DATA.viewer ? `@${esc(DATA.viewer)}` : ""].filter(Boolean).join(" · ");
   $("logo").innerHTML ||= LOGO;
   renderTabs();
   const count = fn => DATA.prs.reduce((m, p) => (m[fn(p)] = (m[fn(p)] || 0) + 1, m), {});
@@ -225,26 +237,30 @@ function header(){
   const r = ready.filter(p => progress[p.number]?.reviewed && !stale(p.number)).length;
   $("progtext").textContent = `${r} reviewed · ${u} understood / ${ready.length}`;
   $("progbar").innerHTML = `<span style="width:${100*r/ready.length}%;background:var(--ready)"></span><span style="width:${100*(u-r)/ready.length}%;background:color-mix(in srgb,var(--ready) 40%,transparent)"></span>`;
+  const building = !!LIVE?.status?.building;
   $("refresh").innerHTML = LIVE
-    ? `${liveBadge()} <button class="btn icon" data-refresh title="Fetch the latest PRs now" aria-label="Refresh">${icon("refresh-cw")}${LIVE.status?.building ? "refreshing…" : ""}</button>`
+    ? `${liveBadge()}<button class="btn icon ${building ? "busy" : ""}" data-refresh ${building ? "disabled" : ""} title="${building ? "Refreshing now" : "Fetch the latest PRs now"}" aria-label="Refresh">${icon("refresh-cw")}</button>`
     : LINKS.protocol ? `<a class="btn icon" href="readthrough://refresh/${SLUG}" title="Refresh">${icon("refresh-cw")}</a>`
     : `<button class="btn icon" data-copy="readthrough build --open" title="Copies the refresh command" aria-label="Copy refresh command">${icon("refresh-cw")}</button>`;
   syncHash();
   banners();
   favicon(needsYou());
 }
+// The connection and the last refresh, as one quiet chip: live, refreshing, offline, or failed. Details on hover.
 function liveBadge(){
   const s = LIVE.status || {};
-  if (LIVE.disconnected) return `<span class="live-badge off" title="Lost the connection to readthrough serve. Retrying."><span class="ping"></span>offline</span>`;
+  const chip = (cls, text, title) => `<span class="live ${cls}" role="status" title="${esc(title)}"><span class="ping"></span>${text}</span>`;
+  if (LIVE.disconnected) return chip("off", "offline", "Lost the connection to readthrough serve. Retrying.");
+  if (s.building) return chip("busy", "refreshing", "Fetching the latest PRs now.");
   if (s.error) { const e = typeof s.error === "object" ? `${s.error.message} [error ${s.error.id}]` : s.error;
-    return `<span class="live-badge err" title="${esc(e)}"><span class="ping"></span>refresh failed</span>`; }
-  const next = s.next_build ? ` · next check ${new Date(s.next_build * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}` : "";
-  return `<span class="live-badge" title="Connected to readthrough serve${next}"><span class="ping"></span>live</span>`;
+    return chip("err", "refresh failed", `The last refresh failed: ${e}. Showing the last good data; retrying automatically.`); }
+  const next = s.next_build ? ` Next check at ${new Date(s.next_build * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}.` : "";
+  return chip("", "live", `Connected to readthrough serve; the page updates itself.${next}`);
 }
 const TABS = [["map", "Architecture map", "layers"], ["plan", "Burn-down plan", "list-checks"], ["overlap", "Overlap graph", "network"], ["table", "All PRs", "table-2"]];
 function renderTabs(){
   const nav = $("tabs");
-  if (!nav.childElementCount) nav.innerHTML = `<span class="tab-ind"></span>` + TABS.map(([k, l, ic]) => `<button class="tab" data-tab="${k}" title="${l}">${icon(ic)}<span>${l}</span></button>`).join("");
+  if (!nav.childElementCount) nav.innerHTML = `<span class="tab-ind"></span>` + TABS.map(([k, l, ic]) => `<button class="tab" data-tab="${k}" title="${l}">${icon(ic)}<span class="tl" data-l="${l}">${l}</span></button>`).join("");
   let on;
   nav.querySelectorAll(".tab").forEach(t => { const yes = t.dataset.tab === state.tab; t.classList.toggle("on", yes); t.setAttribute("aria-current", yes ? "page" : "false"); if (yes) on = t; });
   const ind = nav.querySelector(".tab-ind");
@@ -267,13 +283,17 @@ function pick(group, key, e){
   render();
 }
 const needsYou = () => DATA.prs.filter(p => p.flags.some(f => f.kind === "you") && !progress[p.number]?.reviewed).length;
+// The explanation under a view's title, folded away once read; whether it's open is remembered across views and visits.
+const legend = (title, html) => `<details class="legend" ${localStorage.getItem("readthrough:legend") === "open" ? "open" : ""}><summary>${title}</summary><p>${html}</p></details>`;
+document.addEventListener("toggle", e => { if (e.target.matches?.("details.legend")) localStorage.setItem("readthrough:legend", e.target.open ? "open" : "closed"); }, true);
 function banners(){
   const out = [];
   const ageH = (Date.now() - new Date(DATA.generated)) / 3.6e6, fresh = DATA.freshness || {stale_live_hours: 2, stale_snapshot_hours: 26};
   if (ageH > (LIVE ? fresh.stale_live_hours : fresh.stale_snapshot_hours)) out.push(`<div class="banner warn"><b>This data is ${Math.round(ageH)} hours old.</b><span class="muted">Refresh, or check <code>readthrough doctor</code>.</span></div>`);
   const err = LIVE?.status?.error;
   if (err && typeof err === "object") out.push(`<div class="banner warn"><b>The last refresh failed</b><span>during ${esc(err.step)}: ${esc(err.message)}</span><span class="muted">Showing the last good data. ${LIVE.status.consecutive_failures > 1 ? `${LIVE.status.consecutive_failures} failures in a row. ` : ""}Retrying automatically. Error <code>${esc(err.id)}</code> in readthrough.log.</span></div>`);
-  for (const w of DATA.warnings || []) out.push(`<div class="banner warn"><b>${icon("info", "ico sm")}${esc(w.message)}</b>${w.details?.length ? `<details class="muted"><summary>${w.details.length} detail${w.details.length > 1 ? "s" : ""}</summary><ul>${w.details.map(d => `<li><code>${esc(d)}</code></li>`).join("")}</ul></details>` : ""}</div>`);
+  // The `limit` warning is a standing fact about a big repo, not news: the header's count carries it ("100 of 2,885 open").
+  for (const w of (DATA.warnings || []).filter(w => w.code !== "limit")) out.push(`<div class="banner warn"><b>${icon("info", "ico sm")}${esc(w.message)}</b>${w.details?.length ? `<details class="muted"><summary>${w.details.length} detail${w.details.length > 1 ? "s" : ""}</summary><ul>${w.details.map(d => `<li><code>${esc(d)}</code></li>`).join("")}</ul></details>` : ""}</div>`);
   if (DATA.draft) out.push(`<div class="banner warn"><b>Onboarding preview.</b><span class="muted">This map comes from a draft profile. Edit it, then finish with <code>readthrough onboard ${esc(DATA.repo)} --accept</code>.</span></div>`);
   if (DATA.drift) out.push(`<div class="banner warn"><b>The map is drifting:</b><span>only ${Math.round(DATA.drift.coverage * 100)}% of open-PR changes land in a known component.</span><span class="muted">Unmapped: ${DATA.drift.unmapped.map(([p, n]) => `<code>${esc(p)}</code> (${n})`).join(", ")}. Update it with <code>readthrough onboard ${esc(DATA.repo)} --update</code>.</span></div>`);
   const nw = DATA.news || {};
@@ -284,7 +304,8 @@ function banners(){
     if (nw.changed_after_review?.length) parts.push(`<span><b>Changed since your review:</b> ${list(nw.changed_after_review)}</span>`);
     if (nw.opened?.length) parts.push(`<span><b>New:</b> ${list(nw.opened)}</span>`);
     if (nw.closed?.length) parts.push(`<span class="muted">Closed or merged: ${nw.closed.map(c => `<span title="${esc(c.title)}">#${c.number}</span>`).join(", ")}</span>`);
-    out.push(`<div class="banner"><span class="muted">Since you last opened this (${new Date(nw.since).toLocaleString()}):</span>${parts.join("") || '<span class="muted">nothing new.</span>'}</div>`);
+    // Only when there is news: "nothing new" isn't worth a banner on every visit.
+    if (parts.length) out.push(`<div class="banner"><span class="muted">Since you last opened this (${esc(when(nw.since))}):</span>${parts.join("")}</div>`);
   }
   $("banners").innerHTML = out.join("");
 }
@@ -316,7 +337,7 @@ function mixBar(prs, comp, total, max){
 function renderMap(){
   const vis = DATA.prs.filter(visible);
   const max = Math.max(1, ...DATA.components.map(c => vis.reduce((s,p) => s + (p.by_comp[c.id]||0), 0)));
-  let html = `<p class="legend">Each chip is a PR, colored by lane and sized by how much it changes. An outline marks the component where most of the change lives. An orange dot marks an external author, a hollow one a first-time contributor. Hover a chip to light up every component it touches; click a component to filter. The bar under a component shows how much is changing there compared with the busiest one, colored by lane. ${icon("cog", "ico sm")}Placement is by the profile's path patterns, not a language model. ${profileLine()}</p>`;
+  let html = legend("How to read the map", `Each chip is a PR, colored by lane and sized by how much it changes. An outline marks the component where most of the change lives. An orange dot marks an external author, a hollow one a first-time contributor. Hover a chip to light up every component it touches; click a component to filter. The bar under a component shows how much is changing there compared with the busiest one, colored by lane. ${icon("cog", "ico sm")}Placement is by the profile's path patterns, not a language model. ${profileLine()}`);
   if (!vis.length) { $("v-map").innerHTML = html + EMPTY("No PRs match these filters."); return; }
   for (const {id: layer, label, flow} of PROFILE.layers){
     const bricks = DATA.components.filter(c => c.layer === layer).map((c, i) => {
@@ -392,7 +413,7 @@ function renderPlan(){
       ${lane("mine","your PRs")}
       ${lane("draft","not ready yet")}
     </div><div>
-      <p class="muted" style="margin-top:0">Ready PRs are packed into sessions of about an hour, each in one component so you build context instead of switching it. Requested reviews and re-reviews come first, then quick wins, then the oldest. The menu on each row is your status (to do, understood, reviewed, and so on)${LIVE ? ", saved to the ledger the review sessions also write to" : ""}. New commits reset it. A <span class="sess"></span> means a review session exists; <span class="score">quiz 2/3</span> is your study-log score; <span class="cib passing">✓</span> <span class="cib failing">✗</span> <span class="cib failing-optional">!</span> show CI.</p>
+      ${legend("How sessions are packed", `Ready PRs are packed into sessions of about an hour, each in one component so you build context instead of switching it. Requested reviews and re-reviews come first, then quick wins, then the oldest. The menu on each row is your status (to do, understood, reviewed, and so on)${LIVE ? ", saved to the ledger the review sessions also write to" : ""}. New commits reset it. A <span class="sess"></span> means a review session exists; <span class="score">quiz 2/3</span> is your study-log score; <span class="cib passing">✓</span> <span class="cib failing">✗</span> <span class="cib failing-optional">!</span> show CI.`)}
       <p style="margin-top:0"><label><input type="checkbox" id="greenFirst" ${state.greenFirst ? "checked" : ""}> CI passing first</label> <span class="muted">· a red check doesn't block review, but a green one means the PR is less likely to change under you.</span></p>
       ${sessions || `<div class="card">${EMPTY("Nothing ready matches these filters.")}</div>`}
     </div></div>`;

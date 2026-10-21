@@ -75,6 +75,20 @@
 
 ### Changed
 
+- The header puts the product first, the repo second, and the small print third: **readthrough / microsoft/vscode ·
+  100 of 2,885 open · as of 8:27 PM · @you**. The repo is a quiet pill that opens the switcher (the native select,
+  still keyboard-reachable, laid invisibly over it); the connection is a status chip that reads live, refreshing,
+  offline, or refresh failed, with the next check on hover, and the refresh button spins while a refresh runs
+  instead of growing a label. The tabs no longer breathe while the indicator slides (a selected tab is bolder, so
+  each label now reserves its bold width). The progress bar moved up beside the search box, and three banners
+  stopped appearing on every visit: "nothing new since you last opened this" (only news is announced now), the
+  standing "showing the N most recently active of M" (that's the header's count now, with the explanation on
+  hover), and the three-line explanation under each view, which is a fold ("How to read the map", "How sessions
+  are packed") that stays open or closed as you last left it. Content starts about 200 px higher on a big repo.
+- The setup page shares the dashboard's header (brand, then where you are: Welcome, Set up a repo, or the
+  repo's name) and its theme button. On a first run it opens with a welcome card saying what readthrough does
+  and what the three steps ask for, the repo field focused, and no settings card for repos that don't exist yet;
+  finished steps show a check.
 - What crosses between the page and the server is written down in one place, `contract.py`: the payload's
   shape (every record in `data.json`), the Server-Sent Events and what each carries, and the study API, with
   the rules they cross under (events are notifications and a GET is the truth; after any gap the page

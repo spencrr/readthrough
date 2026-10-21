@@ -2,8 +2,19 @@ const LIVE = /*__READTHROUGH_LIVE__*/null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const icon = (name, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${LUCIDE[name] || ""}</svg>`;
-const theme = localStorage.getItem("readthrough:theme") || "auto";
-document.documentElement.dataset.theme = theme === "auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme;
+// The theme: the same three-way choice as the dashboard, remembered in the same place.
+const THEMES = ["auto", "light", "dark"];
+let themePref = localStorage.getItem("readthrough:theme") || "auto";
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(){
+  document.documentElement.dataset.theme = themePref === "auto" ? (darkQuery.matches ? "dark" : "light") : themePref;
+  $("theme").innerHTML = icon({auto: "sun-moon", light: "sun", dark: "moon"}[themePref]);
+  $("theme").title = {auto: "Theme: follows your OS", light: "Theme: light", dark: "Theme: dark"}[themePref] + ". Click to change.";
+  $("theme").setAttribute("aria-label", $("theme").title);
+}
+darkQuery.addEventListener("change", applyTheme);
+$("theme").addEventListener("click", () => { themePref = THEMES[(THEMES.indexOf(themePref) + 1) % THEMES.length]; localStorage.setItem("readthrough:theme", themePref); applyTheme(); });
+applyTheme();
 $("logo").innerHTML = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="5.5" y="3.5" width="21" height="25" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35"/><rect x="7.5" y="7.25" width="17" height="5.5" rx="2.75" fill="currentColor" fill-opacity=".16"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-opacity=".45"><line x1="10" y1="10" x2="21" y2="10"/><line x1="10" y1="14.5" x2="18" y2="14.5"/><line x1="10" y1="19" x2="21" y2="19"/><line x1="10" y1="23.5" x2="16" y2="23.5"/></g></svg>`;
 function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 2600); }
 async function api(path, body){
@@ -39,16 +50,28 @@ async function load(){
   render();
 }
 function render(){
-  const st = S.state, repos = st.repos;
-  $("back").innerHTML = repos.some(r => r.onboarded) ? `<a class="btn" href="/">${icon("map")}Dashboards</a>` : "";
+  const st = S.state, repos = st.repos, onboarded = repos.filter(r => r.onboarded);
+  $("back").innerHTML = onboarded.length ? `<a class="btn" href="/">${icon("map")}Dashboards</a>` : "";
+  // Where you are, in the header: the repo being set up, or the first-run welcome.
+  const repo = st.repo;
+  $("where").textContent = S.sel && repo ? (repo.onboarded ? repo.name : `Set up ${repo.name}`) : onboarded.length ? "Set up a repo" : "Welcome";
+  $("meta").textContent = onboarded.length ? `${onboarded.length} repo${onboarded.length > 1 ? "s" : ""} onboarded` : "";
   $("nav").innerHTML = repos.map(r => `<button class="ritem ${isSel(r) ? "on" : ""}" data-repo="${esc(r.slug)}"><span class="dot ${r.onboarded ? "ok" : "todo"}" title="${r.onboarded ? "Onboarded" : "Not onboarded yet"}"></span><span class="n">${esc(r.name)}${forgeTag(r)}</span>${same(st.settings.default_repo, r.cli_name) ? '<span style="font-size:11px;color:var(--mut)">default</span>' : ""}</button>`).join("")
     + `<button class="ritem ${S.sel ? "" : "on"}" data-new>${icon("plus")}<span class="n">Onboard a repo</span></button>`
-    + `<div style="margin-top:14px">${globalCard()}</div>`;
-  const repo = st.repo;
+    + (onboarded.length ? `<div style="margin-top:14px">${globalCard()}</div>` : "");  // nothing to set until a repo exists
   if (!S.sel || !repo || !repo.onboarded) {
-    renderWizard(repo);
+    renderWizard(repo, {first: !onboarded.length});
+    if (!onboarded.length && !S.w.repo && !S.w.focused) { S.w.focused = true; $("w-repo")?.focus(); }
     if (S.w.repo && !S.w.info && !S.w.tried) { S.w.tried = true; act({dataset: {act: "inspect"}}); }
   } else renderSettings(repo);
+}
+// The first thing a newcomer sees: what readthrough does and what the three steps below will ask for.
+function welcome(){
+  return `<div class="card welcome"><h2>Welcome to readthrough</h2>
+    <p>It lays a repo's open pull requests on a map of the repo's architecture, packs the reviewable ones into hour-long sessions, and gives each one a study brief with a quiz, so you understand a change before you review it. Three steps, about two minutes:</p>
+    <ol><li><span class="step">1</span><span><b>Which repo</b> and how to read it.</span></li>
+    <li><span class="step">2</span><span><b>Your clone</b>, for deep reviews and study. Optional for the map.</span></li>
+    <li><span class="step">3</span><span><b>Its architecture profile</b>: drafted for you, checked against recent changes, accepted by you.</span></li></ol></div>`;
 }
 
 // ---- global settings (in the side bar)
@@ -62,17 +85,17 @@ function globalCard(){
 }
 
 // ---- onboarding wizard
-function renderWizard(repo){
+function renderWizard(repo, {first = false} = {}){
   const w = S.w ||= {repo: repo?.name || "", forge: repo?.forge || "github", account: repo?.account || "", clone: repo?.clone || "", remote: repo?.remote || "", info: null, cloneInfo: null, toml: repo?.profile_text || "", report: null, log: [], busy: false, editable: true, source: repo?.source || null};
   const accounts = S.state.accounts, forges = S.state.forges, forge = forgeOf(w.forge), rt = S.state.runtime || {};
   const cli = `readthrough onboard ${w.repo || forge.shape.split(" ")[0]}${w.forge !== "github" ? ` --forge ${w.forge}` : ""}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
-  const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? "✓" : n}</span>`;
+  const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? icon("check", "ico sm") : n}</span>`;
   const info = w.info;
   // How the chosen forge is read, and where its credential comes from, so nobody is surprised by a CLI or a
   // token lookup. Written per adapter; after Check access the line says which credential was actually used.
   const howRead = `<p class="sub access"><b>${esc(forge.label)}</b> is read through ${esc(forge.access || "its API")}${forge.credentials?.length ? `, as ${forge.credentials.map(c => `<span class="cred">${esc(c)}</span>`).join(" ")}` : ""}.
     Nothing is written to the repo, and readthrough never stores a token${forge.accounts ? "" : " or prompts you to sign in"}.</p>`;
-  $("main").innerHTML = `
+  $("main").innerHTML = `${first ? welcome() : ""}
   <div class="card"><h2>${step(1, !!info)}Which repo?</h2>
     ${howRead}
     <div class="row"><label class="f">Where<select id="w-forge">${forges.map(f => `<option value="${esc(f.name)}" ${w.forge === f.name ? "selected" : ""} title="${esc(f.summary)}">${esc(f.label)}</option>`).join("")}</select></label>
