@@ -25,6 +25,10 @@ from readthrough.rules import glob_to_regex
 
 SCHEMA = 1
 FALLBACK = "other"
+# Ids name layers, components, signals, and author kinds in URLs, CSS classes, and data attributes, so they are
+# plain slugs. A layer's color lands in a style attribute, so it is a CSS color token and nothing else.
+ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}|[A-Za-z]+|(?:rgb|hsl)a?\([0-9 .,%/]+\)")
 # Who wrote the first draft, shown so readers know what to double-check: readthrough's heuristics from the file
 # tree, or a model (the header comment names which). Older profiles say "copilot", the drafter's former name;
 # it's read as "model".
@@ -456,6 +460,11 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
             raise fail(f"{name}: kind must be one of {', '.join(KINDS)}")
         return value
 
+    def ident(value: Any, name: str) -> str:
+        if not isinstance(value, str) or not ID_RE.fullmatch(value):
+            raise fail(f"{name}: id must be letters, digits, '_', '.', or '-', up to 64 characters (got {value!r})")
+        return value
+
     unknown = set(raw) - _TOP_KEYS
     if unknown:
         raise fail(f"unknown top-level key(s): {', '.join(sorted(unknown))}")
@@ -475,8 +484,17 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         t = table(item, f"layers[{i}]", {"id", "label", "source", "flow", "color"})
         if not t.get("id") or not t.get("label"):
             raise fail(f"layers[{i}] needs id and label")
+        color = t.get("color")
+        if color is not None and (not isinstance(color, str) or not COLOR_RE.fullmatch(color)):
+            raise fail(f"layers[{i}] ({t['id']}): color must be a CSS color such as '#1b7c83' (got {color!r})")
         layers.append(
-            Layer(t["id"], t["label"], bool(t.get("source", True)), bool(t.get("flow", False)), t.get("color"))
+            Layer(
+                ident(t["id"], f"layers[{i}]"),
+                t["label"],
+                bool(t.get("source", True)),
+                bool(t.get("flow", False)),
+                color,
+            )
         )
     if not layers:
         raise fail("at least one [[layers]] entry is required")
@@ -493,6 +511,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         for key in ("id", "label", "layer"):
             if not t.get(key):
                 raise fail(f"{name} needs {key}")
+        ident(t["id"], name)
         if t["layer"] not in layer_ids:
             raise fail(f"{name} ({t['id']}): unknown layer {t['layer']!r}")
         paths = strs(t.get("paths"), f"{name}.paths")
@@ -546,7 +565,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         t = table(item, f"signals[{i}]", {"id", "kind", "message", "paths", "change_types"})
         signals.append(
             Signal(
-                t["id"],
+                ident(t.get("id"), f"signals[{i}]"),
                 kind_of(t.get("kind"), f"signals[{i}]"),
                 t["message"],
                 strs(t.get("paths"), f"signals[{i}].paths"),
@@ -560,13 +579,19 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         if len(exts) != 2:
             raise fail(f"paired_files[{i}].extensions needs exactly two extensions")
         paired.append(
-            PairedFiles(t["id"], kind_of(t.get("kind"), f"paired_files[{i}]"), t["message"], t.get("under", ""), exts)
+            PairedFiles(
+                ident(t.get("id"), f"paired_files[{i}]"),
+                kind_of(t.get("kind"), f"paired_files[{i}]"),
+                t["message"],
+                t.get("under", ""),
+                exts,
+            )
         )
     smells = []
     for i, item in enumerate(raw.get("smells") or []):
         t = table(item, f"smells[{i}]", {"id", "kind", "message", "path", "line", "strip_brackets"})
         smell = Smell(
-            t["id"],
+            ident(t.get("id"), f"smells[{i}]"),
             kind_of(t.get("kind"), f"smells[{i}]"),
             t["message"],
             t.get("path", "."),
@@ -606,7 +631,7 @@ def parse_profile(raw: dict[str, Any], *, origin: str = "") -> Profile:
         capped_lines=int(weights.get("capped_lines", 20)),
         overlap_ignore=strs(overlap.get("ignore"), "overlap.ignore"),
         overlap_non_source=strs(overlap.get("non_source"), "overlap.non_source"),
-        authors=_parse_authors(raw.get("authors"), fail, table, strs, kind_of),
+        authors=_parse_authors(raw.get("authors"), fail=fail, table=table, strs=strs, kind_of=kind_of, ident=ident),
         drafted_by=drafted_by,
         origin=origin,
     )
@@ -634,7 +659,7 @@ DEFAULT_KINDS = {
 GROUPS = ("internal", "external", "bot")
 
 
-def _parse_authors(data: Any, fail: Any, table: Any, strs: Any, kind_of: Any) -> Authors:
+def _parse_authors(data: Any, *, fail: Any, table: Any, strs: Any, kind_of: Any, ident: Any) -> Authors:
     t = table(
         data,
         "authors",
@@ -642,6 +667,7 @@ def _parse_authors(data: Any, fail: Any, table: Any, strs: Any, kind_of: Any) ->
     )
     kinds = {k: AuthorKind(**vars(v)) for k, v in DEFAULT_KINDS.items()}
     for kid, spec in (t.get("kinds") or {}).items():
+        ident(kid, f"authors.kinds.{kid}")
         s = table(spec, f"authors.kinds.{kid}", {"label", "badge", "group", "signal", "questions", "priority"})
         base = kinds.get(kid) or AuthorKind(kid, kid, kid, "external")
         group = s.get("group", base.group)
@@ -650,6 +676,7 @@ def _parse_authors(data: Any, fail: Any, table: Any, strs: Any, kind_of: Any) ->
         signal = s.get("signal", base.signal)
         if signal is not None:
             signal = table(signal, f"authors.kinds.{kid}.signal", {"id", "kind", "message"})
+            ident(signal.get("id"), f"authors.kinds.{kid}.signal")
             kind_of(signal.get("kind"), f"authors.kinds.{kid}.signal")
         kinds[kid] = AuthorKind(
             kid, s.get("label", base.label), s.get("badge", base.badge), group, signal,

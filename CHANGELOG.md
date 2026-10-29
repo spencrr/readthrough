@@ -146,6 +146,10 @@
 
 ### Fixed
 
+- Text a forge supplies (check names, PR and check URLs, the repo's instruction-file URLs) and text a repo's
+  profile supplies (author badges, layer colors, ids) is escaped wherever the page puts it in an attribute, and
+  links are only ever web URLs. A profile's ids must be slugs and a layer's `color` a CSS color, checked when
+  it loads, so a `readthrough.toml` written by someone else can't shape the page's markup.
 - A page that fell behind the server's events (a long streamed reply, a throttled background tab) was quietly
   unsubscribed and kept showing a stale page over a connection that looked healthy. It's now sent one `resync`
   and fetches everything it holds again; the same happens after a reconnect, which used to refresh the PR list

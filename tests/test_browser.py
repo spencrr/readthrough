@@ -109,9 +109,20 @@ def page(browser, server):
     context = browser.new_context(viewport={"width": 1400, "height": 900})
     page = context.new_page()
     errors: list[str] = []
+    refused: list[str] = []
+
+    def on_console(msg) -> None:
+        if msg.type != "error":
+            return
+        # The content security policy refusing something is the policy working, and Chromium 156+ reports it even
+        # for the sanitizer's own parse of a hostile description. Kept apart from script errors; whether the page's
+        # markup itself carries anything the policy would refuse is checked directly by scanning the DOM.
+        (refused if "Content Security Policy" in msg.text else errors).append(f"console: {msg.text}")
+
     page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
-    page.on("console", lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None)
+    page.on("console", on_console)
     page.errors = errors  # type: ignore[attr-defined]
+    page.refused = refused  # type: ignore[attr-defined]
     page.base = server  # type: ignore[attr-defined]
     page.cfg = server_fixture.cfg  # type: ignore[attr-defined]
     yield page
@@ -284,6 +295,67 @@ def test_the_drawer_renders_the_description_safely(page):
     assert page.evaluate("window.pwned") is None
     page.click("#close")
     page.wait_for_selector("body:not(.drawer-open)")
+    assert page.errors == []
+
+
+INLINE_HANDLERS = """() => {
+  const bad = [];
+  for (const el of document.querySelectorAll("*"))
+    for (const a of el.attributes)
+      if (/^on/i.test(a.name) || (/^(href|src|action|formaction|xlink:href)$/i.test(a.name) && /^\\s*javascript:/i.test(a.value)))
+        bad.push(`${el.tagName.toLowerCase()}[${a.name}]`);
+  return bad;
+}"""
+
+
+def test_the_markup_carries_no_inline_handlers_or_script_urls(page):
+    """What the content security policy would refuse must not be in the page to begin with, hostile description
+    and all: every view, the PR panel's three tabs, and the setup page."""
+    open_dashboard(page)
+    seen = []
+    for tab in ("map", "plan", "overlap", "table"):
+        page.click(f'[data-tab="{tab}"]')
+        page.wait_for_selector(f"#v-{tab}.on")
+        seen += page.evaluate(INLINE_HANDLERS)
+    page.click('#v-table [data-open="1"]')
+    page.wait_for_selector("body.drawer-open")
+    for dtab in ("overview", "study", "brief"):
+        page.click(f'[data-dtab="{dtab}"]')
+        page.wait_for_timeout(150)
+        seen += page.evaluate(INLINE_HANDLERS)
+    page.goto(f"{page.base}/setup")
+    page.wait_for_selector("#nav .ritem")
+    seen += page.evaluate(INLINE_HANDLERS)
+    assert seen == []
+    assert page.errors == []
+
+
+def test_strings_from_the_forge_and_the_profile_stay_inside_their_attributes(page):
+    """Check names, PR and check URLs, instruction URLs, and the profile's author badges are third-party text.
+    CSP would stop a script either way; this is about the markup staying what the page meant."""
+    hostile = 'lint" data-pwned="1'
+    page.goto(f"{page.base}/r/{SLUG}/#table")
+    page.wait_for_selector("#v-table.on")
+    page.evaluate(
+        """name => {
+          const p = byNum[2];
+          p.url = 'javascript:alert(1)';
+          p.ci_state = 'failing';
+          p.ci_checks = {passed: 0, pending: 0, cancelled: 0, required_missing: [], required_known: true,
+                         failing: [{name, required: true, on_main: false, url: 'https://ci/x" data-pwned="2'}]};
+          DATA.instructions = [{name: 'rules', url: 'https://docs/" data-pwned="3'}]; p.rules = ['rules'];
+          PROFILE.author_kinds[p.author_kind].badge = 'kind" data-pwned="4';
+          render(); openDrawer(2);
+        }""",
+        hostile,
+    )
+    row = page.locator('#v-table tr:has([data-open="2"])')
+    assert page.locator("[data-pwned]").count() == 0
+    assert row.locator("td.num a").get_attribute("href") == "", "a non-web URL links nowhere"
+    assert row.locator(".cib").get_attribute("title").endswith(hostile + " (required)")
+    assert page.get_attribute("#drawer .checks a", "href") == 'https://ci/x" data-pwned="2', "escaped, not mangled"
+    assert page.get_attribute("#drawer h2 a", "href") == ""
+    assert 'kind" data-pwned="4' in row.locator(".who").inner_text()
     assert page.errors == []
 
 

@@ -19,6 +19,8 @@ Order layers the way a request flows, or the way dependencies point: entry point
 
 `flow = true` draws arrows between a layer's components from left to right. Use it when a layer is a pipeline (say, parse, then validate, then execute), and list the components in that order.
 
+`color` tints a layer's label on the map; it takes a CSS color (`#1b7c83`, `rebeccapurple`, `rgb(...)`), nothing else. Every `id` in a profile (layers, components, signals, smells, author kinds) is a slug of letters, digits, `_`, `.`, and `-`, because ids end up in URLs, CSS classes, and data attributes.
+
 ## Components
 
 Aim for the components a new maintainer would name if you asked them to sketch the system: ten to twenty for a large repo, five or six for a small one. A component is a responsibility, not a folder. Often they're the same, but when they aren't, follow the responsibility. Click keeps everything in one folder, and its components are still clearly the decorator API, the command model, argument parsing, and so on, one or two modules each.

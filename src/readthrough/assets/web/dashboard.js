@@ -52,6 +52,8 @@ function favicon(count){
 }
 const EMPTY = msg => `<div class="empty-state"><svg viewBox="0 0 120 120" aria-hidden="true"><rect x="22" y="10" width="76" height="100" rx="9" fill="none" stroke="var(--line)" stroke-width="2"/><rect x="30" y="38" width="60" height="18" rx="9" fill="var(--acc)" fill-opacity=".12"/><g stroke="var(--line)" stroke-width="3" stroke-linecap="round" stroke-dasharray="4 5"><path d="M38 30h44"/><path d="M38 47h32"/><path d="M38 64h44"/><path d="M38 81h24"/></g><circle cx="38" cy="47" r="3.5" fill="var(--acc)"/><path d="M84 92 l6 6 m0 -6 l-6 6" stroke="var(--mut)" stroke-width="2" stroke-linecap="round"/></svg><div>${msg}</div></div>`;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// A link a forge or a repo file supplied: only web URLs, and escaped for the attribute. Anything else links nowhere.
+const safeUrl = u => /^https?:\/\//i.test(u || "") ? esc(u) : "";
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const laneColor = l => `var(--${l})`;
 const lines = p => p.additions + p.deletions;
@@ -134,8 +136,8 @@ const sessDot = p => {
   const live = all.filter(s => s.active).length, latest = Math.max(...all.map(s => s.updated || 0));
   const labels = [...new Set(all.map(agentLabel))].join(" and ");
   const what = all.length > 1 ? `${all.length} ${labels} sessions` : `A ${labels} review session`;
-  return live ? `<span class="sess live" title="${what}; ${live} open right now"></span>`
-              : `<span class="sess" title="${what}, last active ${ago(latest * 1000)}"></span>`;
+  return live ? `<span class="sess live" title="${esc(what)}; ${live} open right now"></span>`
+              : `<span class="sess" title="${esc(what)}, last active ${ago(latest * 1000)}"></span>`;
 };
 // `active` is true, false, or null: null means the agent leaves no trace of whether the session is open.
 const activity = s => s.active ? "<b>open now</b>" : s.active === false ? ago(s.updated * 1000) : `last written ${ago(s.updated * 1000)}`;
@@ -321,15 +323,15 @@ function chip(p, comp){
   const cls = ["chip", comp && p.primary === comp ? "pri" : "", (isFirst(p) ? "first" : isExt(p) ? "ext" : authorGroup(p) === "bot" ? "bot" : "")].join(" ");
   const pad = Math.round(5 + Math.min(12, Math.log2(1 + lines(p))));
   const who = kindBadge(p.author_kind);
-  return `<span class="${cls}" data-pr="${p.number}" style="background:${laneColor(p.lane)};padding-left:${pad}px;padding-right:${pad}px" title="#${p.number} ${esc(p.title)}\n@${esc(p.author)} (${who}) · ${LANES[p.lane]} · +${p.additions}/-${p.deletions}${comp ? ` · ${p.by_comp[comp]} lines here` : ""}">${p.number}</span>`;
+  return `<span class="${cls}" data-pr="${p.number}" style="background:${laneColor(p.lane)};padding-left:${pad}px;padding-right:${pad}px" title="#${p.number} ${esc(p.title)}\n@${esc(p.author)} (${esc(who)}) · ${LANES[p.lane]} · +${p.additions}/-${p.deletions}${comp ? ` · ${p.by_comp[comp]} lines here` : ""}">${p.number}</span>`;
 }
 // Every signal is worked out by a rule, never by a language model; DATA.rules says which rule.
 const SOURCE = {forge: ["git-pull-request", `From ${FORGE.label}`], github: ["git-pull-request", "From GitHub"], profile: ["cog", "Rule in the repo's profile"], "built-in": ["cog", "readthrough check"]};
 const ruleTip = id => { const r = DATA.rules?.[id]; return r ? `${SOURCE[r.source][1]}: ${r.how}` : ""; };
 const ruleIcon = id => { const r = DATA.rules?.[id]; return r ? icon(SOURCE[r.source][0], "ico sm") : ""; };
 function flagsHtml(p, kinds = ["blocker","you","risk","responsibility"]){
-  const fl = p.flags.filter(f => kinds.includes(f.kind)).map(f => `<span class="flag ${f.kind}" title="${esc(f.msg + "\n" + ruleTip(f.id))}">${f.id}</span>`);
-  const sm = [...new Set(p.smells.filter(s => s.kind === "responsibility").map(s => s.id))].map(id => `<span class="flag responsibility" title="${esc(p.smells.find(s => s.id === id).msg + "\n" + ruleTip(id))}">${id}</span>`);
+  const fl = p.flags.filter(f => kinds.includes(f.kind)).map(f => `<span class="flag ${f.kind}" title="${esc(f.msg + "\n" + ruleTip(f.id))}">${esc(f.id)}</span>`);
+  const sm = [...new Set(p.smells.filter(s => s.kind === "responsibility").map(s => s.id))].map(id => `<span class="flag responsibility" title="${esc(p.smells.find(s => s.id === id).msg + "\n" + ruleTip(id))}">${esc(id)}</span>`);
   return fl.concat(sm).join("");
 }
 
@@ -355,13 +357,13 @@ function renderMap(){
     const bricks = members.filter(m => m.prs.length).map(({c, prs}, i) => {
       const total = prs.reduce((s,p) => s + p.by_comp[c.id], 0);
       const arrow = flow && i > 0 ? `<span class="arrow">→</span>` : "";
-      return `${arrow}<div class="brick ${state.comp===c.id?"sel":""}" data-comp="${c.id}" role="button" tabindex="0" aria-pressed="${state.comp === c.id}" title="${esc(c.contract?.responsibility || "")}">
+      return `${arrow}<div class="brick ${state.comp===c.id?"sel":""}" data-comp="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${state.comp === c.id}" title="${esc(c.contract?.responsibility || "")}">
         <h3>${esc(c.label)} <span>${prs.length} PR · ${total} ln</span></h3>
         <div class="chips">${prs.map(p => chip(p, c.id)).join("")}</div>
         ${mixBar(prs, c.id, total, max)}</div>`;
     }).join("");
-    const empty = members.filter(m => !m.prs.length).map(({c}) => `<button class="empty-component" data-comp="${c.id}" aria-pressed="${state.comp === c.id}" title="${esc([c.contract?.responsibility, "No PRs match these filters. Click to filter this component; click again to clear it."].filter(Boolean).join("\n"))}">${esc(c.label)}</button>`).join("");
-    html += `<div class="layer"><div class="layer-label" style="border-color:${layerColor(layer)}">${esc(label)}</div><div class="layer-content">${bricks ? `<div class="bricks">${bricks}</div>` : ""}${empty ? `<div class="empty-components" role="group" aria-label="${esc(label)}: no matching PRs"><span>No matching PRs:</span>${empty}</div>` : ""}</div></div>`;
+    const empty = members.filter(m => !m.prs.length).map(({c}) => `<button class="empty-component" data-comp="${esc(c.id)}" aria-pressed="${state.comp === c.id}" title="${esc([c.contract?.responsibility, "No PRs match these filters. Click to filter this component; click again to clear it."].filter(Boolean).join("\n"))}">${esc(c.label)}</button>`).join("");
+    html += `<div class="layer"><div class="layer-label" style="border-color:${esc(layerColor(layer))}">${esc(label)}</div><div class="layer-content">${bricks ? `<div class="bricks">${bricks}</div>` : ""}${empty ? `<div class="empty-components" role="group" aria-label="${esc(label)}: no matching PRs"><span>No matching PRs:</span>${empty}</div>` : ""}</div></div>`;
   }
   $("v-map").innerHTML = html;
   if (focusedComp) $("v-map").querySelector(`[data-comp="${CSS.escape(focusedComp)}"]`)?.focus({preventScroll: true});
@@ -371,7 +373,7 @@ function renderMap(){
 const ciBadge = p => {
   const s = ciState(p), c = CI[s], fails = (p.ci_checks?.failing || []);
   const detail = fails.length ? "\n" + fails.slice(0, 8).map(f => `✗ ${f.name}${f.required ? " (required)" : ""}${f.on_main ? " (also on main)" : ""}`).join("\n") : "";
-  return `<span class="cib ${s}" title="CI: ${c.label}${detail}">${c.icon}</span>`;
+  return `<span class="cib ${s}" title="${esc(`CI: ${c.label}${detail}`)}">${c.icon}</span>`;
 };
 const STATUSES = [["", "To do"], ["understood", "Understood"], ["reviewed", "Reviewed"], ["commented", "Commented"], ["approved", "Approved"], ["changes-requested", "Changes requested"], ["skipped", "Skipped"]];
 const savingStatuses = new Set();
@@ -398,7 +400,7 @@ function prRow(n){
   const g = progress[n] || {}; const st = stale(n);
   return `<div class="row ${g.reviewed && !st ? "done":""}">
     ${statusSelect(n)}
-    <a href="${p.url}" target="_blank" rel="noopener">#${n}</a>
+    <a href="${safeUrl(p.url)}" target="_blank" rel="noopener">#${n}</a>
     <span class="t" data-open="${n}" title="${esc(p.title)}">${ciBadge(p)} ${esc(p.title)} <span class="muted">@${esc(p.author)}</span>${whoBadge(p)}${sessDot(p)}${scoreBadge(p)}${st?' <span class="flag blocker">changed since review</span>':""}</span>
     <span>${flagsHtml(p)}</span>
     <span class="muted">${p.minutes}m ${reviewButton(n)}</span></div>`;
@@ -457,7 +459,7 @@ function renderTable(){
   const val = (p,k) => k === "churn" ? lines(p) : k === "flags" ? p.flags.length + p.smells.length : k === "ci" ? ciRank(p) : p[k];
   const rows = DATA.prs.filter(visible).sort((a,b) => { const x = val(a,sortKey), y = val(b,sortKey); return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
   $("v-table").innerHTML = `<table><thead><tr>${cols.map(([k,l]) => `<th class="${numeric.includes(k) ? "num" : ""}" data-sort="${k}">${l}${sortKey===k?(sortDir>0?" ▲":" ▼"):""}</th>`).join("")}</tr></thead><tbody>
-  ${rows.map(p => `<tr><td class="num"><a href="${p.url}" target="_blank" rel="noopener">${p.number}</a></td><td style="cursor:pointer" data-open="${p.number}">${esc(p.title)}${sessDot(p)}${scoreBadge(p)}</td><td>@${esc(p.author)}</td><td>${whoBadge(p)}</td>
+  ${rows.map(p => `<tr><td class="num"><a href="${safeUrl(p.url)}" target="_blank" rel="noopener">${p.number}</a></td><td style="cursor:pointer" data-open="${p.number}">${esc(p.title)}${sessDot(p)}${scoreBadge(p)}</td><td>@${esc(p.author)}</td><td>${whoBadge(p)}</td>
     <td><span class="pill" style="background:${laneColor(p.lane)}">${LANES[p.lane]}</span></td><td>${ciBadge(p)} <span class="muted">${CI[ciState(p)].label}</span></td><td class="num">${Math.round(p.age_days)}d</td><td class="num">${Math.round(p.idle_days)}d</td>
     <td class="num"><span class="add">+${p.additions}</span> <span class="del">-${p.deletions}</span></td><td class="num">${p.changed_files}</td><td>${esc(comps[p.primary].label)}</td>
     <td>${flagsHtml(p, ["blocker","you","risk","responsibility","convention","author"])}</td><td class="num">${p.minutes}m</td><td class="num">${p.priority}</td></tr>`).join("")}</tbody></table>`;
@@ -568,7 +570,7 @@ function renderDrawer({resetScroll = false, follow = false} = {}){
   const tabs = [["overview", "Overview"], ["study", "Study"], ["brief", "Brief"]];
   $("dinner").innerHTML = `<div class="dhead"><span class="close" id="close" title="Close (Esc)">✕</span>
       <div><span class="pill" style="background:${laneColor(p.lane)}">${LANES[p.lane]}</span> ${p.labels.map(l => `<span class="flag">${esc(l)}</span>`).join("")}</div>
-      <h2><a href="${p.url}" target="_blank" rel="noopener">#${p.number}</a> ${esc(p.title)}</h2>
+      <h2><a href="${safeUrl(p.url)}" target="_blank" rel="noopener">#${p.number}</a> ${esc(p.title)}</h2>
       <div class="kv"><span>by <b>@${esc(p.author)}</b>${whoBadge(p)}</span><span>opened <b>${Math.round(p.age_days)}d</b> ago</span><span>idle <b>${Math.round(p.idle_days)}d</b></span>
         <span><b class="add">+${p.additions}</b> <b class="del">-${p.deletions}</b> in <b>${p.changed_files}</b> files</span><span>CI <b>${CI[ciState(p)].label}</b></span><span>review <b>${p.review_decision}</b></span><span>est <b>${p.minutes} min</b></span></div>
       <div class="dtabs">${tabs.map(([k, l]) => `<span class="dtab ${state.dtab === k ? "on" : ""}" data-dtab="${k}">${l}${k === "study" && p.study?.assessed ? ` <span class="score">${p.study.correct}/${p.study.assessed}</span>` : ""}</span>`).join("")}</div>
@@ -586,7 +588,7 @@ function renderDrawer({resetScroll = false, follow = false} = {}){
 }
 function ciSection(p){
   const c = p.ci_checks; if (!c) return "";
-  const rows = c.failing.map(f => `<div>${f.url ? `<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>` : esc(f.name)}
+  const rows = c.failing.map(f => `<div>${safeUrl(f.url) ? `<a href="${safeUrl(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>` : esc(f.name)}
     ${f.required ? '<span class="flag blocker">required</span>' : '<span class="flag">optional</span>'}${f.on_main ? '<span class="flag" title="This check fails on the default branch too">also failing on main</span>' : ""}</div>`).join("");
   const summary = `${c.passed} passed · ${c.failing.length} failing · ${c.pending} pending${c.cancelled ? ` · ${c.cancelled} cancelled` : ""}` +
     (c.required_missing.length ? ` · ${c.required_missing.length} required not reported` : "") + (c.required_known ? "" : " · required checks unknown");
@@ -596,18 +598,18 @@ function overviewTab(n){
   const p = byNum[n], g = progress[n] || {};
   const compRows = Object.entries(p.by_comp).sort((a,b) => b[1]-a[1]).map(([c, l]) => {
     const k = comps[c]; const contract = k.contract?.does_not_own || (k.contract?.responsibility ? "Responsibility: " + k.contract.responsibility : "");
-    return `<div><b>${esc(k.label)}</b> <span class="muted">(${k.layer}, ${l} lines)</span>${contract ? `<div class="contract">${esc(contract.replace(/\*\*/g, ""))}</div>` : ""}</div>`;
+    return `<div><b>${esc(k.label)}</b> <span class="muted">(${esc(k.layer)}, ${l} lines)</span>${contract ? `<div class="contract">${esc(contract.replace(/\*\*/g, ""))}</div>` : ""}</div>`;
   }).join("");
   const files = [...p.files].sort((a,b) => (b.add+b.del)-(a.add+a.del)).map(f => `<div><span class="mono" title="${esc(comps[f.comp].label)}">${esc(f.path)}</span><span class="mono"><span class="add">+${f.add}</span> <span class="del">-${f.del}</span></span></div>`).join("");
-  const smells = p.smells.map(s => `<div class="smell"><span class="flag ${s.kind}" title="${esc(ruleTip(s.id))}">${ruleIcon(s.id)}${s.kind}</span> <a href="${p.url}${FORGE.files_tab || "/files"}" target="_blank" rel="noopener">${esc(s.path)}:${s.line}</a>: ${esc(s.msg)}<code>${esc(s.code)}</code></div>`).join("");
+  const smells = p.smells.map(s => `<div class="smell"><span class="flag ${s.kind}" title="${esc(ruleTip(s.id))}">${ruleIcon(s.id)}${s.kind}</span> <a href="${safeUrl(p.url + (FORGE.files_tab || "/files"))}" target="_blank" rel="noopener">${esc(s.path)}:${s.line}</a>: ${esc(s.msg)}<code>${esc(s.code)}</code></div>`).join("");
   const threads = p.unresolved.map(t => `<div class="smell"><b>@${esc(t.author)}</b> on <span class="muted mono">${esc(t.path)}:${t.line ?? "?"}${t.outdated ? " (outdated)" : ""}</span><div class="md desc" style="max-height:220px;margin-top:4px">${t.body_html ? safeHtml(t.body_html) : md(t.body)}</div></div>`).join("");
   const related = (p.related || []).map(r => byNum[r] ? chip(byNum[r]) : "").join("");
-  const rules = p.rules.map(r => { const ins = DATA.instructions.find(i => i.name === r); return `<a href="${ins?.url}" target="_blank" rel="noopener">${esc(r)}</a>`; }).join(" · ");
+  const rules = p.rules.map(r => { const ins = DATA.instructions.find(i => i.name === r); return `<a href="${safeUrl(ins?.url)}" target="_blank" rel="noopener">${esc(r)}</a>`; }).join(" · ");
   const s = p.session;
   return `<div class="actions review-actions">
       ${reviewButton(n, "btn primary").replace(/>(review|resume)</, (m, w) => `>${w === "resume" ? "Resume" : "Start"} deep review<`)}
       ${LIVE ? `<button class="btn" data-dtab="study" title="Predict, get quizzed, teach back; everything goes in this PR's study log">Study</button>` : ""}
-      <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest agent session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
+      <a class="btn" href="${esc(vscodeUrl(n))}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest agent session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
       <details class="action-menu"><summary class="btn icon" aria-label="More review actions" title="More review actions"><span aria-hidden="true">&#8943;</span></summary>
         <div class="action-items"><button data-deep="${n}">Copy prompt</button>
         <button data-copy="readthrough worktree ${n}">Copy worktree cmd</button></div></details></div>

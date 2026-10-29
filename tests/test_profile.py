@@ -62,11 +62,28 @@ def test_inline_contracts():
         (_with(signals=[{"id": "s", "kind": "scary", "message": "m", "paths": ["**"]}]), "kind must be"),
         (_with(authors={"association": {"MEMBER": "vip"}}), "unknown kind"),
         (_with(authors={"kinds": {"vip": {"group": "royalty"}}}), "group must be"),
+        (_with(layers=[{"id": 'app" onmouseover="x', "label": "App"}]), r"layers\[0\]: id must be"),
+        (_with(layers=[{"id": "app", "label": "App", "color": 'red" onmouseover="x'}]), "color must be a CSS color"),
+        (
+            _with(components=[{"id": "a b", "label": "X", "layer": "app", "paths": ["**"]}]),
+            r"components\[0\]: id must be",
+        ),
+        (_with(signals=[{"kind": "risk", "message": "m", "paths": ["**"]}]), r"signals\[0\]: id must be"),
+        (_with(smells=[{"id": "<s>", "kind": "convention", "message": "m", "line": "x"}]), r"smells\[0\]: id must be"),
+        (_with(authors={"kinds": {"v.i.p/": {"group": "internal"}}}), r"authors\.kinds\.v\.i\.p/: id must be"),
     ],
 )
 def test_validation_errors_are_readable(raw, message):
     with pytest.raises(ProfileError, match=message):
         parse_profile(raw, origin="test.toml")
+
+
+@pytest.mark.parametrize(
+    "color", ["#1b7c83", "#abc", "#11223344", "rebeccapurple", "rgb(27, 124, 131)", "hsl(180 50% 40% / 0.8)"]
+)
+def test_layer_colors_accept_css_color_tokens(color):
+    layers = [{"id": "app", "label": "App", "color": color}, {"id": "support", "label": "Support", "source": False}]
+    assert parse_profile(_with(layers=layers)).layers[0].color == color
 
 
 def test_custom_author_kind():
