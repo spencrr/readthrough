@@ -31,6 +31,7 @@ from readthrough.runtimes import (
     Event,
     Retryable,
     Usage,
+    check_arguments,
     parse_arguments,
     tool_schema,
     with_retries,
@@ -154,7 +155,7 @@ class AnthropicSession:
                     output = f"Unknown tool {use['name']!r}."
                 else:
                     try:
-                        output = await spec.handler(use["input"])
+                        output = await spec.handler(check_arguments(spec, parse_arguments(use["input"])))
                     except Exception as exc:  # noqa: BLE001 - the model gets the error as a result, like any tool runner
                         output = f"Tool failed: {exc}"
                     terminal = terminal or spec.terminal

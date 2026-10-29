@@ -36,6 +36,17 @@ def test_append_validates_kind_writer_and_fields(cfg):
     with pytest.raises(ValueError, match="verdict"):
         q = study.append(cfg, 5, "question", by="model", question="q?")
         study.append(cfg, 5, "assessment", by="model", qid=q["qid"], verdict="great", feedback="f")
+    # The log's own keys and the shapes of values are not the writer's to choose: a model's tool call is a writer.
+    with pytest.raises(ValueError, match="id, ts are set by the log"):
+        study.append(cfg, 5, "note", by="you", text="x", id=1, ts="then")
+    with pytest.raises(ValueError, match="line must be a number"):
+        study.append(cfg, 5, "finding", by="model", summary="s", severity="minor", path="a.py", line="<img>")
+    with pytest.raises(ValueError, match="refs must be a list of strings"):
+        study.append(cfg, 5, "note", by="you", text="x", refs=[{"x": 1}])
+    with pytest.raises(ValueError, match="path must be a string"):
+        study.append(cfg, 5, "note", by="you", text="x", path={"nested": True})
+    entry = study.append(cfg, 5, "finding", by="model", summary="s", severity="minor", path="a.py", line="12")
+    assert entry["line"] == 12 and entry["id"] == 2
 
 
 def test_appends_from_two_processes_never_share_an_id(cfg):
@@ -189,6 +200,21 @@ def test_model_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
     for bad in escapes:
         with pytest.raises(ValueError):
             _safe_rel(tmp_path, bad)
+    # A name that is in the repo's tree can still point elsewhere: the onboarding drafter follows the same rule.
+    if sys.platform != "win32" or _can_symlink(tmp_path):
+        (tmp_path / "pkg" / "link.md").symlink_to(tmp_path.parent / "outside.txt")
+        with pytest.raises(ValueError):
+            _safe_rel(tmp_path, "pkg/link.md")
+
+
+def _can_symlink(where: Path) -> bool:
+    probe = where / "probe-link"
+    try:
+        probe.symlink_to(where)
+    except OSError:  # Windows without developer mode or privilege
+        return False
+    probe.unlink()
+    return True
 
 
 def test_study_session_id_is_stable_and_distinct_from_review(tmp_path: Path):

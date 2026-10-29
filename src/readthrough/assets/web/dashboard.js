@@ -712,10 +712,10 @@ function studyTab(n){
   entries.forEach(e => { if (e.kind === "answer") answers[e.qid] = e; if (e.kind === "assessment") assessments[e.qid] = e; if (e.kind === "note" && e.pinned) pinned.add(e.pinned); });
   const {mode, q: openQ} = studyMode(entries);
   const pin = e => pinned.has(e.id) ? `<span class="pin on" title="Kept in the brief">${icon("pin", "ico sm")}pinned</span>`
-    : `<button class="pin" data-pin="${e.id}" title="Keep this in the brief's study log">${icon("pin", "ico sm")}pin</button>`;
+    : `<button class="pin" data-pin="${esc(e.id)}" title="Keep this in the brief's study log">${icon("pin", "ico sm")}pin</button>`;
   const who = author;
   const qcard = q => { const a = answers[q.qid], v = assessments[q.qid];
-    return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${v.verdict}">${v.verdict}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}</div>
+    return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${esc(v.verdict)}">${esc(v.verdict)}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}</div>
       <div class="md">${md(q.question)}</div>
       ${a ? `<div class="answer md">${md(a.text)}</div>` : ""}
       ${v ? `<div class="md">${md(v.feedback)}</div>${v.evidence?.length ? `<div class="hint">Evidence: ${v.evidence.map(x => `<code>${esc(x)}</code>`).join(" ")}</div>` : ""}` : ""}
@@ -726,15 +726,15 @@ function studyTab(n){
         : `<div class="bubble you"><div class="who-line">You <span class="tag">prediction</span></div><div class="md">${md(e.text)}</div></div>`;
       case "chat":
         if (e.action === "brief") return `<div class="event">${icon("lightbulb", "ico sm")}You asked for a briefing.</div>`;
-        return `<div class="bubble ${e.by}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${md(e.text)}</div></div>`;
+        return `<div class="bubble ${esc(e.by)}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${md(e.text)}</div></div>`;
       case "question": return qcard(e);
       case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${md(e.text)}</div></div>`;
       case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${md(e.text)}</div></div>`;
-      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${e.verdict}">${e.verdict}</span></div><div class="md">${md(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
+      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${esc(e.verdict)}">${esc(e.verdict)}</span></div><div class="md">${md(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
       case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${md(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
       // A failure is named by the runtime, never a model: a model that never answered reached nothing.
       case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${esc(e.runtime ? `The ${e.runtime} runtime` : e.assistant === "rules" ? "The rules assistant" : "The assistant")} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
-      case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${e.line ?? "?"}</code> ` : ""}${esc(e.summary)} <span class="muted">(${e.by})</span></div>`;
+      case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${esc(e.line ?? "?")}</code> ` : ""}${esc(e.summary)} <span class="muted">(${esc(e.by)})</span></div>`;
       default: return "";
     }
   }).join("");

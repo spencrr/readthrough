@@ -239,6 +239,56 @@ def parse_arguments(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def check_arguments(spec: ToolSpec, args: dict[str, Any]) -> dict[str, Any]:
+    """The arguments a model sent, held to the tool's schema before a handler sees them.
+
+    The model is the other side of a trust boundary: what it reads (a PR's text) can tell it what to send. Unknown
+    properties are dropped, each value is coerced to its declared type or refused (a TypeError for the wrong
+    shape, a ValueError for the wrong value), and a missing required argument is refused. The Copilot SDK does
+    the same through pydantic; the REST runtimes do it here.
+    """
+    properties = spec.schema.get("properties") or {}
+    required = set(spec.schema.get("required") or [])
+    out: dict[str, Any] = {}
+    for name, prop in properties.items():
+        if name not in args or args[name] is None:
+            if name in required:
+                raise ValueError(f"{spec.name}: missing required argument {name!r}")
+            continue
+        out[name] = _coerce(args[name], prop, f"{spec.name}.{name}")
+    return out
+
+
+def _coerce(value: Any, prop: dict[str, Any], where: str) -> Any:
+    kind = prop.get("type", "string")
+    if kind == "array":
+        if not isinstance(value, list):
+            raise TypeError(f"{where} must be a list")
+        item = prop.get("items") or {"type": "string"}
+        return [_coerce(v, item, f"{where}[]") for v in value]
+    if kind == "integer":
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise TypeError(f"{where} must be an integer")
+        try:
+            number = float(value)
+        except ValueError:
+            raise ValueError(f"{where} must be an integer") from None
+        if not number.is_integer():
+            raise ValueError(f"{where} must be an integer")
+        return int(number)
+    if kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{where} must be a number")
+        return float(value)
+    if kind == "boolean":
+        if not isinstance(value, bool):
+            raise TypeError(f"{where} must be true or false")
+        return value
+    if not isinstance(value, (str, int, float, bool)):
+        raise TypeError(f"{where} must be a string")
+    return str(value)
+
+
 def _register_builtin() -> None:
     # Imported here so each runtime module can import this one.
     from readthrough.runtimes import anthropic, copilot, openai  # noqa: F401

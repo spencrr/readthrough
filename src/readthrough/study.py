@@ -34,6 +34,7 @@ from readthrough.limits import MAX_STUDY_TEXT
 MARKER = "<!-- readthrough:study-log -->"
 VERDICTS = ("correct", "partial", "incorrect")
 SEVERITIES = ("blocker", "major", "minor", "question")
+RESERVED = frozenset({"id", "ts", "kind", "by"})
 
 MODEL = "model"  # the Socratic assistant, whichever model runtime carries it
 RULES = "rules"  # the assistant that needs no model and never grades
@@ -100,9 +101,24 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
     missing = [f for f in required if not str(fields.get(f, "")).strip()]
     if missing:
         raise ValueError(f"{kind} needs {', '.join(missing)}")
+    # The log sets these; a writer (a model's tool call included) can't name them, or the record would lie.
+    reserved = RESERVED & set(fields)
+    if reserved:
+        raise ValueError(f"{', '.join(sorted(reserved))} are set by the log, not the writer")
     for key, value in fields.items():
-        if isinstance(value, str) and len(value) > MAX_STUDY_TEXT:
+        if isinstance(value, list):
+            if not all(isinstance(v, str) for v in value):
+                raise ValueError(f"{key} must be a list of strings")
+            fields[key] = [v[:MAX_STUDY_TEXT] for v in value]
+        elif value is not None and not isinstance(value, (str, int, float, bool)):
+            raise ValueError(f"{key} must be a string, a number, true or false, or a list of strings")
+        elif isinstance(value, str) and len(value) > MAX_STUDY_TEXT:
             fields[key] = value[:MAX_STUDY_TEXT]
+    if fields.get("line") is not None:
+        try:
+            fields["line"] = int(fields["line"])
+        except (TypeError, ValueError):
+            raise ValueError("line must be a number") from None
     if kind in ("assessment", "teachback_assessment") and fields["verdict"] not in VERDICTS:
         raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
     if kind == "finding" and fields["severity"] not in SEVERITIES:

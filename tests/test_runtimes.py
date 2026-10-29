@@ -120,6 +120,46 @@ def test_registry_lists_the_runtimes_and_resolves_auto(monkeypatch: pytest.Monke
     )
 
 
+def test_tool_arguments_are_held_to_the_schema_before_a_handler_sees_them():
+    """What a model sends is shaped by what it read; the REST runtimes check it the way the SDK's pydantic
+    models do: unknown properties dropped, types coerced or refused, required arguments present."""
+    schema = {
+        "properties": {
+            "path": {"type": "string"},
+            "line": {"type": "integer"},
+            "refs": {"type": "array", "items": {"type": "string"}},
+            "ok": {"type": "boolean"},
+            "score": {"type": "number"},
+        },
+        "required": ["path"],
+    }
+    spec = ToolSpec("t", "d", schema, _tools([])[0].handler)
+    args = {"path": "a.py", "line": "12", "refs": ["x:1"], "ok": True, "score": 3, "id": 99, "ts": "then", "by": "you"}
+    assert runtimes.check_arguments(spec, args) == {
+        "path": "a.py",
+        "line": 12,
+        "refs": ["x:1"],
+        "ok": True,
+        "score": 3.0,
+    }
+    assert runtimes.check_arguments(spec, {"path": 7, "line": None}) == {"path": "7"}, (
+        "None is absent; scalars are text"
+    )
+    for bad in (
+        {},
+        {"path": "a", "line": "<b>"},
+        {"path": "a", "line": 1.5},
+        {"path": "a", "line": True},
+        {"path": "a", "refs": "x:1"},
+        {"path": "a", "refs": [{"x": 1}]},
+        {"path": "a", "ok": "yes"},
+        {"path": "a", "score": "3"},
+        {"path": {"nested": 1}},
+    ):
+        with pytest.raises((TypeError, ValueError), match=r"^t[.:]"):
+            runtimes.check_arguments(spec, bad)
+
+
 def test_retry_waits_are_bounded_jittered_and_honour_retry_after():
     """Seeded: the jitter has its own generator, so the distribution is checked with a stated margin."""
     import random
