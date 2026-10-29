@@ -1,5 +1,6 @@
 # Lints the workflows themselves (pins, credentials left in checkouts, caches in publishing jobs, injection) on
-# every push and PR, so it can be a required check. Findings go to the Security tab as SARIF.
+# every push and PR. The job fails on a finding, which is what makes it a required check worth having: in the
+# action's SARIF mode the job passes with findings and only the Security tab knows.
 name: Workflow lint
 
 on:
@@ -19,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read # checkout
-      security-events: write # upload the SARIF to code scanning
-      actions: read # the SARIF upload reads the workflow run it belongs to
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false # fail the job on findings instead of uploading SARIF

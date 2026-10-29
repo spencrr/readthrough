@@ -39,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +56,7 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
           path: coverage.xml
+          overwrite: true # a re-run of this job uploads the same name again
           retention-days: 7
 
   build:
@@ -83,4 +84,5 @@ jobs:
         with:
           name: dist
           path: dist/*
+          overwrite: true # a re-run of this job uploads the same name again
           if-no-files-found: error
