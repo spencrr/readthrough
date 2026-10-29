@@ -2,11 +2,11 @@
 
 Busy repos have fifty-plus open pull requests. I wanted two things from a queue like that: a picture of where the work is landing in the architecture, and a way to review PRs that leaves me actually understanding them, instead of skimming a diff and clicking approve.
 
-readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls every open PR and places it on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
+readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls the open PRs (the hundred most recently active by default; `limit` raises it) and places each on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
 From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before the agent shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
 
-![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](docs/img/map.webp)
+![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/map.webp)
 
 ## A repo has to be onboarded first
 
@@ -27,13 +27,13 @@ Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/f
 
 That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with a model drafting the profile if you like. `readthrough install skill` teaches the review agents the deep-review routine, and `readthrough doctor` tells you what's missing.
 
-![Studying a vscode PR: the prediction, a question the model asked, the answer, and its verdict with evidence](docs/img/study.webp)
+![Studying a vscode PR: the prediction, a question the model asked, the answer, and its verdict with evidence](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/study.webp)
 
 ## Docs
 
-- [Using readthrough](docs/guide.md): onboarding, the dashboard, deep reviews, studying, keeping it fresh, configuration, and troubleshooting.
-- [Writing a profile](docs/profiles.md): how to describe a repo's architecture well, and how to share it.
-- [Maintaining readthrough](docs/maintaining.md): the checks, error handling, logging, settings, plugins, and the pages' structure.
+- [Using readthrough](https://github.com/spencrr/readthrough/blob/main/docs/guide.md): onboarding, the dashboard, deep reviews, studying, keeping it fresh, configuration, and troubleshooting.
+- [Writing a profile](https://github.com/spencrr/readthrough/blob/main/docs/profiles.md): how to describe a repo's architecture well, and how to share it.
+- [Maintaining readthrough](https://github.com/spencrr/readthrough/blob/main/docs/maintaining.md): the checks, error handling, logging, settings, plugins, and the pages' structure.
 - [Working on readthrough](AGENTS.md): the exact commands and the conventions that aren't obvious.
 - [Examples](examples/): runnable scripts, including one that needs nothing but the standard library.
 - [Changelog](CHANGELOG.md).
@@ -75,7 +75,7 @@ assets/web/       the pages as separate HTML, CSS, and JS, inlined into one serv
 assets/vendor/    Cytoscape, marked, DOMPurify, and Lucide icons, with their licenses
 ```
 
-To extend it: a new forge, a new place profiles can come from, a new review agent, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](docs/profiles.md).
+To extend it: a new forge, a new place profiles can come from, a new review agent, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](https://github.com/spencrr/readthrough/blob/main/docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](https://github.com/spencrr/readthrough/blob/main/docs/profiles.md).
 
 ## Development
 
@@ -87,4 +87,4 @@ git config core.hooksPath .githooks      # once: run the checks before every com
 uv run python scripts/check.py           # lint, format, types, and tests with the coverage floor
 ```
 
-The same gate runs in CI on Linux, macOS, and Windows for every supported Python. The browser tests use an installed Edge or Chrome; locally they skip without one, on CI they fail. See [SECURITY.md](SECURITY.md) for what the tool trusts and how to report a vulnerability.
+The same gate runs in CI on Linux, macOS, and Windows for every supported Python. The browser tests use an installed Edge or Chrome; locally they skip without one, on CI they fail. See [SECURITY.md](https://github.com/spencrr/readthrough/blob/main/SECURITY.md) for what the tool trusts and how to report a vulnerability.

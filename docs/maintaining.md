@@ -33,7 +33,7 @@ The browser tests (`tests/test_browser.py`, marked `browser`) drive the real das
 
 The end-to-end tests (`tests/test_e2e.py`, marked `e2e`) run the real `readthrough` executable as a subprocess, with `tests/fake_gh.py` standing in for `gh` through `READTHROUGH_GH`. That's the one place the whole program is exercised the way a user runs it: onboarding, a build, studying from the terminal, a second build that must hit the diff cache, `doctor`. The first time it ran, it found that a legitimately empty diff was never cached, so docs-only PRs were re-fetched on every refresh.
 
-Tests never touch the network, `gh`, git, Copilot, the registry, or the scheduler. The fakes to reuse: `FakeForge` in `tests/fakes.py`, which the `fake_forge` fixture installs in place of `forges.make` (a whole build runs on it), `Script` in `test_github_faults.py` (scripted `gh` failures against the real GitHub adapter), the recorded forge responses under `tests/fixtures/forges/` that `test_forges.py` replays through `Rest.call`, `fake_gh.py` (the executable), `RecordingAssistant` in `test_engine.py`, the fake Copilot SDK and sessions in `test_assistants.py` and `test_onboard_copilot.py`, and the `live` server fixture in `test_serve.py`. The two stochastic steps, retry backoff and refresh jitter, have their own seeded generators and are tested as distributions in `test_jitter.py`.
+Tests never touch the network, `gh`, git, Copilot, the registry, or the scheduler. The fakes to reuse: `FakeForge` in `tests/fakes.py`, which the `fake_forge` fixture installs in place of `forges.make` (a whole build runs on it), `Script` in `test_github_faults.py` (scripted `gh` failures against the real GitHub adapter), the recorded forge responses under `tests/fixtures/forges/` that `test_forges.py` replays through `Rest.call`, `fake_gh.py` (the executable), `RecordingAssistant` in `test_engine.py`, the fake Copilot SDK and sessions in `test_assistants.py` and `test_onboard_model.py`, and the `live` server fixture in `test_serve.py`. The two stochastic steps, retry backoff and refresh jitter, have their own seeded generators and are tested as distributions in `test_jitter.py`.
 
 The recordings come from `scripts/probe_forge.py --record`, which runs an adapter against a real public repo (codeberg.org/forgejo/forgejo, gitlab.com/gitlab-org/cli, dev.azure.com/powershell) and writes every response, including the refusals, keyed by request. Re-record when an adapter asks for something new; the tests then need their expectations refreshed, since the data is whatever the forge said that day. Only a few response headers are kept and known identity fields are scrubbed, so a recording holds nothing about whoever made it.
 
@@ -131,7 +131,7 @@ The rules the contract states, in short: events are notifications and a GET is t
 
 ## Plugins
 
-Five things are chosen by name in `config.toml` and go through `registry.Registry`: where PRs come from (`forges.FORGES`), where profiles come from (`profile.PROFILE_SOURCES`), which agent runs a deep review (`agents.AGENTS`), how a review session gets a window (`terminals.TERMINALS`), and who answers in the Study tab (`assistants.ASSISTANTS`). To add one:
+Six things are chosen by name in `config.toml` and go through `registry.Registry`: where PRs come from (`forges.FORGES`), where profiles come from (`profile.PROFILE_SOURCES`), which agent runs a deep review (`agents.AGENTS`), how a review session gets a window (`terminals.TERMINALS`), who answers in the Study tab (`assistants.ASSISTANTS`), and which model runtime carries it (`runtimes.RUNTIMES`). To add one:
 
 1. Write a dataclass of options with defaults, or use `registry.NoOptions`. Field types can be `str`, `int`, `float`, `bool`, `Path`, `list[...]` of those, or `X | None`; the loader checks them and resolves relative paths against the config file.
 2. Register the implementation with `REGISTRY.add("name", "one-line summary", options=Options)`. The name is what users write; the summary is what `doctor` and errors show.
@@ -146,6 +146,6 @@ A terminal launcher is a pure function from a `Command` to a `Spawn`; only the W
 
 ## Releasing
 
-1. Bump `version` in `pyproject.toml`. `readthrough.__version__` reads it from the installed package.
+1. Bump `version` in `pyproject.toml` and run `uv lock`, so the lockfile names the new version (`UV_LOCKED` in CI refuses a stale one). `readthrough.__version__` reads it from the installed package.
 2. Add a section to `CHANGELOG.md`.
 3. Run `uv run python scripts/check.py`, then commit and tag `vX.Y.Z`. Every CI run's build job uploads the sdist and wheel as the `dist` artifact.

@@ -18,10 +18,10 @@ git config core.hooksPath .githooks      # once per clone: --quick before every 
 uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw docs/img/*.webp from a built repo
 ```
 
-CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every
-supported Python, and `gate` is the one check the branch ruleset requires. Nothing passes locally that would
-fail there except for the browser tests, which skip when no Chromium-family browser is installed; on CI they
-fail instead, since the hosted runners have one.
+CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python
+in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linter) are the two checks the branch
+ruleset requires. Nothing passes locally that would fail there except for the browser tests, which skip when no
+Chromium-family browser is installed; on CI they fail instead, since the hosted runners have one.
 
 ## Conventions that aren't obvious
 
@@ -35,13 +35,18 @@ fail instead, since the hosted runners have one.
   `<forge>/<path>` (data under `repos/<forge>/...`, pages under `/r/<forge>/...`); `forge` defaults to `github`.
   Verify an adapter against a real public repo with `scripts/probe_forge.py`, which also records the responses
   the replay tests in `test_forges.py` run on (identities and all but a few headers are scrubbed).
-- **Every outside program runs through `process.run`** with an argument list, never a shell string. It resolves
-  the program with `shutil.which` (so `.cmd` shims and wrappers work on Windows), decodes as UTF-8, applies a
-  timeout, and classifies failures (`faults.classify_stderr`). `READTHROUGH_GH` / `READTHROUGH_GIT` /
-  `READTHROUGH_GLAB` / `READTHROUGH_AZ` substitute a program: the tests use that to stand in for `gh` at the
-  process boundary.
+- **Every program whose output we read runs through `process.run`** with an argument list, never a shell
+  string. It resolves the program with `shutil.which` (so `.cmd` shims and wrappers work on Windows), decodes
+  as UTF-8, applies a timeout, and classifies failures (`faults.classify_stderr`). `READTHROUGH_GH` /
+  `READTHROUGH_GIT` / `READTHROUGH_GLAB` / `READTHROUGH_AZ` substitute a program: the tests use that to stand
+  in for `gh` at the process boundary. The OS integrations (`terminals.py` opening a window, `system.py`
+  registering the scheduled task and the protocol handler) are the exception: they hand a fixed command with
+  quoted values to the platform's launcher and don't wait for it.
 - **UTF-8 everywhere.** Every `open`, `read_text`, `write_text`, and `subprocess` call names `encoding="utf-8"`.
-  Files the tool writes go through `files.write_atomic`.
+  A file another process may be reading while we write it (config, data, the ledger, the session index) goes
+  through `files.write_atomic`; the study log and the usage ledger are append-only; briefs and diff caches are
+  plain writes of files only this process reads. A model's file reads are held under the clone by
+  `files.inside`, symlinks followed.
 - **Secrets never reach a log, an error, or a bundle.** Tokens are `process.Secret`s whose repr is
   `Secret(***)`, registered with `process.remember` so `process.redact` strips every seen one from captured
   output. `Rest` sends `Authorization` only to its own host. `config.toml` holds no credentials (the
@@ -96,8 +101,8 @@ fail instead, since the hosted runners have one.
 - **Coverage is a ratchet.** `fail_under` in `pyproject.toml` only goes up.
 - **Workflows are hardened the same way everywhere.** Every action is pinned to a full commit SHA with its
   version in a comment (Dependabot bumps both); every checkout has `persist-credentials: false`; a workflow
-  starts from `permissions: {}` and each job grants what it needs with a comment saying why; a job whose output
-  is published or uploaded as an artifact uses no package cache; in-repo workflows are called as
-  `$/.github/workflows/<file>` so they count as pinned. `.github/zizmor.yml` holds the policy and `zizmor` checks
-  it on every push.
+  starts from `permissions: {}` and each job grants what it needs with a comment saying why; the job that
+  builds what gets published uses no package cache (the test jobs may: a coverage report isn't shipped);
+  in-repo workflows are called as `$/.github/workflows/<file>` so they count as pinned. `.github/zizmor.yml`
+  holds the policy and the `zizmor` job fails on any finding.
 - **Commits** are one logical change each, with a message a person would write, and no trailers.

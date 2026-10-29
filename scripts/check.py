@@ -1,8 +1,8 @@
 """Run every quality gate the way a reviewer would: lint, format, types, then tests with the coverage floor.
 
-    uv run python scripts/check.py          # everything (what the pre-commit hook runs)
+    uv run python scripts/check.py          # everything
     uv run python scripts/check.py --fix    # let ruff fix and format first
-    uv run python scripts/check.py --quick  # skip the browser tests
+    uv run python scripts/check.py --quick  # skip the browser tests (what the pre-commit hook runs)
 
 All gates run even when an early one fails, so one pass shows everything to fix. Exits non-zero if any failed.
 The coverage floor lives in pyproject.toml ([tool.coverage.report] fail_under).

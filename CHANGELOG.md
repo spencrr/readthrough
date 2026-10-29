@@ -79,7 +79,7 @@
   on every push. The gate is a reusable workflow (`test.yml`) that `ci.yml` calls and sums up in one `gate`
   check; the browser tests fail on CI instead of skipping when the runner has no browser. Dependabot keeps the
   Python dependencies and the action pins fresh, a week after each release. A pre-push hook in `.githooks`
-  lets only `main`, `release/*`, and `v*` tags leave a clone.
+  lets only `main`, `release/*`, and `v*` tags leave a clone. Python 3.15 is in the matrix and the classifiers.
 
 ### Changed
 
@@ -158,6 +158,32 @@
   profile supplies (author badges, layer colors, ids) is escaped wherever the page puts it in an attribute, and
   links are only ever web URLs. A profile's ids must be slugs and a layer's `color` a CSS color, checked when
   it loads, so a `readthrough.toml` written by someone else can't shape the page's markup.
+- What a model sends back is held to the same standard as what a stranger sends. On the Anthropic and OpenAI
+  runtimes a tool call's arguments are now checked against the tool's schema before a handler sees them
+  (unknown properties dropped, types coerced or refused, required ones present), as the Copilot SDK already
+  did; the study log refuses a writer that names its own `id`, `ts`, `kind`, or `by`, and holds every value to
+  a string, a number, a boolean, or a list of strings (`line` is a number); and the Study tab escapes an
+  entry's id, author, verdict, and line. Without those, a PR description that steered the model could have
+  planted markup in every reader's Study tab. The onboarding drafter's `read_file` now follows symlinks and
+  refuses anything that resolves outside the clone, as the study assistant's tools always did; a repository
+  can commit a symlink, and the name being in its tree says nothing about where it points.
+- A repository locator is held to the slug grammar in every forge adapter (no `.`, `..`, or backslash
+  segments), since it becomes directory names under `repos/` and a self-hosted forge chooses the name it
+  answers with; removing a repo with its data checks the directory is under `repos/` before deleting it.
+- A PR description containing `<!--<script` broke the whole page: the inlined data escaped `</` but not `<`,
+  and that sequence puts the HTML parser into a state where the real `</script>` no longer closes the script.
+  Every `<` in inlined JSON is now `\u003c`.
+- A required-checks lookup that could read one of its two GitHub sources (classic protection, rulesets) but
+  was refused the other reported the union as known. It's now `unavailable`, naming the refusal, since a
+  partial answer is not an answer.
+- Secrets are blanked out of every log record on its way to a handler (`logs.ContextFilter`), so no call site
+  has to remember to redact.
+- The brief quotes the author's description and the unresolved threads as what they are: text written by the
+  PR's author, to be assessed. The review skill says the same of the profile's guidance and test command and
+  asks the agent to show you any command before running it; the study assistant gets the profile's guidance
+  labelled as the maintainers' advice rather than as part of its own instructions. `SECURITY.md` was corrected
+  where it claimed more than the code does (an `Origin` header is checked when the browser sends one; images in
+  a description may load from any `https` host; the profile's guidance does reach the models).
 - A page that fell behind the server's events (a long streamed reply, a throttled background tab) was quietly
   unsubscribed and kept showing a stale page over a connection that looked healthy. It's now sent one `resync`
   and fetches everything it holds again; the same happens after a reconnect, which used to refresh the PR list
