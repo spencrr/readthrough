@@ -358,14 +358,25 @@ class GitHub(Forge):
         """Required status checks for a branch, from classic protection and rulesets."""
         names: set[str] = set()
         seen_any = False
+        refused: list[str] = []
+
+        # The two sources are a union: a source this account may not read leaves the set incomplete, which is not
+        # the same as that source having nothing (a 404).
+        def read(path: str) -> Any:
+            try:
+                return self.api_or_none(path, absent=(NotFound,))
+            except AuthError as exc:
+                refused.append(exc.reason)
+                return None
+
         try:
-            out = self.api_or_none(f"repos/{self.repo}/branches/{branch}", absent=(NotFound, AuthError))
+            out = read(f"repos/{self.repo}/branches/{branch}")
             if out:
                 seen_any = True
                 protection = (json.loads(out).get("protection") or {}).get("required_status_checks") or {}
                 names.update(protection.get("contexts") or [])
                 names.update(c["context"] for c in protection.get("checks") or [] if c.get("context"))
-            out = self.api_or_none(f"repos/{self.repo}/rules/branches/{branch}", absent=(NotFound, AuthError))
+            out = read(f"repos/{self.repo}/rules/branches/{branch}")
             if out:
                 seen_any = True
                 for rule in json.loads(out):
@@ -376,6 +387,9 @@ class GitHub(Forge):
                         )
         except ForgeError as exc:
             return unavailable(exc.reason)
+        if refused:
+            what = "fully visible" if seen_any else "visible"
+            return unavailable(f"branch protection isn't {what} to this account: {refused[0]}")
         return known(names) if seen_any else unavailable("branch protection isn't visible to this account")
 
     def ci_context(self, bases: set[str]) -> CiContext:

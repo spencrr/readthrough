@@ -522,3 +522,7 @@ def test_required_checks_from_protection_and_rulesets(monkeypatch):
     gh = _gh(monkeypatch, Script(_err(AuthError, "HTTP 403")))
     unseen = gh.required_checks("main")
     assert not unseen.known and "isn't visible" in unseen.reason
+    # One source read, the other refused: the union is incomplete, so it isn't an answer either.
+    gh = _gh(monkeypatch, Script(protection, _err(AuthError, "HTTP 403")))
+    partial = gh.required_checks("main")
+    assert not partial.known and "fully visible" in partial.reason and "403" in partial.reason
