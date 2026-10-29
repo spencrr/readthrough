@@ -377,6 +377,9 @@ class SetupService:
         self.on_change()
         purged = False
         if body.get("purge") is True and cfg.repo_dir.exists():
+            # Belt and braces for a delete: the locator was validated, and the directory must still be ours.
+            if not cfg.repo_dir.resolve().is_relative_to((cfg.home / "repos").resolve()):
+                raise SetupError(f"{cfg.repo_dir} isn't under {cfg.home / 'repos'}; nothing deleted")
             if cfg.worktrees_dir.exists():
                 for wt in cfg.worktrees_dir.glob("pr-*"):
                     if wt.name[3:].isdigit():

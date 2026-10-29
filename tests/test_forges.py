@@ -21,6 +21,7 @@ from readthrough.faults import ForgeError
 from readthrough.forges import Response, Rest, retry_after
 from readthrough.forges.azure_devops import AzureDevOps
 from readthrough.forges.forgejo import Forgejo
+from readthrough.forges.github import GitHub
 from readthrough.forges.gitlab import GitLab
 from readthrough.model import PullRequest
 from readthrough.tuning import load_tuning
@@ -497,6 +498,17 @@ def test_gitlab_urls_and_nested_groups():
     assert forge.pr_url(7) == "https://gitlab.com/group/sub/project/-/merge_requests/7"
     assert forge.pr_ref(7) == "merge-requests/7/head"
     assert GitLab.validate_repo("single") and GitLab.validate_repo("a/b/c") is None
+    # A locator becomes directories under repos/, and a self-hosted forge chooses the full_name it answers with.
+    for adapter, bad in (
+        (GitLab, "g/..\\..\\evil/p"),
+        (GitLab, "g/../p"),
+        (Forgejo, "o/.."),
+        (Forgejo, "o\\x/r"),
+        (GitHub, "../r"),
+        (GitHub, "o/."),
+        (AzureDevOps, "o/../r"),
+    ):
+        assert adapter.validate_repo(bad) and "can't be a path" in str(adapter.validate_repo(bad)), bad
     assert forges.slug("gitlab", "group/sub/project") == "gitlab/group/sub/project"
 
 

@@ -105,9 +105,9 @@ class GitLab(Forge):
     @classmethod
     def validate_repo(cls, repo: str) -> str | None:
         parts = repo.split("/")
-        if len(parts) < 2 or not all(p and "/" not in p and p not in (".", "..") for p in parts):
+        if len(parts) < 2 or not all(parts):
             return f"{repo!r} isn't group/project (groups may nest: group/subgroup/project)"
-        return None
+        return cls.bad_segment(parts)
 
     def web_url(self) -> str:
         return f"https://{self.host}/{self.repo}"

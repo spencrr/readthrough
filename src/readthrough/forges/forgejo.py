@@ -73,7 +73,9 @@ class Forgejo(Forge):
     @classmethod
     def validate_repo(cls, repo: str) -> str | None:
         parts = repo.split("/")
-        return None if len(parts) == 2 and all(parts) else f"{repo!r} isn't owner/name"
+        if len(parts) != 2 or not all(parts):
+            return f"{repo!r} isn't owner/name"
+        return cls.bad_segment(parts)
 
     def web_url(self) -> str:
         return f"https://{self.host}/{self.repo}"

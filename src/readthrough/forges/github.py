@@ -167,7 +167,9 @@ class GitHub(Forge):
 
     @classmethod
     def validate_repo(cls, repo: str) -> str | None:
-        return None if REPO_RE.match(repo) else f"{repo!r} isn't owner/name"
+        if not REPO_RE.match(repo):
+            return f"{repo!r} isn't owner/name"
+        return cls.bad_segment(repo.split("/"))
 
     def web_url(self) -> str:
         return f"https://{self.host}/{self.repo}"

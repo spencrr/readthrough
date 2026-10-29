@@ -238,7 +238,7 @@ class AzureDevOps(Forge):
         parts = repo.split("/")
         if len(parts) != 3 or not all(re.fullmatch(PATH_SEGMENT, p) for p in parts) or " " in parts[0]:
             return f"{repo!r} isn't organization/project/repository"
-        return None
+        return cls.bad_segment(parts, spaces=True)
 
     @classmethod
     def remote_matches(cls, url: str, repo: str) -> bool:

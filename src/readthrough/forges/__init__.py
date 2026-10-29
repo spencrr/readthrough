@@ -32,7 +32,7 @@ from typing import Any, ClassVar
 from readthrough import __version__
 from readthrough.faults import AuthError, ForgeError, NetworkError, RateLimited, Timeout, TooLarge, classify_http
 from readthrough.logs import pool_map
-from readthrough.model import Capability, MergedPullRequest, PullRequest
+from readthrough.model import PATH_SEGMENT, Capability, MergedPullRequest, PullRequest
 from readthrough.process import Secret, redact, remember
 from readthrough.registry import Registry
 from readthrough.tuning import ForgeTuning, default_tuning
@@ -374,6 +374,20 @@ class Forge:
     def validate_repo(cls, repo: str) -> str | None:
         """Why ``repo`` isn't a valid locator for this forge, or None when it is."""
         raise NotImplementedError
+
+    @staticmethod
+    def bad_segment(parts: list[str], *, spaces: bool = False) -> str | None:
+        """Why one of a locator's segments can't be a directory name under ``repos/``, or None.
+
+        A locator becomes path segments on disk and in URLs, and a forge the user pointed at (or its operator)
+        chooses the ``full_name`` it answers with, so every segment is held to the slug grammar: no separators,
+        no ``.`` or ``..``, and spaces only where the forge allows them.
+        """
+        pattern = PATH_SEGMENT if spaces else r"[\w.-]+"
+        for part in parts:
+            if not re.fullmatch(pattern, part) or part.strip(".") == "":
+                return f"segment {part!r} can't be a path"
+        return None
 
     @classmethod
     def slug(cls, repo: str) -> str:
