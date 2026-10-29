@@ -75,6 +75,17 @@
 
 ### Changed
 
+- The PR panel keeps the primary review actions on one row and moves **Copy prompt** and **Copy worktree
+  cmd** under a keyboard-reachable **⋯** disclosure. **Your status** is a group of pills with every existing
+  ledger status; repeated clicks can't overlap saves for a PR, failures keep the last confirmed status, and
+  **To do** still keeps notes and linked sessions. Numeric table headings now align with their right-aligned,
+  tabular-figure values. Components with no matching PRs share a thin row per layer rather than empty
+  boxes, and remain visible and filterable even when nothing matches.
+- The live chip has space beside Refresh and carries stale-data ages, including alongside offline or
+  refresh-failed states, instead of another standing banner. Actual refresh errors and snapshot age
+  warnings stay prominent. Its styling no longer spills onto a PR's active-session dot. Onboarding's
+  read-only connection line expands to show the CLI or API and the ordered credential sources; the
+  credential actually used is still shown after checking access.
 - The header puts the product first, the repo second, and the small print third: **readthrough / microsoft/vscode ·
   100 of 2,885 open · as of 8:27 PM · @you**. The repo is a quiet pill that opens the switcher (the native select,
   still keyboard-reachable, laid invisibly over it); the connection is a status chip that reads live, refreshing,

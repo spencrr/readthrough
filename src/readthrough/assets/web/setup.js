@@ -91,10 +91,11 @@ function renderWizard(repo, {first = false} = {}){
   const cli = `readthrough onboard ${w.repo || forge.shape.split(" ")[0]}${w.forge !== "github" ? ` --forge ${w.forge}` : ""}${w.account ? ` --account ${w.account}` : ""}${w.clone ? ` --clone "${w.clone}"` : ""}`;
   const step = (n, done) => `<span class="step ${done ? "done" : ""}">${done ? icon("check", "ico sm") : n}</span>`;
   const info = w.info;
-  // How the chosen forge is read, and where its credential comes from, so nobody is surprised by a CLI or a
-  // token lookup. Written per adapter; after Check access the line says which credential was actually used.
-  const howRead = `<p class="sub access"><b>${esc(forge.label)}</b> is read through ${esc(forge.access || "its API")}${forge.credentials?.length ? `, as ${forge.credentials.map(c => `<span class="cred">${esc(c)}</span>`).join(" ")}` : ""}.
-    Nothing is written to the repo, and readthrough never stores a token${forge.accounts ? "" : " or prompts you to sign in"}.</p>`;
+  const howRead = `<details class="access" id="w-access" ${w.accessOpen ? "open" : ""}>
+    <summary>Read-only access to <b>${esc(forge.label)}</b> <span class="access-more">· connection details</span></summary>
+    <p>Read through ${esc(forge.access || "its API")}.</p>
+    ${forge.credentials?.length ? `<ol>${forge.credentials.map(c => `<li>${esc(c)}</li>`).join("")}</ol>` : ""}
+    <p>Nothing is written to the repo, and readthrough never stores a token${forge.accounts ? "" : " or prompts you to sign in"}.</p></details>`;
   $("main").innerHTML = `${first ? welcome() : ""}
   <div class="card"><h2>${step(1, !!info)}Which repo?</h2>
     ${howRead}
@@ -329,6 +330,7 @@ document.addEventListener("input", ev => {
   if (id === "w-repo") { S.w.repo = ev.target.value; }
   if (id === "w-clone") { S.w.clone = ev.target.value; }
 });
+document.addEventListener("toggle", ev => { if (ev.target.id === "w-access" && S.w) S.w.accessOpen = ev.target.open; }, true);
 document.addEventListener("change", ev => {
   if (ev.target.dataset.override !== undefined) return setOverride(ev.target.dataset.override, ev.target.value);
   if (ev.target.id === "w-account") S.w.account = ev.target.value;

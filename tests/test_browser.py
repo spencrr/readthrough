@@ -3,6 +3,8 @@
 Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't available.
 """
 
+import datetime as dt
+import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,12 +12,13 @@ from types import SimpleNamespace
 import pytest
 from conftest import PROFILE_PATH, REPO, SLUG
 
-from readthrough import study
-from readthrough.build import build
+from readthrough import ledger, study
+from readthrough.build import build, render_html
 from readthrough.config import Config
 from readthrough.serve import Dashboard, DashboardServer
 
 sync_api = pytest.importorskip("playwright.sync_api")
+expect = sync_api.expect
 pytestmark = pytest.mark.browser
 
 BODY = 'Adds **retries** to the transport.\n\n- one\n- two\n\n<img src="data:," onerror="window.pwned=1">'
@@ -144,6 +147,118 @@ def test_warnings_from_the_build_are_shown(page):
     assert page.inner_text("#tabs").count("Architecture map") == 1, "the bold-width reservation isn't read as text"
 
 
+def test_live_chip_has_space_and_tabs_keep_their_width(page):
+    open_dashboard(page)
+    chip, refresh = page.locator(".live-status").bounding_box(), page.locator("[data-refresh]").bounding_box()
+    assert chip and refresh and refresh["x"] - chip["x"] - chip["width"] >= 8
+    width = page.locator("#tabs").bounding_box()["width"]
+    for tab in ("plan", "overlap", "table", "map"):
+        page.click(f'[data-tab="{tab}"]')
+        assert page.locator("#tabs").bounding_box()["width"] == pytest.approx(width, abs=0.05)
+    # A session's live dot must not inherit the header chip's padding, height, or border.
+    page.evaluate(
+        "DATA.prs[0].sessions = [{active: true, updated: Date.now()/1000, agent_label: 'Copilot'}];"
+        "state.tab = 'table'; render();"
+    )
+    dot = page.locator("#v-table .sess.live").bounding_box()
+    assert dot and dot["width"] == dot["height"] == 8
+    assert page.errors == []
+
+
+def test_numeric_table_headers_and_values_align(page):
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    assert page.locator("th.num").all_text_contents() == ["#", "Age", "Idle", "±", "Files", "Est", "Prio ▼"]
+    styles = page.eval_on_selector_all(
+        "#v-table .num",
+        "els => els.map(el => { const s = getComputedStyle(el);"
+        "return [s.textAlign, s.fontVariantNumeric, s.whiteSpace]; })",
+    )
+    assert styles and all(style == ["right", "tabular-nums", "nowrap"] for style in styles)
+    assert page.errors == []
+
+
+def test_empty_components_share_a_row_and_stay_filterable(page):
+    open_dashboard(page)
+    assert page.locator("#v-map .brick").count() == 2, "only the transport and tests have matching PRs"
+    row = page.locator(".empty-components:has([data-comp='api'])")
+    assert row.locator('[data-comp="cli"]').count() == 1, "empty entry points share one compact row"
+    assert row.bounding_box()["height"] <= 34
+    component_ids = page.evaluate("DATA.components.map(c => c.id).sort()")
+    assert (
+        page.eval_on_selector_all("#v-map [data-comp]", "els => els.map(el => el.dataset.comp).sort()") == component_ids
+    )
+    api = page.locator('#v-map [data-comp="api"]')
+    api.focus()
+    api.press("Space")
+    expect(api).to_have_attribute("aria-pressed", "true")
+    expect(api).to_be_focused()
+    expect(page.locator(".map-empty")).to_have_text("No PRs match these filters.")
+    assert page.locator("#v-map [data-comp]").count() == len(component_ids), "nothing on the map disappears"
+    api.press("Enter")
+    expect(api).to_have_attribute("aria-pressed", "false")
+    assert page.locator("#v-map .brick").count() == 2
+    # Populated components are keyboard-reachable too, and keep focus after filtering.
+    transport = page.locator('#v-map [data-comp="transports"]')
+    transport.focus()
+    transport.press("Enter")
+    expect(transport).to_have_attribute("aria-pressed", "true")
+    expect(transport).to_be_focused()
+    transport.press("Space")
+    expect(transport).to_have_attribute("aria-pressed", "false")
+    assert page.errors == []
+
+
+def test_live_freshness_is_in_the_chip_without_hiding_failures(page):
+    open_dashboard(page)
+    page.evaluate(
+        "DATA.freshness = {stale_live_hours: 4, stale_snapshot_hours: 26};"
+        "DATA.generated = new Date(Date.now() - 3 * 3.6e6).toISOString();"
+        "LIVE.disconnected = false; LIVE.status = {}; header();"
+    )
+    expect(page.locator(".live-status")).to_have_text("live")
+    page.evaluate("DATA.generated = new Date(Date.now() - 5 * 3.6e6).toISOString(); header();")
+    expect(page.locator(".live-status")).to_have_text("stale · 5 h")
+    assert "readthrough doctor" in page.locator(".live-status").get_attribute("title")
+    assert page.locator("#banners .stale-data").count() == 0
+    error = {"message": "forge is unreachable", "step": "pull requests", "id": "E123"}
+    for disconnected, status, text in (
+        (True, {"building": True, "error": error}, "offline"),
+        (False, {"building": True, "error": error}, "refreshing"),
+        (False, {"error": error}, "refresh failed"),
+    ):
+        page.evaluate("([off, s]) => { LIVE.disconnected = off; LIVE.status = s; header(); }", [disconnected, status])
+        expect(page.locator(".live-status")).to_have_text(f"{text} · 5 h")
+        assert "5 hours old" in page.locator(".live-status").get_attribute("title")
+    assert "forge is unreachable" in page.inner_text("#banners"), "an actual refresh error stays prominent"
+    assert page.errors == []
+
+
+def test_snapshot_keeps_its_age_warning_and_browser_status(page):
+    cfg = page.cfg  # type: ignore[attr-defined]
+    payload = json.loads(cfg.data_path.read_text(encoding="utf-8"))
+    payload["generated"] = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=27)).isoformat()
+    page.route(
+        "**/snapshot",
+        lambda route: route.fulfill(content_type="text/html", body=render_html(payload)),
+    )
+    page.goto(f"{page.base}/snapshot")
+    page.wait_for_selector("#v-map.on")
+    expect(page.locator(".stale-data")).to_contain_text("27 hours old")
+    assert page.locator(".live-status").count() == 0
+    page.click('[data-tab="table"]')
+    page.click('#v-table [data-open="1"]')
+    understood = page.get_by_role("button", name="Understood", exact=True)
+    understood.click()
+    expect(understood).to_have_attribute("aria-pressed", "true")
+    page.reload()
+    expect(understood).to_have_attribute("aria-pressed", "true")
+    assert not cfg.ledger_path.exists(), "a snapshot saves only in this browser"
+    page.evaluate("byNum[1].head = 'new-head'; render();")
+    expect(page.get_by_role("button", name="To do", exact=True)).to_have_attribute("aria-pressed", "true")
+    assert page.errors == []
+
+
 def test_lane_pills_select_only_then_restore(page):
     open_dashboard(page)
     page.click('[data-tab="table"]')
@@ -172,6 +287,122 @@ def test_the_drawer_renders_the_description_safely(page):
     assert page.errors == []
 
 
+def test_drawer_copy_actions_use_a_keyboard_reachable_disclosure(page):
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    page.click('#v-table [data-open="1"]')
+    summary = page.locator(".action-menu summary")
+    expect(summary).to_have_attribute("aria-label", "More review actions")
+    for width in (560, 380):
+        page.evaluate("w => document.documentElement.style.setProperty('--drawer-w', w + 'px')", width)
+        positions = (
+            page.locator("#drawer .actions")
+            .first.locator(":scope > .btn, summary")
+            .evaluate_all("els => els.map(el => el.getBoundingClientRect().top)")
+        )
+        assert max(positions) - min(positions) <= 1, f"the main actions fit in a {width}px drawer"
+    assert page.get_by_role("button", name="Copy prompt", exact=True).count() == 0, "hidden until asked for"
+    summary.focus()
+    summary.press("Enter")
+    expect(page.locator(".action-menu")).to_have_attribute("open", "")
+    page.keyboard.press("Tab")
+    expect(page.get_by_role("button", name="Copy prompt", exact=True)).to_be_focused()
+    page.evaluate("render()")
+    expect(page.locator(".action-menu")).to_have_attribute("open", "")
+    expect(page.get_by_role("button", name="Copy prompt", exact=True)).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(summary).to_be_focused()
+    assert page.locator("body.drawer-open").count() == 1, "Escape closes the menu before the drawer"
+    summary.press("Enter")
+    page.get_by_role("button", name="Copy prompt", exact=True).click()
+    expect(page.locator("#toast")).to_contain_text("Prompt copied")
+    assert page.evaluate("navigator.clipboard.readText()").startswith(f"[readthrough:{SLUG}#1]")
+    assert page.locator(".action-menu[open]").count() == 0
+    summary.click()
+    page.get_by_role("button", name="Copy worktree cmd", exact=True).click()
+    expect(page.locator("#toast")).to_have_text("Copied")
+    assert page.evaluate("navigator.clipboard.readText()") == "readthrough worktree 1"
+    summary.click()
+    page.locator("#drawer h2").click()
+    assert page.locator(".action-menu[open]").count() == 0, "clicking outside closes it"
+    page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('permission denied'); }; }")
+    summary.click()
+    page.get_by_role("button", name="Copy prompt", exact=True).click()
+    expect(page.locator("#toast")).to_have_text("Couldn't copy: permission denied")
+    assert page.errors == []
+
+
+def test_drawer_status_pills_save_every_status_and_keep_ledger_context(page):
+    cfg = page.cfg  # type: ignore[attr-defined]
+    ledger.record(cfg.ledger_path, 1, note="Check the timeout.", session="existing-session")
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    page.click('#v-table [data-open="1"]')
+    labels = ["Understood", "Reviewed", "Commented", "Approved", "Changes requested", "Skipped"]
+    group = page.get_by_role("group", name="Your status for #1")
+    assert group.get_by_role("button").count() == 7 and page.locator("#drawer select.status").count() == 0
+    head = page.evaluate("byNum[1].head")
+    for status, label in zip(ledger.STATUSES, labels, strict=True):
+        button = group.get_by_role("button", name=label, exact=True)
+        button.focus()
+        button.press("Enter")
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(group).to_have_attribute("aria-busy", "false")
+        expect(button).to_be_focused()
+        entry = ledger.load(cfg.ledger_path)["1"]
+        assert entry["status"] == status and entry["head"] == head
+        assert entry["note"] == "Check the timeout." and entry["session"] == "existing-session"
+    page.reload()
+    expect(group.get_by_role("button", name="Skipped", exact=True)).to_have_attribute("aria-pressed", "true")
+    group.get_by_role("button", name="To do", exact=True).click()
+    expect(group).to_have_attribute("aria-busy", "false")
+    expect(group.get_by_role("button", name="To do", exact=True)).to_have_attribute("aria-pressed", "true")
+    assert ledger.load(cfg.ledger_path)["1"] == {"note": "Check the timeout.", "session": "existing-session"}
+    group.get_by_role("button", name="Reviewed", exact=True).click()
+    expect(group).to_have_attribute("aria-busy", "false")
+    expect(group.get_by_role("button", name="Reviewed", exact=True)).to_have_attribute("aria-pressed", "true")
+    page.evaluate("byNum[1].head = 'new-head'; render();")
+    expect(group.get_by_role("button", name="To do", exact=True)).to_have_attribute("aria-pressed", "true")
+    assert ledger.load(cfg.ledger_path)["1"]["head"] == head, "a new head resets the display, not the record"
+    assert page.errors == []
+
+
+def test_status_saves_cannot_race_and_failures_are_not_shown_as_saved(page):
+    open_dashboard(page)
+    page.click('[data-tab="table"]')
+    page.click('#v-table [data-open="1"]')
+    page.click('[data-tab="plan"]')
+    group = page.get_by_role("group", name="Your status for #1")
+    held = []
+    page.route("**/api/ledger/1", lambda route: held.append(route))
+    group.get_by_role("button", name="Reviewed", exact=True).click()
+    expect(group).to_have_attribute("aria-busy", "true")
+    expect(page.locator('#v-plan select[data-status="1"]')).to_be_disabled()
+    for button in group.get_by_role("button").all():
+        expect(button).to_have_attribute("aria-disabled", "true")
+    group.get_by_role("button", name="Approved", exact=True).dispatch_event("click")
+    expect(group.get_by_role("button", name="To do", exact=True)).to_have_attribute("aria-pressed", "true")
+    assert len(held) == 1, "a second click must not send another save"
+    held[0].continue_()
+    expect(group.get_by_role("button", name="Reviewed", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(group).to_have_attribute("aria-busy", "false")
+    page.unroute("**/api/ledger/1")
+    page.route(
+        "**/api/ledger/1",
+        lambda route: route.fulfill(status=503, content_type="application/json", body='{"error":"disk is full"}'),
+    )
+    group.get_by_role("button", name="Approved", exact=True).click()
+    expect(page.locator("#toast")).to_have_text("Couldn't save your status: disk is full")
+    expect(group).to_have_attribute("aria-busy", "false")
+    expect(group.get_by_role("button", name="Reviewed", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('#v-plan select[data-status="1"]')).to_have_value("reviewed")
+    page.unroute("**/api/ledger/1")
+    group.get_by_role("button", name="Approved", exact=True).click()
+    expect(group.get_by_role("button", name="Approved", exact=True)).to_have_attribute("aria-pressed", "true")
+    assert all("Failed to load resource" in msg and "503" in msg for msg in page.errors), page.errors
+
+
 def test_theme_button_cycles_and_remembers(page):
     open_dashboard(page)
     seen = set()
@@ -189,6 +420,66 @@ def test_setup_page_loads_and_lists_the_repo(page):
     page.goto(f"{page.base}/setup")
     page.wait_for_selector("#nav .ritem")
     assert REPO in page.inner_text("#nav")
+    assert page.errors == []
+
+
+def test_onboarding_access_details_fold_without_losing_auth_transparency(page):
+    page.goto(f"{page.base}/setup")
+    details = page.locator("#w-access")
+    expect(details.locator("summary")).to_contain_text("Read-only access to GitHub")
+    assert details.get_attribute("open") is None
+    details.locator("summary").focus()
+    details.locator("summary").press("Enter")
+    expect(details).to_contain_text("gh CLI")
+    expect(details).to_contain_text("gh account you pick here")
+    page.select_option("#w-forge", "ado")
+    expect(details).to_have_attribute("open", "")
+    expect(details).to_contain_text("Azure DevOps REST API")
+    text = details.inner_text()
+    assert text.index("AZURE_DEVOPS_EXT_PAT") < text.index("else az") < text.index("else anonymously")
+    assert "never prompts" in text and "never stores a token or prompts you to sign in" in text
+    page.route(
+        "**/api/setup/inspect",
+        lambda route: route.fulfill(
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "full_name": "org/Team/repo",
+                    "slug": "ado/org/Team/repo",
+                    "forge_label": "Azure DevOps",
+                    "private": True,
+                    "default_branch": "main",
+                    "description": "",
+                    "auth": "az, tenant-scoped",
+                    "clone": "",
+                    "source": None,
+                    "profile_text": "",
+                    "onboarded": False,
+                }
+            ),
+        ),
+    )
+    page.fill("#w-repo", "org/Team/repo")
+    page.get_by_role("button", name="Check access", exact=True).click()
+    expect(page.locator(".msg.ok")).to_contain_text("Read as az, tenant-scoped.")
+    expect(details).to_have_attribute("open", "")
+    details.locator("summary").press("Space")
+    expect(details).not_to_have_attribute("open", "")
+    assert page.errors == []
+
+
+def test_first_run_keeps_the_repo_field_and_connection_details_in_reach(page):
+    state = page.request.get(f"{page.base}/api/setup/state").json()
+    state.update(repos=[], repo=None)
+    page.route(
+        "**/api/setup/state*",
+        lambda route: route.fulfill(content_type="application/json", body=json.dumps(state)),
+    )
+    page.goto(f"{page.base}/setup")
+    expect(page.locator(".welcome")).to_contain_text("Welcome to readthrough")
+    expect(page.locator("#w-repo")).to_be_focused()
+    assert page.locator("#g-default").count() == 0
+    assert page.locator("#w-access").get_attribute("open") is None
     assert page.errors == []
 
 

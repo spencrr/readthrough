@@ -2,7 +2,7 @@
 
 This guide walks through a normal week with the tool: setting it up, onboarding a repo, reading the dashboard, running a deep review, and keeping it fresh without thinking about it. The last sections cover configuration and troubleshooting.
 
-There are two ways to run it. The **live dashboard** is a small local server that keeps every repo's data fresh and updates the page as things change. The **snapshot** is a single HTML file per repo that you rebuild when you want. Both show the same thing; the live one just never goes stale. I run the live one.
+There are two ways to run it. The **live dashboard** is a small local server that refreshes every repo and updates the page as things change; if it can't refresh, it keeps the last good data and says how old it is. The **snapshot** is a single HTML file per repo that you rebuild when you want. Both show the same thing. I run the live one.
 
 ## Setting it up
 
@@ -40,7 +40,7 @@ You can onboard from the browser or from a terminal; they do the same thing and 
 
 With the live server running, open <http://127.0.0.1:8765/setup>, or pick **+ Onboard a repo…** from the repo switcher in the dashboard's header. (With nothing onboarded yet, the front page takes you there.) The page walks through it in order:
 
-1. **Which repo?** Pick where it lives (GitHub unless you say otherwise), type its name (`owner/name`; `organization/project/repository` on Azure DevOps), pick the gh account that can see it if you have more than one, and check access. The step says, for the forge you picked, what it will be read through (the `gh` CLI for GitHub; the platform's REST API elsewhere) and where the credential comes from, in the order tried (`AZURE_DEVOPS_EXT_PAT`, then `az`, then anonymously, on Azure DevOps), and after the check, which one was actually used. readthrough stores no token and never prompts you to sign in; when it has no credential, `doctor` says what to run.
+1. **Which repo?** Pick where it lives (GitHub unless you say otherwise), type its name (`owner/name`; `organization/project/repository` on Azure DevOps), pick the gh account that can see it if you have more than one, and check access. Expand **connection details** to see what reads the repo (the `gh` CLI for GitHub; the platform's REST API elsewhere) and where the credential comes from, in the order tried (`AZURE_DEVOPS_EXT_PAT`, then `az`, then anonymously, on Azure DevOps). After the check, the step says which one was actually used. readthrough stores no token and never prompts you to sign in; when it has no credential, `doctor` says what to run.
 2. **Your local clone.** It guesses from `~/src` and `~/repos`; check it, and pick the remote PRs should be fetched through.
 3. **Its architecture profile.** Use one that already exists (the repo's own `readthrough.toml`, or one from a shared profile directory), draft one from the file tree, or have a model draft one (the button names the runtime it would use). Progress shows as it runs.
 4. **Check it, edit it, accept it.** The profile's TOML is on the left, and the report on the right re-checks as you type: coverage against recent PRs, anything blocking acceptance, the paths that aren't mapped yet (each with a **+ component** button that adds a stub for it), the busiest components, and how recent authors classify, with an override for anyone who's wrong. **Preview the map** opens the dashboard as it would look, without touching anything live. **Accept and start** finishes, and the server starts serving the repo straight away.
@@ -137,6 +137,8 @@ The first half checks the machine: `gh` and which accounts are signed in, the re
 
 The theme button in the corner (sun, moon, or both) cycles through auto (follows your OS), light, and dark. The panel that opens when you click a PR can be resized by dragging its left edge; double-click the edge to reset it. Both settings stick. The browser tab's icon shows how many PRs are waiting on you (your review requested, or a re-review), so you can see it from another tab.
 
+The chip beside Refresh reports the connection and the last refresh: live, refreshing, offline, or refresh failed. If the data is older than the freshness threshold, it reads **stale · 5 h**, or adds the age to the more urgent state (**offline · 5 h**, for example). Hover for details and the next check. A refresh error still gets a banner; a snapshot keeps its age warning above the map.
+
 ![Architecture map](img/map.webp)
 
 Every PR lands in one lane, shown as the colored pills at the top. Clicking a pill shows only that lane; click it again to show everything. Ctrl-click (⌘-click on a Mac) adds or removes one lane, so you can build "Ready and Approved". The author and CI pills work the same way, independently. While anything is filtered, a blue "Only … · show all" chip says what, and clears it. Filters and the search are part of the page's URL, so a view like "only my PRs" can be bookmarked.
@@ -178,7 +180,7 @@ Each row has a CI badge (✓, ✗, !), and hovering it lists the failing checks.
 
 ### The views
 
-The **Architecture map** is the main view. Each row is a layer from the profile, each box a component. Each chip is a PR, placed in every component it touches and sized by how much it changes. Hover over a chip and all its other placements light up. A PR that lights up four layers is the kind that tends to blur responsibilities. An outline marks the component where most of the change lives. Click a component to filter everything else down to it.
+The **Architecture map** is the main view. Each row is a layer from the profile, each box a component with matching PRs. Components without any share a thin **No matching PRs** row in their layer, so the architecture stays visible without a grid of empty boxes. Each chip is a PR, placed in every component it touches and sized by how much it changes. Hover over a chip and all its other placements light up. A PR that lights up four layers is the kind that tends to blur responsibilities. An outline marks the component where most of the change lives. Click a component to filter everything else down to it; click again to clear it. Empty components work the same way, including from the keyboard with Enter or Space, and stay reachable even when no PR matches.
 
 The bar along the bottom of each component shows how much is changing there. Its length is the component's changed lines compared with the busiest component's, and its colors split those lines by lane, so a long mostly-red bar is a busy component whose PRs are blocked. Hover it for the numbers.
 
@@ -219,7 +221,7 @@ Signals are hints about where to look, not verdicts. A few are hard facts: merge
 
 ### Tracking progress
 
-Each row has a status menu: to do, understood, reviewed, commented, approved, changes requested, or skipped. The progress bar counts understood and reviewed PRs. On the live dashboard the status is saved straight to the repo's `ledger.json`, the same file deep-review sessions write when they finish, so a session ticking a PR off shows up on the page within a few seconds. On the snapshot it's kept in your browser, and the ledger is merged in on the next build. Either way, the ledger records the commit you reviewed. If the author pushes again, the status resets and the PR shows up under "Changed since your review."
+The plan's rows have a status menu, and the PR panel has the same choices as pills under **Your status**: to do, understood, reviewed, commented, approved, changes requested, or skipped. The progress bar counts understood and reviewed PRs. On the live dashboard the status is saved straight to the repo's `ledger.json`, the same file deep-review sessions write when they finish, so a session ticking a PR off shows up on the page within a few seconds. The controls pause while a save is pending; a failed save says why and keeps the previous status. **To do** clears only the status, not your note or linked review session. On the snapshot it's kept in your browser, and the ledger is merged in on the next build. Either way, the status is pinned to the commit you reviewed. If the author pushes again, the status resets and the PR shows up under "Changed since your review."
 
 ## Deep reviews
 
@@ -244,7 +246,7 @@ Each PR gets its own session, and the session ID comes from the PR, so pressing 
 
 Sessions are linked to their PR wherever they started. Every prompt readthrough writes, including the one behind **Copy prompt**, begins with a marker like `[readthrough:github/pallets/click#2897]`, and the server links any session of any installed agent whose first message carries one to that PR. So a review you start from VS Code, or by pasting the prompt into Claude Code, shows up in the PR panel next to the terminal one. The panel lists every linked session, which agent and where it ran, and when it was last active, and can resume any of them in a terminal (in its own agent) or open a Copilot one in VS Code. The index of linked sessions is kept in `~/.readthrough/session-index.json`; the first scan reads every session you have, and later scans only read new ones.
 
-**Copy prompt** is the fallback for anywhere else you run an agent.
+**Copy prompt** is the fallback for anywhere else you run an agent. It and **Copy worktree cmd** are under **More review actions (⋯)** in Overview. Enter or Space opens the menu, Tab reaches the copy buttons, and Escape closes the menu before closing the panel.
 
 To burn down a whole session, ask Copilot for "burn down session 2 of OWNER/NAME". It gives you a quick overview of how the PRs in that session relate, then runs the routine for each one.
 

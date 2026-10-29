@@ -22,14 +22,15 @@ h1 small{color:var(--mut);font-size:12.5px;overflow:hidden;text-overflow:ellipsi
 .switch select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;margin:0}
 .switch:has(select:focus-visible){outline:2px solid var(--acc);outline-offset:1px}
 .hactions{display:flex;gap:8px;align-items:center;flex:none}
-/* The live chip: a status, not a button. The dot pulses while connected; the colour says how things stand. */
-.live{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px 0 9px;border-radius:999px;font-size:12px;font-weight:500;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 35%,transparent);background:color-mix(in srgb,var(--good) 9%,transparent);cursor:default;white-space:nowrap}
-.live.busy{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 35%,transparent);background:color-mix(in srgb,var(--acc) 9%,transparent)}
-.live.off{color:var(--mut);border-color:var(--line);background:var(--subtle)}
-.live.err{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+/* The live chip is a status, not a button. Live and refreshing pulse; warnings stay still. */
+.live-status{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px 0 9px;border-radius:999px;font-size:12px;font-weight:500;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 35%,transparent);background:color-mix(in srgb,var(--good) 9%,transparent);cursor:default;white-space:nowrap}
+.live-status.busy{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 35%,transparent);background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.live-status.off{color:var(--mut);border-color:var(--line);background:var(--subtle)}
+.live-status.err{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.live-status.stale{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
 .ping{position:relative;width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
-.live:not(.off) .ping::after{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid currentColor;animation:ping 2.4s ease-out infinite}
+.live-status:not(.off):not(.err):not(.stale) .ping::after{content:"";position:absolute;inset:0;border-radius:50%;border:1.5px solid currentColor;animation:ping 2.4s ease-out infinite}
 @keyframes ping{0%{transform:scale(1);opacity:.9}70%,100%{transform:scale(2.6);opacity:0}}
 @keyframes spin{to{transform:rotate(360deg)}}
 .btn.icon.busy .ico{animation:spin 1s linear infinite}
-@media (prefers-reduced-motion: reduce){.live .ping::after,.btn.icon.busy .ico{animation:none}}
+@media (prefers-reduced-motion: reduce){.live-status .ping::after,.btn.icon.busy .ico{animation:none}}

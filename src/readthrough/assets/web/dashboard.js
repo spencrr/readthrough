@@ -116,7 +116,7 @@ const safeHtml = html => DOMPurify.sanitize(html || "", PURIFY);
 const md = text => safeHtml(marked.parse(text || "", {gfm: true, breaks: false}));
 
 function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 2200); }
-function copy(text, msg){ navigator.clipboard.writeText(text).then(() => toast(msg || "Copied")); }
+function copy(text, msg){ navigator.clipboard.writeText(text).then(() => toast(msg || "Copied")).catch(err => toast(`Couldn't copy: ${err.message}`)); }
 const deepPrompt = n => `[readthrough:${SLUG}#${n}] Use the readthrough skill to run a deep review session for ${DATA.repo}#${n}. The study brief is at ${(LINKS.briefs_dir || "").replace(/\\/g, "/")}/pr-${n}.md`;
 const reviewUrl = n => `readthrough://review/${SLUG}/${n}`;
 // A session's editor link comes from the agent that owns it (Copilot sessions open in VS Code's agent window;
@@ -246,15 +246,23 @@ function header(){
   banners();
   favicon(needsYou());
 }
-// The connection and the last refresh, as one quiet chip: live, refreshing, offline, or failed. Details on hover.
+function dataFreshness(){
+  const ageH = (Date.now() - new Date(DATA.generated)) / 3.6e6;
+  const fresh = DATA.freshness || {stale_live_hours: 2, stale_snapshot_hours: 26};
+  return {hours: Math.round(ageH), stale: ageH > (LIVE ? fresh.stale_live_hours : fresh.stale_snapshot_hours)};
+}
+// Connection failures take precedence, but never hide the age of stale data.
 function liveBadge(){
-  const s = LIVE.status || {};
-  const chip = (cls, text, title) => `<span class="live ${cls}" role="status" title="${esc(title)}"><span class="ping"></span>${text}</span>`;
+  const s = LIVE.status || {}, age = dataFreshness();
+  const ageText = age.stale ? ` · ${age.hours} h` : "";
+  const ageDetail = age.stale ? ` Data is ${age.hours} hours old. Refresh, or check readthrough doctor.` : "";
+  const chip = (cls, text, title) => `<span class="live-status ${cls}" role="status" title="${esc(title + ageDetail)}"><span class="ping"></span>${esc(text + ageText)}</span>`;
   if (LIVE.disconnected) return chip("off", "offline", "Lost the connection to readthrough serve. Retrying.");
   if (s.building) return chip("busy", "refreshing", "Fetching the latest PRs now.");
   if (s.error) { const e = typeof s.error === "object" ? `${s.error.message} [error ${s.error.id}]` : s.error;
     return chip("err", "refresh failed", `The last refresh failed: ${e}. Showing the last good data; retrying automatically.`); }
   const next = s.next_build ? ` Next check at ${new Date(s.next_build * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}.` : "";
+  if (age.stale) return chip("stale", "stale", `Connected to readthrough serve.${next}`);
   return chip("", "live", `Connected to readthrough serve; the page updates itself.${next}`);
 }
 const TABS = [["map", "Architecture map", "layers"], ["plan", "Burn-down plan", "list-checks"], ["overlap", "Overlap graph", "network"], ["table", "All PRs", "table-2"]];
@@ -288,8 +296,8 @@ const legend = (title, html) => `<details class="legend" ${localStorage.getItem(
 document.addEventListener("toggle", e => { if (e.target.matches?.("details.legend")) localStorage.setItem("readthrough:legend", e.target.open ? "open" : "closed"); }, true);
 function banners(){
   const out = [];
-  const ageH = (Date.now() - new Date(DATA.generated)) / 3.6e6, fresh = DATA.freshness || {stale_live_hours: 2, stale_snapshot_hours: 26};
-  if (ageH > (LIVE ? fresh.stale_live_hours : fresh.stale_snapshot_hours)) out.push(`<div class="banner warn"><b>This data is ${Math.round(ageH)} hours old.</b><span class="muted">Refresh, or check <code>readthrough doctor</code>.</span></div>`);
+  const age = dataFreshness();
+  if (!LIVE && age.stale) out.push(`<div class="banner warn stale-data"><b>This data is ${age.hours} hours old.</b><span class="muted">Refresh, or check <code>readthrough doctor</code>.</span></div>`);
   const err = LIVE?.status?.error;
   if (err && typeof err === "object") out.push(`<div class="banner warn"><b>The last refresh failed</b><span>during ${esc(err.step)}: ${esc(err.message)}</span><span class="muted">Showing the last good data. ${LIVE.status.consecutive_failures > 1 ? `${LIVE.status.consecutive_failures} failures in a row. ` : ""}Retrying automatically. Error <code>${esc(err.id)}</code> in readthrough.log.</span></div>`);
   // The `limit` warning is a standing fact about a big repo, not news: the header's count carries it ("100 of 2,885 open").
@@ -335,23 +343,28 @@ function mixBar(prs, comp, total, max){
   return `<div class="mix" style="width:${100 * total / max}%" title="${tip}">${parts.map(l => `<span style="flex:${by[l]};background:${laneColor(l)}"></span>`).join("")}</div>`;
 }
 function renderMap(){
+  const focusedComp = document.activeElement?.dataset?.comp;
   const vis = DATA.prs.filter(visible);
   const max = Math.max(1, ...DATA.components.map(c => vis.reduce((s,p) => s + (p.by_comp[c.id]||0), 0)));
   let html = legend("How to read the map", `Each chip is a PR, colored by lane and sized by how much it changes. An outline marks the component where most of the change lives. An orange dot marks an external author, a hollow one a first-time contributor. Hover a chip to light up every component it touches; click a component to filter. The bar under a component shows how much is changing there compared with the busiest one, colored by lane. ${icon("cog", "ico sm")}Placement is by the profile's path patterns, not a language model. ${profileLine()}`);
-  if (!vis.length) { $("v-map").innerHTML = html + EMPTY("No PRs match these filters."); return; }
+  if (!vis.length) html += `<p class="map-empty">No PRs match these filters.</p>`;
   for (const {id: layer, label, flow} of PROFILE.layers){
-    const bricks = DATA.components.filter(c => c.layer === layer).map((c, i) => {
-      const prs = vis.filter(p => c.id in p.by_comp).sort((a,b) => b.by_comp[c.id] - a.by_comp[c.id]);
+    const members = DATA.components.filter(c => c.layer === layer).map(c => ({
+      c, prs: vis.filter(p => c.id in p.by_comp).sort((a,b) => b.by_comp[c.id] - a.by_comp[c.id]),
+    }));
+    const bricks = members.filter(m => m.prs.length).map(({c, prs}, i) => {
       const total = prs.reduce((s,p) => s + p.by_comp[c.id], 0);
       const arrow = flow && i > 0 ? `<span class="arrow">→</span>` : "";
-      return `${arrow}<div class="brick ${prs.length?"":"empty"} ${state.comp===c.id?"sel":""}" data-comp="${c.id}" title="${esc(c.contract?.responsibility || "")}">
+      return `${arrow}<div class="brick ${state.comp===c.id?"sel":""}" data-comp="${c.id}" role="button" tabindex="0" aria-pressed="${state.comp === c.id}" title="${esc(c.contract?.responsibility || "")}">
         <h3>${esc(c.label)} <span>${prs.length} PR · ${total} ln</span></h3>
         <div class="chips">${prs.map(p => chip(p, c.id)).join("")}</div>
         ${mixBar(prs, c.id, total, max)}</div>`;
     }).join("");
-    html += `<div class="layer"><div class="layer-label" style="border-color:${layerColor(layer)}">${label}</div><div class="bricks">${bricks}</div></div>`;
+    const empty = members.filter(m => !m.prs.length).map(({c}) => `<button class="empty-component" data-comp="${c.id}" aria-pressed="${state.comp === c.id}" title="${esc([c.contract?.responsibility, "No PRs match these filters. Click to filter this component; click again to clear it."].filter(Boolean).join("\n"))}">${esc(c.label)}</button>`).join("");
+    html += `<div class="layer"><div class="layer-label" style="border-color:${layerColor(layer)}">${esc(label)}</div><div class="layer-content">${bricks ? `<div class="bricks">${bricks}</div>` : ""}${empty ? `<div class="empty-components" role="group" aria-label="${esc(label)}: no matching PRs"><span>No matching PRs:</span>${empty}</div>` : ""}</div></div>`;
   }
   $("v-map").innerHTML = html;
+  if (focusedComp) $("v-map").querySelector(`[data-comp="${CSS.escape(focusedComp)}"]`)?.focus({preventScroll: true});
 }
 
 // ---- burn-down plan
@@ -361,9 +374,25 @@ const ciBadge = p => {
   return `<span class="cib ${s}" title="CI: ${c.label}${detail}">${c.icon}</span>`;
 };
 const STATUSES = [["", "To do"], ["understood", "Understood"], ["reviewed", "Reviewed"], ["commented", "Commented"], ["approved", "Approved"], ["changes-requested", "Changes requested"], ["skipped", "Skipped"]];
+const savingStatuses = new Set();
 const statusOf = n => { const g = progress[n]; if (!g || stale(n)) return ""; return g.status || (g.reviewed ? "reviewed" : g.understood ? "understood" : ""); };
 const statusSelect = n => { const cur = statusOf(n);
-  return `<select class="status s-${cur || "todo"}" data-status="${n}" aria-label="Your status for #${n}" title="What you've done with #${n}${LIVE ? ". Saved to the ledger; new commits reset it." : ". New commits reset it."}">${STATUSES.map(([v, l]) => `<option value="${v}" ${cur === v ? "selected" : ""}>${l}</option>`).join("")}</select>`; };
+  return `<select class="status s-${cur || "todo"}" data-status="${n}" ${savingStatuses.has(n) ? "disabled" : ""} aria-label="Your status for #${n}" title="What you've done with #${n}${LIVE ? ". Saved to the ledger; new commits reset it." : ". New commits reset it."}">${STATUSES.map(([v, l]) => `<option value="${v}" ${cur === v ? "selected" : ""}>${l}</option>`).join("")}</select>`; };
+const statusPills = n => `<div class="status-pills" role="group" aria-label="Your status for #${n}" aria-busy="${savingStatuses.has(n)}">${STATUSES.map(([v, l]) => `<button class="status-pill s-${v || "todo"}" data-set-status="${n}" value="${v}" aria-pressed="${statusOf(n) === v}" aria-disabled="${savingStatuses.has(n)}">${l}</button>`).join("")}</div>`;
+async function setStatus(n, value){
+  if (savingStatuses.has(n)) return;
+  const status = value || null;
+  if (LIVE) {
+    savingStatuses.add(n); render();
+    try { DATA.ledger = await api(`/api/ledger/${n}`, {status}); loadProgress(); }
+    catch (err) { toast(`Couldn't save your status: ${err.message}`); }
+    finally { savingStatuses.delete(n); render(); }
+  } else {
+    const g = progress[n] ||= {};
+    Object.assign(g, {status, understood: UNDERSTOOD.includes(status), reviewed: REVIEWED.includes(status), head: byNum[n].head});
+    save(); render();
+  }
+}
 function prRow(n){
   const p = byNum[n]; if (!p || !visible(p)) return "";
   const g = progress[n] || {}; const st = stale(n);
@@ -423,11 +452,12 @@ function renderPlan(){
 let sortKey = "priority", sortDir = -1;
 function renderTable(){
   const cols = [["number","#"],["title","Title"],["author","Author"],["author_kind","Who"],["lane","Lane"],["ci","CI"],["age_days","Age"],["idle_days","Idle"],["churn","±"],["changed_files","Files"],["primary","Primary"],["flags","Signals"],["minutes","Est"],["priority","Prio"]];
+  const numeric = ["number", "age_days", "idle_days", "churn", "changed_files", "minutes", "priority"];
   // CI sorts by urgency, not alphabetically: ascending puts required failures first.
   const val = (p,k) => k === "churn" ? lines(p) : k === "flags" ? p.flags.length + p.smells.length : k === "ci" ? ciRank(p) : p[k];
   const rows = DATA.prs.filter(visible).sort((a,b) => { const x = val(a,sortKey), y = val(b,sortKey); return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
-  $("v-table").innerHTML = `<table><thead><tr>${cols.map(([k,l]) => `<th data-sort="${k}">${l}${sortKey===k?(sortDir>0?" ▲":" ▼"):""}</th>`).join("")}</tr></thead><tbody>
-  ${rows.map(p => `<tr><td><a href="${p.url}" target="_blank" rel="noopener">${p.number}</a></td><td style="cursor:pointer" data-open="${p.number}">${esc(p.title)}${sessDot(p)}${scoreBadge(p)}</td><td>@${esc(p.author)}</td><td>${whoBadge(p)}</td>
+  $("v-table").innerHTML = `<table><thead><tr>${cols.map(([k,l]) => `<th class="${numeric.includes(k) ? "num" : ""}" data-sort="${k}">${l}${sortKey===k?(sortDir>0?" ▲":" ▼"):""}</th>`).join("")}</tr></thead><tbody>
+  ${rows.map(p => `<tr><td class="num"><a href="${p.url}" target="_blank" rel="noopener">${p.number}</a></td><td style="cursor:pointer" data-open="${p.number}">${esc(p.title)}${sessDot(p)}${scoreBadge(p)}</td><td>@${esc(p.author)}</td><td>${whoBadge(p)}</td>
     <td><span class="pill" style="background:${laneColor(p.lane)}">${LANES[p.lane]}</span></td><td>${ciBadge(p)} <span class="muted">${CI[ciState(p)].label}</span></td><td class="num">${Math.round(p.age_days)}d</td><td class="num">${Math.round(p.idle_days)}d</td>
     <td class="num"><span class="add">+${p.additions}</span> <span class="del">-${p.deletions}</span></td><td class="num">${p.changed_files}</td><td>${esc(comps[p.primary].label)}</td>
     <td>${flagsHtml(p, ["blocker","you","risk","responsibility","convention","author"])}</td><td class="num">${p.minutes}m</td><td class="num">${p.priority}</td></tr>`).join("")}</tbody></table>`;
@@ -532,6 +562,9 @@ function renderDrawer({resetScroll = false, follow = false} = {}){
   const scroll = resetScroll || !body ? 0 : body.scrollTop;
   const active = document.activeElement?.dataset?.draft;
   const caret = active ? document.activeElement.selectionStart : null;
+  const activeStatus = document.activeElement?.dataset?.setStatus === String(n) ? document.activeElement.value : null;
+  const menu = body?.querySelector(".action-menu"), menuOpen = menu?.open;
+  const menuFocus = menu?.contains(document.activeElement) ? [...menu.querySelectorAll("summary,button")].indexOf(document.activeElement) : -1;
   const tabs = [["overview", "Overview"], ["study", "Study"], ["brief", "Brief"]];
   $("dinner").innerHTML = `<div class="dhead"><span class="close" id="close" title="Close (Esc)">✕</span>
       <div><span class="pill" style="background:${laneColor(p.lane)}">${LANES[p.lane]}</span> ${p.labels.map(l => `<span class="flag">${esc(l)}</span>`).join("")}</div>
@@ -542,7 +575,13 @@ function renderDrawer({resetScroll = false, follow = false} = {}){
     </div><div class="dbody">${state.dtab === "study" ? studyTab(n) : state.dtab === "brief" ? briefTab(n) : overviewTab(n)}</div>`;
   document.querySelectorAll("#drawer [data-draft]").forEach(el => { el.value = state.drafts[`${n}:${el.dataset.draft}`] || ""; });
   if (active) { const el = document.querySelector(`#drawer [data-draft="${CSS.escape(active)}"]`); if (el) { el.focus(); if (caret != null) el.setSelectionRange(caret, caret); } }
+  if (activeStatus !== null) document.querySelector(`#drawer [data-set-status="${n}"][value="${CSS.escape(activeStatus)}"]`)?.focus({preventScroll: true});
   const fresh = drawerBody();
+  const freshMenu = fresh.querySelector(".action-menu");
+  if (freshMenu && !resetScroll) {
+    freshMenu.open = !!menuOpen;
+    if (menuFocus >= 0) freshMenu.querySelectorAll("summary,button")[menuFocus]?.focus({preventScroll: true});
+  }
   fresh.scrollTop = toEnd ? fresh.scrollHeight : scroll;
 }
 function ciSection(p){
@@ -565,14 +604,15 @@ function overviewTab(n){
   const related = (p.related || []).map(r => byNum[r] ? chip(byNum[r]) : "").join("");
   const rules = p.rules.map(r => { const ins = DATA.instructions.find(i => i.name === r); return `<a href="${ins?.url}" target="_blank" rel="noopener">${esc(r)}</a>`; }).join(" · ");
   const s = p.session;
-  return `<div class="actions">
+  return `<div class="actions review-actions">
       ${reviewButton(n, "btn primary").replace(/>(review|resume)</, (m, w) => `>${w === "resume" ? "Resume" : "Start"} deep review<`)}
       ${LIVE ? `<button class="btn" data-dtab="study" title="Predict, get quizzed, teach back; everything goes in this PR's study log">Study</button>` : ""}
       <a class="btn" href="${vscodeUrl(n)}" title="${byNum[n].sessions?.some(s => s.editor_url) ? "Open this PR's latest agent session in VS Code" : "Open a VS Code agent session with the prompt filled in; it'll be linked to this PR"}">Open in VS Code</a>
-      <button class="btn" data-deep="${n}">Copy prompt</button>
-      <button class="btn" data-copy="readthrough worktree ${n}">Copy worktree cmd</button></div>
+      <details class="action-menu"><summary class="btn icon" aria-label="More review actions" title="More review actions"><span aria-hidden="true">&#8943;</span></summary>
+        <div class="action-items"><button data-deep="${n}">Copy prompt</button>
+        <button data-copy="readthrough worktree ${n}">Copy worktree cmd</button></div></details></div>
     ${sessionList(n)}
-    <div class="actions"><span class="muted">Your status</span> ${statusSelect(n)}</div>
+    <h4>Your status</h4>${statusPills(n)}
     <h4>Signals</h4>${p.flags.map(f => `<span class="flag ${f.kind}" title="${esc(f.id + ": " + ruleTip(f.id))}">${ruleIcon(f.id)}${esc(f.msg)}</span>`).join(" ") || '<span class="muted">none</span>'}
     ${ciSection(p)}
     ${smells ? `<h4>Line heuristics (verify, not verdicts)</h4>${smells}` : ""}
@@ -787,7 +827,12 @@ function render(){
   if (state.sel) renderDrawer();
 }
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-tab],[data-lane],[data-author],[data-ci],[data-clear],[data-open],[data-deep],[data-copy],[data-sort],[data-review],[data-refresh],[data-dtab],[data-ask],[data-study-add],[data-skip-predict],[data-pin],.chip,.brick,#close,#fit,#theme");
+  const menu = document.querySelector(".action-menu[open]");
+  if (menu && (!menu.contains(e.target) || e.target.closest(".action-items button"))) {
+    menu.open = false;
+    if (menu.contains(e.target)) menu.querySelector("summary").focus();
+  }
+  const t = e.target.closest("[data-tab],[data-lane],[data-author],[data-ci],[data-clear],[data-open],[data-deep],[data-copy],[data-sort],[data-review],[data-refresh],[data-dtab],[data-ask],[data-study-add],[data-skip-predict],[data-pin],[data-set-status],[data-comp],.chip,#close,#fit,#theme");
   if (!t) return;
   if (t.id === "close") return closeDrawer();
   if (t.id === "theme") { themePref = THEMES[(THEMES.indexOf(themePref) + 1) % THEMES.length]; localStorage.setItem("readthrough:theme", themePref); return applyTheme(); }
@@ -804,6 +849,7 @@ document.addEventListener("click", e => {
   if (t.dataset.author) return pick("authors", t.dataset.author, e);
   if (t.dataset.ci) return pick("cis", t.dataset.ci, e);
   if (t.hasAttribute("data-clear")) { for (const [g, labels] of Object.entries(GROUPS)) Object.keys(labels).forEach(k => state[g].add(k)); return render(); }
+  if (t.dataset.setStatus) return setStatus(+t.dataset.setStatus, t.value);
   if (t.dataset.deep) return copy(deepPrompt(t.dataset.deep), "Prompt copied. Paste it into any agent chat (Copilot, Claude Code, VS Code)");
   if (t.dataset.copy) return copy(t.dataset.copy);
   if (t.dataset.sort) { sortDir = sortKey === t.dataset.sort ? -sortDir : (t.dataset.sort === "ci" ? 1 : -1); sortKey = t.dataset.sort; return render(); }
@@ -817,11 +863,7 @@ document.addEventListener("change", e => {
   if (t.id === "srcOnly") { state.srcOnly = t.checked; return render(); }
   if (t.id === "overlapOnly") { state.overlapOnly = t.checked; return render(); }
   if (t.id === "greenFirst") { state.greenFirst = t.checked; localStorage.setItem("readthrough:green-first", t.checked ? "1" : "0"); return render(); }
-  if (!t.dataset.status) return;
-  const n = t.dataset.status, status = t.value || null, g = progress[n] ||= {};
-  Object.assign(g, {status, understood: UNDERSTOOD.includes(status), reviewed: REVIEWED.includes(status), head: byNum[n].head});
-  if (LIVE) api(`/api/ledger/${n}`, {status}).then(entries => { DATA.ledger = entries; loadProgress(); render(); }).catch(err => toast(err.message));
-  save(); render();
+  if (t.dataset.status) setStatus(+t.dataset.status, t.value);
 });
 document.addEventListener("mouseover", e => {
   const c = e.target.closest(".chip[data-pr]"), map = $("v-map");
@@ -830,7 +872,12 @@ document.addEventListener("mouseover", e => {
   if (c && map.contains(c)) map.querySelectorAll(`.chip[data-pr="${c.dataset.pr}"]`).forEach(x => x.classList.add("hl"));
 });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") closeDrawer();
+  if (e.key === "Escape") {
+    const menu = document.querySelector(".action-menu[open]");
+    if (menu) { menu.open = false; menu.querySelector("summary").focus(); return; }
+    closeDrawer();
+  }
+  if (e.target.matches(".brick") && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); e.target.click(); return; }
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.dataset?.draft && state.sel) {
     const d = e.target.dataset.draft;
     if (d.startsWith("answer:")) studyAsk(state.sel, "answer", d.slice(7));
