@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/spencrr/readthrough/security/advisories/new
+    about: Privately, through GitHub's vulnerability reporting. See SECURITY.md for what the tool trusts.

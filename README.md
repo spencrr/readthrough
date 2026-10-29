@@ -87,4 +87,4 @@ git config core.hooksPath .githooks      # once: run the checks before every com
 uv run python scripts/check.py           # lint, format, types, and tests with the coverage floor
 ```
 
-The same gate runs in CI on Linux, macOS, and Windows for every supported Python. The browser tests use an installed Edge or Chrome and are skipped without one.
+The same gate runs in CI on Linux, macOS, and Windows for every supported Python. The browser tests use an installed Edge or Chrome and are skipped without one. See [SECURITY.md](SECURITY.md) for what the tool trusts and how to report a vulnerability.

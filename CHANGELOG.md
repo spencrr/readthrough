@@ -72,6 +72,8 @@
   entries while you're there.
 - `scripts/screenshots.py` takes the documentation screenshots from a repo you've built, through the live
   server and a headless browser, as WebP. The ones in `docs/` are of microsoft/vscode.
+- `SECURITY.md` says what the tool trusts and doesn't (the forge's text, a repo's own profile, the local
+  server, credentials, model runtimes, `readthrough://` links) and how to report a vulnerability privately.
 
 ### Changed
 
