@@ -41,10 +41,21 @@ def new_id() -> str:
 
 
 class ContextFilter(logging.Filter):
+    """Adds the repo and build context to every record, and strips every secret this process has seen from it.
+
+    Redaction here, on the way to a handler, means no call site has to remember it: a token a program echoed into
+    an error message never reaches readthrough.log, the console, or a ``doctor --bundle``.
+    """
+
     def filter(self, record: logging.LogRecord) -> bool:
         repo, build = repo_var.get(), build_var.get()
         record.repo, record.build = repo, build
         record.ctx = f"[{repo}{' ' + build if build else ''}] " if repo else ""
+        from readthrough.process import redact  # process logs through this module, so the import waits
+
+        record.msg, record.args = redact(record.getMessage()), ()
+        if record.exc_info and record.exc_text is None and record.exc_info[1] is not None:
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
         return True
 
 

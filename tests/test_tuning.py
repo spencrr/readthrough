@@ -140,6 +140,23 @@ def test_log_lines_carry_repo_and_build_even_in_worker_threads(tmp_path: Path, f
     assert lines[0][:4].isdigit() and " INFO " in lines[0]
 
 
+def test_every_log_line_is_redacted_whatever_the_call_site_did(tmp_path: Path, fresh_logging):
+    """A program that echoes a token into an error must not get it into the log: redaction happens on the way to
+    the handlers, not in each `log.*` call."""
+    from readthrough.process import Secret, remember
+
+    remember(Secret("glpat-verysecret"))
+    log, path = _logger(tmp_path)
+    log.warning("glab said: Token: %s", "glpat-verysecret")
+    try:
+        int("HTTP 401 for token glpat-verysecret")
+    except ValueError:
+        log.exception("refused")
+    text = path.read_text(encoding="utf-8")
+    assert "glpat-verysecret" not in text
+    assert "Token: ***" in text and "token ***" in text and "ValueError" in text
+
+
 def test_json_logs_are_one_object_per_line(tmp_path: Path, fresh_logging):
     log, path = _logger(tmp_path, "json")
     with logs.context("o/r", "abcd"):
