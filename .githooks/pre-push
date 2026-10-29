@@ -1,0 +1,12 @@
+#!/bin/sh
+# Only main, release/*, and release tags leave a clone. Local branches (archives, drafts, agents' checkpoints)
+# stay local, whatever refspec a push names.
+# Enable once per clone:  git config core.hooksPath .githooks
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/release/*|refs/tags/v*) ;;
+    *) echo "pre-push: refusing $local_ref -> $remote_ref; only main, release/*, and v* tags are published" >&2; status=1 ;;
+  esac
+done
+exit $status

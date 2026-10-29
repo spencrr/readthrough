@@ -4,7 +4,7 @@ How the code handles failure, where settings live, and how to check a change bef
 
 ## Checking a change
 
-The same gate runs on your machine and in CI (`.github/workflows/ci.yml`: lint and types on Linux, tests on Linux, macOS, and Windows for every supported Python, then a build that installs the wheel into a clean environment):
+The same gate runs on your machine and in CI. `.github/workflows/test.yml` is the gate as a reusable workflow (lint and types on Linux, tests on Linux, macOS, and Windows for every supported Python, then a build that installs the wheel into a clean environment and uploads it as the `dist` artifact); `ci.yml` calls it on every push and PR and adds `gate`, the one job the branch ruleset requires, which is green only when everything in it was. `zizmor.yml` lints the workflows themselves. The browser tests fail on CI if the runner has no Chrome or Edge, where locally they would skip:
 
 ```sh
 uv run python scripts/check.py          # lint, format, types, tests with the coverage floor
@@ -148,4 +148,4 @@ A terminal launcher is a pure function from a `Command` to a `Spawn`; only the W
 
 1. Bump `version` in `pyproject.toml`. `readthrough.__version__` reads it from the installed package.
 2. Add a section to `CHANGELOG.md`.
-3. Run `uv run python scripts/check.py`, then commit and tag `vX.Y.Z`. CI's build job uploads the sdist and wheel for the tag.
+3. Run `uv run python scripts/check.py`, then commit and tag `vX.Y.Z`. Every CI run's build job uploads the sdist and wheel as the `dist` artifact.

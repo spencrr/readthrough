@@ -74,6 +74,12 @@
   server and a headless browser, as WebP. The ones in `docs/` are of microsoft/vscode.
 - `SECURITY.md` says what the tool trusts and doesn't (the forge's text, a repo's own profile, the local
   server, credentials, model runtimes, `readthrough://` links) and how to report a vulnerability privately.
+- The workflows are hardened: every action is pinned to a commit SHA, checkouts keep no credentials, each job
+  grants only the permissions it names, the build job uses no package cache, and `zizmor` lints the workflows
+  on every push. The gate is a reusable workflow (`test.yml`) that `ci.yml` calls and sums up in one `gate`
+  check; the browser tests fail on CI instead of skipping when the runner has no browser. Dependabot keeps the
+  Python dependencies and the action pins fresh, a week after each release. A pre-push hook in `.githooks`
+  lets only `main`, `release/*`, and `v*` tags leave a clone.
 
 ### Changed
 

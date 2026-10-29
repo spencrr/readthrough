@@ -13,12 +13,15 @@ uv run python scripts/check.py --quick   # skip the browser tests (what the pre-
 uv run pytest tests/test_engine.py -q    # one file; -k NAME for one test; -m e2e / -m browser for those groups
 uv run readthrough --help                # the CLI from the checkout
 uv build                                 # sdist and wheel into dist/
-git config core.hooksPath .githooks      # once per clone: run --quick before every commit
+uvx zizmor .github/workflows             # lint the workflows; a required check, so keep it clean
+git config core.hooksPath .githooks      # once per clone: --quick before every commit; push only main, release/*, v* tags
 uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw docs/img/*.webp from a built repo
 ```
 
-CI runs the same gate on Linux, macOS, and Windows for every supported Python. Nothing passes locally that
-would fail there except for the browser tests, which skip when no Chromium-family browser is installed.
+CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every
+supported Python, and `gate` is the one check the branch ruleset requires. Nothing passes locally that would
+fail there except for the browser tests, which skip when no Chromium-family browser is installed; on CI they
+fail instead, since the hosted runners have one.
 
 ## Conventions that aren't obvious
 
@@ -91,4 +94,10 @@ would fail there except for the browser tests, which skip when no Chromium-famil
   `tests/fixtures/forges/` (`test_forges.py`), `RecordingAssistant` (`test_engine.py`), the fake Copilot SDK in
   `test_assistants.py`. PRs are described GraphQL-shaped by `make_pr` and normalized by `make_pull`.
 - **Coverage is a ratchet.** `fail_under` in `pyproject.toml` only goes up.
+- **Workflows are hardened the same way everywhere.** Every action is pinned to a full commit SHA with its
+  version in a comment (Dependabot bumps both); every checkout has `persist-credentials: false`; a workflow
+  starts from `permissions: {}` and each job grants what it needs with a comment saying why; a job whose output
+  is published or uploaded as an artifact uses no package cache; in-repo workflows are called as
+  `$/.github/workflows/<file>` so they count as pinned. `.github/zizmor.yml` holds the policy and `zizmor` checks
+  it on every push.
 - **Commits** are one logical change each, with a message a person would write, and no trailers.

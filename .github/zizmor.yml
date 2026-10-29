@@ -1,0 +1,7 @@
+# Every action is pinned to a full commit SHA (with its version in a comment, which Dependabot keeps in step).
+# Written down so the intent survives a change in zizmor's default.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin

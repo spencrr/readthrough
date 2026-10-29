@@ -5,6 +5,7 @@ Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't a
 
 import datetime as dt
 import json
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,6 +36,9 @@ def browser():
             except sync_api.Error:
                 continue
         if launched is None:
+            # The hosted runners ship Chrome and Edge; a silent skip there would hide a regression.
+            if os.environ.get("CI"):
+                pytest.fail("no Chromium-family browser on this runner; the browser tests must run on CI")
             pytest.skip("no Chromium-family browser available")
         yield launched
         launched.close()
