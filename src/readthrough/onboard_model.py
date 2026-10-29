@@ -20,6 +20,7 @@ from typing import Any
 
 from readthrough import runtimes
 from readthrough.config import Config
+from readthrough.files import inside
 from readthrough.forges import Forge
 from readthrough.onboard import RepoFacts, author_table, check_profile_text, draft_profile, measure, report
 from readthrough.process import run
@@ -207,7 +208,12 @@ class _Drafter:
         if path not in self.tree:
             return f"{path} isn't a file in the repo. Use list_directory to find paths."
         if self.clone:
-            text = (self.clone / path).read_text(encoding="utf-8", errors="replace")
+            # Being in the tree is not enough: a committed symlink can point anywhere on this machine.
+            try:
+                target = inside(self.clone, path)
+            except ValueError:
+                return f"{path} points outside the clone and can't be read."
+            text = target.read_text(encoding="utf-8", errors="replace")
         elif self.forge is not None:
             text = self.forge.read_file(path) or ""
         else:

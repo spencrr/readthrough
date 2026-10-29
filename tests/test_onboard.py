@@ -208,6 +208,14 @@ def test_model_drafter_reads_only_repo_files(facts, tmp_path: Path):
     )
     assert "    2  b" in drafter._read("src/app/api/routes.py", 1, 10)
     assert "isn't a file in the repo" in drafter._read("../secret.txt", 1, 10)
+    # A committed symlink is in the tree, and still can't lead the read outside the clone.
+    try:
+        (clone / "docs/index.md").parent.mkdir(exist_ok=True)
+        (clone / "docs/index.md").symlink_to(tmp_path / "secret.txt")
+    except OSError:  # Windows without the privilege: the guard is exercised on the platforms that can link
+        pass
+    else:
+        assert drafter._read("docs/index.md", 1, 10) == "docs/index.md points outside the clone and can't be read."
     assert "src/  files=6  recent_churn=630" in drafter._dirs("", 1)
     assert "src/app/core/  files=2" in drafter._dirs("src/app", 1)
 

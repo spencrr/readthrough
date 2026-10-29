@@ -34,6 +34,7 @@ from typing import Any, Protocol
 
 from readthrough import review, runtimes, study, usage
 from readthrough.config import AUTO, Config
+from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
 from readthrough.registry import Registry
@@ -647,9 +648,10 @@ class ModelAssistant:
 
 def _safe_rel(worktree: Path, rel: str) -> str:
     """Resolve a model-supplied path and refuse anything outside the worktree."""
-    target = (worktree / rel).resolve()
-    if not target.is_relative_to(worktree.resolve()):
-        raise ValueError(f"{rel} is outside the PR checkout")
+    try:
+        target = inside(worktree, rel)
+    except ValueError:
+        raise ValueError(f"{rel} is outside the PR checkout") from None
     return target.relative_to(worktree.resolve()).as_posix()
 
 

@@ -14,6 +14,19 @@ LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_POLL_SECONDS = 0.02
 
 
+def inside(root: Path, rel: str) -> Path:
+    """The file ``rel`` names under ``root``, once symlinks and ``..`` are followed; refused if it leads outside.
+
+    For paths a model asks for: a repository can commit a symlink, and the name being in the tree says nothing
+    about where it points.
+    """
+    base = root.resolve()
+    target = (root / rel).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(f"{rel} is outside {root}")
+    return target
+
+
 @contextlib.contextmanager
 def locked(path: Path, *, timeout: float = LOCK_TIMEOUT_SECONDS) -> Generator[None]:
     """Hold an exclusive lock on ``path`` across threads and processes while a read-modify-write runs.
