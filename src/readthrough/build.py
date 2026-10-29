@@ -552,8 +552,17 @@ def render_setup(live: dict[str, Any], nonce: str) -> str:
     return (
         page.replace("__NONCE__", nonce)
         .replace("/*__READTHROUGH_ICONS__*/", icons.replace("</script", "<\\/script"))
-        .replace("/*__READTHROUGH_LIVE__*/null", json.dumps(live).replace("</", "<\\/"))
+        .replace("/*__READTHROUGH_LIVE__*/null", inline_json(live))
     )
+
+
+def inline_json(value: Any) -> str:
+    r"""JSON that can sit inside a <script> element whatever strings it carries.
+
+    ``<`` becomes ``\u003c``, which JSON reads as the same character, so neither ``</script>`` nor ``<!--`` (which
+    puts the HTML tokenizer into a state where the real ``</script>`` no longer counts) can appear in the page.
+    """
+    return json.dumps(value).replace("<", "\\u003c")
 
 
 def render_html(payload: dict[str, Any], *, live: dict[str, Any] | None = None, nonce: str | None = None) -> str:
@@ -563,13 +572,12 @@ def render_html(payload: dict[str, Any], *, live: dict[str, Any] | None = None, 
     descriptions are third-party HTML, so even if something slipped past sanitizing it could not run.
     """
     nonce = nonce or secrets.token_urlsafe(16)
-    data = json.dumps(payload).replace("</", "<\\/")
     return (
         page_source("dashboard")
         .replace("__NONCE__", nonce)
         .replace("/*__READTHROUGH_VENDOR__*/", _vendor_js())
-        .replace("/*__READTHROUGH_LIVE__*/null", json.dumps(live).replace("</", "<\\/"))
-        .replace("/*__READTHROUGH_DATA__*/null", data)  # last, so nothing in the data is mistaken for a placeholder
+        .replace("/*__READTHROUGH_LIVE__*/null", inline_json(live))
+        .replace("/*__READTHROUGH_DATA__*/null", inline_json(payload))  # last: nothing in the data is a placeholder
     )
 
 
