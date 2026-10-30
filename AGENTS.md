@@ -20,8 +20,10 @@ uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw d
 
 CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python
 in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linter) are the two checks the branch
-ruleset requires. Nothing passes locally that would fail there except for the browser tests, which skip when no
-Chromium-family browser is installed; on CI they fail instead, since the hosted runners have one.
+ruleset requires. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
+stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
+`uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
+installed; on CI they fail instead, since the hosted runners have one.
 
 ## Conventions that aren't obvious
 

@@ -4,7 +4,7 @@ How the code handles failure, where settings live, and how to check a change bef
 
 ## Checking a change
 
-The same gate runs on your machine and in CI. `.github/workflows/test.yml` is the gate as a reusable workflow (lint and types on Linux, tests on Linux, macOS, and Windows for every supported Python, then a build that installs the wheel into a clean environment and uploads it as the `dist` artifact); `ci.yml` calls it on every push and PR and adds `gate`, the one job the branch ruleset requires, which is green only when everything in it was. `zizmor.yml` lints the workflows themselves. The browser tests fail on CI if the runner has no Chrome or Edge, where locally they would skip:
+The same gate runs on your machine and in CI. `.github/workflows/test.yml` is the gate as a reusable workflow (lint and types on Linux, tests on Linux, macOS, and Windows for every supported Python, then a build that installs the wheel into a clean environment and uploads it as the `dist` artifact); `ci.yml` calls it on every push and PR and adds `gate`, which is green only when everything in it was. `zizmor.yml` lints the workflows themselves and fails on any finding. `gate` and `zizmor` are the two checks the branch ruleset requires. The browser tests fail on CI if the runner has no Chrome or Edge, where locally they would skip:
 
 ```sh
 uv run python scripts/check.py          # lint, format, types, tests with the coverage floor
