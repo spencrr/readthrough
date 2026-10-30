@@ -17,7 +17,7 @@ The map is only as good as readthrough's idea of the architecture, so before it 
 You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and, for GitHub repos, the GitHub CLI signed in (`gh auth login`). For deep reviews, the [Copilot CLI](https://github.com/github/copilot-cli) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) signed in; for the Study tab's model assistant, the `[study]` extra (GitHub Copilot) or an API key for Claude or OpenAI.
 
 ```sh
-uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"   # drop [study] to skip the Copilot SDK
+uv tool install "readthrough[study]"           # from PyPI; drop [study] to skip the Copilot SDK
 
 readthrough onboard microsoft/vscode --accept  # map the repo's architecture (edit the draft first if you like)
 readthrough build --open                       # fetch the PRs and open the dashboard

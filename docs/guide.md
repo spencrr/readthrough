@@ -9,8 +9,10 @@ There are two ways to run it. The **live dashboard** is a small local server tha
 Install it as a uv tool so `readthrough` is on your PATH. `[study]` adds the Copilot SDK, one of the model runtimes the study assistant and model-assisted onboarding can run on; the Anthropic and OpenAI runtimes need nothing installed, only an API key (see [Studying a PR](#studying-a-pr)). Leave it off if you don't want a model at all: the dashboard, briefs, deep reviews, and the rules-based study assistant all work on the standard library alone.
 
 ```sh
-uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"
+uv tool install "readthrough[study]"
 ```
+
+Releases on PyPI are built by the repository's release workflow from a tagged commit, with signed provenance; `gh attestation verify <downloaded file> --owner spencrr` checks one. For the latest `main` instead, install from the repository: `uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"`.
 
 To work on the tool itself, clone it and install it editable, so edits take effect right away:
 

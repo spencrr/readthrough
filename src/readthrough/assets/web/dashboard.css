@@ -133,7 +133,7 @@ body.drawer-open #drawer{transform:none}
 #grip{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:11}
 #grip:hover,#grip.on{background:color-mix(in srgb,var(--acc) 35%,transparent)}
 .dhead{padding:14px 18px 0;border-bottom:1px solid var(--line)}
-.dbody{overflow:auto;padding:4px 18px 24px;flex:1}
+.dbody{overflow:auto;padding:4px 18px 24px;flex:1;container-type:inline-size}
 .dtabs{display:flex;gap:16px;margin-top:10px}.dtab{padding:6px 2px;cursor:pointer;color:var(--mut);border-bottom:2px solid transparent}.dtab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:500}
 #drawer h2{font-size:16px;margin:4px 0 6px;padding-right:24px}
 #drawer h4{margin:18px 0 6px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
@@ -147,6 +147,8 @@ body.drawer-open #drawer{transform:none}
 .hint{font-size:12.5px;color:var(--mut);margin-top:4px}
 .actions{margin:10px 0 2px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .review-actions{gap:4px}
+/* In a narrow panel the buttons tighten before they wrap; system fonts on Linux run wider than Segoe UI. */
+@container (max-width:460px){.review-actions .btn{padding-left:7px;padding-right:7px;font-size:12.5px}.review-actions .action-menu summary{min-width:26px}}
 .action-menu{position:relative;margin-left:auto}
 .action-menu summary{list-style:none;font-size:18px;line-height:1;min-width:30px;justify-content:center}
 .action-menu summary::-webkit-details-marker{display:none}
