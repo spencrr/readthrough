@@ -650,6 +650,11 @@ def _install(settings: Settings, args: argparse.Namespace, what: str, *, agent_n
         command = system.install_server_task(home=home)
         _say(f"'{system.SERVER_TASK_NAME}' starts at logon and is starting now: {command}")
         _say(f"Dashboard: {base_url(settings.port)}")
+    elif what == "canvas":
+        dest = system.install_canvas(Path(args.dest) if args.dest else None)
+        _say(f"Installed the readthrough canvas (experimental) to {dest}")
+        _say("Copilot hosts that render canvases (VS Code's Agents window) load it when they next reload their "
+             "extensions. It shows the live dashboard, so keep `readthrough serve` running (`readthrough install server`).")  # fmt: skip
 
 
 def _skill_dirs(settings: Settings, args: argparse.Namespace) -> list[Path]:
@@ -672,6 +677,12 @@ def cmd_uninstall(settings: Settings, args: argparse.Namespace) -> int:
         removed = system.uninstall_protocol()
     elif args.what == "server":
         removed = system.uninstall_schedule(system.SERVER_TASK_NAME)
+    elif args.what == "canvas":
+        try:
+            removed = system.uninstall_canvas(Path(args.dest) if args.dest else None)
+        except OSError as exc:
+            log.error("Couldn't remove %s", exc)
+            return 1
     else:
         removed = system.uninstall_schedule()
     _say("removed" if removed else "nothing to remove")
@@ -1046,15 +1057,18 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     for name, func in (("install", cmd_install), ("uninstall", cmd_uninstall)):
         p = sub.add_parser(
             name,
-            help=f"{name} the review skill, the readthrough:// link handler, the daily refresh, or the live server"
+            help=f"{name} the review skill, the readthrough:// link handler, the daily refresh, the live server, "
+            "or the Copilot canvas (the dashboard beside an agent session; experimental)"
             + ("; with nothing named, offer whatever isn't set up yet" if name == "install" else ""),
         )
         p.add_argument(
-            "what", nargs="?" if name == "install" else None, choices=("skill", "protocol", "schedule", "server")
+            "what",
+            nargs="?" if name == "install" else None,
+            choices=("skill", "protocol", "schedule", "server", "canvas"),
         )
         p.add_argument("--agent", choices=agents.AGENTS.names(),
                        help="skill: only this agent's skill directory (default: every installed agent's)")  # fmt: skip
-        p.add_argument("--dest", help="skill: an explicit directory instead")
+        p.add_argument("--dest", help="skill, canvas: an explicit directory instead")
         if name == "install":
             p.add_argument("--all", action="store_true",
                            help="with nothing named: set up every recommended piece without asking")  # fmt: skip

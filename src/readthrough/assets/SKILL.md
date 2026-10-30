@@ -36,6 +36,8 @@ You may have been launched by the dashboard's review button. If so, this session
 
 In the commands below, `R` stands for `--repo OWNER/NAME`.
 
+**If your host renders canvases** (you have `open_canvas` and `invoke_canvas_action` tools and a `readthrough` canvas is listed), show the dashboard beside this session instead of describing it. In Phase 0, `open_canvas` with a stable `instanceId` and `{"repo": "OWNER/NAME"}`; if it says the live dashboard isn't running, tell the user to run `readthrough serve` and carry on without it. Then steer it with the `show` action, one PR at a time: in Phase 1 `{"pr": N, "panel": "none"}`, which places the PR on the architecture map and reveals nothing else; from Phase 2 `"panel": "brief"` for the reading order and contracts; in Phase 4 `"panel": "study"` so the user sees the evidence you both built. The canvas reads; everything you record still goes through the CLI commands below, which the user can see. If your host has canvas tools but lists no `readthrough` canvas, say once, in one line, that `readthrough install canvas` would put the dashboard beside this session from the next session on, then carry on. Without canvas tools, skip this paragraph: nothing else changes.
+
 ### Phase 0: Prepare (silent)
 
 1. `readthrough R profile show`. This is the repo's architecture profile: its layers and components, where its component contracts live, its review guidance, and its test command. Follow the review guidance throughout.

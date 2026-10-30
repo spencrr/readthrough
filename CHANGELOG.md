@@ -6,6 +6,20 @@
 
 ### Added
 
+- The dashboard beside an agent session, as a Copilot canvas (experimental): `readthrough install canvas` adds
+  a small Copilot extension that shows the live dashboard next to the chat in VS Code's Agents window and lets
+  the agent point it at a PR: on the architecture map alone before the reviewer has predicted, then its brief,
+  overview, or study log. Beside a session the page hides the buttons that would start another review and shows
+  the study log without a second composer. The extension only runs the `readthrough` CLI, with the interpreter
+  that installed it; `doctor` reports a stale copy; `uninstall canvas` removes what was installed, and
+  `readthrough install` offers it wherever the Copilot CLI is.
+- `readthrough show N [--panel none|overview|study|brief]` points every open dashboard page (browser tabs and
+  canvases) at a PR, through a `focus` event the live server sends; `--client` addresses one page by the name it
+  gave on its event stream. The server records where it is in `serve.json` (port, instance, token) for programs
+  of the same user, and `/api/health` names its instance.
+- `#map?pr=N` is a deep link to a PR's panel, `panel=` picks its tab, and opening or closing the panel keeps the
+  URL current, so any panel can be bookmarked or handed on.
+- `readthrough repos --json`: the live server, the default repo, and each repo's slug and URL, for programs.
 - `CONTRIBUTING.md`, and a check on every pull request that its title and each of its commits follow
   Conventional Commits (`type(scope): description`). The grammar is `scripts/commit_messages.py`, which also
   checks a range locally; Dependabot's pull requests carry `build(deps)` and `ci(deps)` prefixes so they pass.
@@ -29,6 +43,8 @@
   the pre-push hook that kept other branches off the remote is gone.
 - `doctor` reports a missing morning nudge and, on platforms without the automation, the link handler and the
   logon task as optional rather than as problems: they are choices, and nothing is wrong without them.
+- `repo_url` percent-encodes the slug, so a repo whose name has spaces (an Azure DevOps project) gets a URL a
+  program can use.
 - The release pipeline marks a release as latest only when its version is the highest released, so a patch to
   an older line doesn't take the badge from a newer one; and when a GitHub release already exists for the tag, it
   is left alone only if it is in every respect (files, title, notes, flags) the one the run would have made, and

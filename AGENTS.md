@@ -92,8 +92,15 @@ installed; on CI they fail instead, since the hosted runners have one. A release
 - **What crosses between page and server is declared in `contract.py`** (the payload, the SSE events, the
   study API) and `test_contract.py` checks both sides: a build has exactly those shapes, the page reads nothing
   else. Events are notifications; a GET is the truth, and after any gap (`hello` with a new instance, `resync`,
-  a reconnect) the page re-fetches what it holds. Shared files (study logs, the ledger) are read and written
-  under `files.locked`, which also holds against another process.
+  a reconnect) the page re-fetches what it holds. The one exception is `focus`, a request to show a PR that a
+  missed delivery rightly loses. Shared files (study logs, the ledger) are read and written under
+  `files.locked`, which also holds against another process.
+- **Programs drive the server through the CLI, never the page's API.** `serve.json` in the home records the
+  running server (port, instance, token) for programs of the same user; `readthrough show` reads it to steer
+  open pages, and `repos --json` reports it. The Copilot canvas (`assets/extension/`, two ES modules the Copilot
+  runtime loads, installed by `install canvas`) is a client of the CLI alone: it runs the interpreter that
+  installed it with an argument list from a fixed directory, reads, steers, and writes nothing to the log or the
+  ledger; `test_extension.py` keeps its constants and flags in step with `contract.py` and `cli.py`.
 - **Lint is `ruff` with `select = ["ALL"]`** and an ignore list that states each reason in `pyproject.toml`.
   Suppress per file (with a reason) rather than per line where a whole file legitimately differs. Types are
   checked by `ty`, pinned exactly; bump it deliberately.
