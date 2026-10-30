@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "readthrough"
-version = "0.3.0"
+version = "0.4.0"
 description = "Lay a repo's open pull requests out on its architecture, then study each one before you review it."
 readme = "README.md"
 license = "MIT"
