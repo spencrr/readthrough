@@ -100,30 +100,31 @@ jobs:
         with:
           skip-existing: true # a re-run after a failure later in this job must not fail here
       # The publisher leaves its PEP 740 attestation files in dist/; the release carries only the distributions.
-      # A release that already exists is accepted only if it carries exactly the files this run built: anyone with
-      # write access can create a release for a tag, and the approval here must not turn theirs into ours.
+      # A release that already exists (a re-run after a late failure finds one) is left alone only if it is in
+      # every respect the one this step would have made: anyone with write access can create a release for a tag,
+      # and this run's artifacts are downloadable while it waits for approval, so files alone prove nothing.
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          if gh release view "$TAG" --json assets --jq '.assets[] | "\(.digest) \(.name)"' > existing.txt 2>/dev/null; then
-            for file in dist/*.whl dist/*.tar.gz; do
-              line="sha256:$(sha256sum "$file" | cut -d' ' -f1) $(basename "$file")"
-              if ! grep -qxF "$line" existing.txt; then
-                echo "::error::release $TAG already exists and its $(basename "$file") is not the one this run built"
-                exit 1
-              fi
-            done
-            if [ "$(wc -l < existing.txt)" -ne 2 ]; then
-              echo "::error::release $TAG already exists with assets this run didn't build"
-              exit 1
-            fi
-            echo "release $TAG already exists with exactly this run's files; leaving it as it is"
-            exit 0
-          fi
           # A patch for an older line, released from its release/* branch, must not become the latest release.
           newest=$({ echo "$TAG"; gh release list --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName'; } | sort -V | tail -n 1)
           if [ "$newest" = "$TAG" ]; then latest=true; else latest=false; fi
+          if gh release view "$TAG" --json name,body,isDraft,isPrerelease,assets > existing.json 2>/dev/null; then
+            fail() { echo "::error::release $TAG already exists and $1"; exit 1; }
+            jq -r '.assets[] | "\(.digest) \(.name)"' existing.json > existing.txt
+            for file in dist/*.whl dist/*.tar.gz; do
+              grep -qxF "sha256:$(sha256sum "$file" | cut -d' ' -f1) $(basename "$file")" existing.txt || fail "its $(basename "$file") is not the one this run built"
+            done
+            [ "$(wc -l < existing.txt)" -eq 2 ] || fail "it carries assets this run didn't build"
+            [ "$(jq -r .name existing.json)" = "$TAG" ] || fail "its title isn't the tag"
+            [ "$(jq -r .body existing.json)" = "$(cat notes.md)" ] || fail "its notes aren't the changelog section"
+            [ "$(jq -r '[.isDraft, .isPrerelease] | @tsv' existing.json)" = "$(printf 'false\tfalse')" ] || fail "it is a draft or a pre-release"
+            if [ "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$TAG" ]; then marked=true; else marked=false; fi
+            [ "$marked" = "$latest" ] || fail "it is marked latest differently from how this run would mark it"
+            echo "release $TAG already exists as this run would have made it; leaving it as it is"
+            exit 0
+          fi
           gh release create "$TAG" --verify-tag --latest="$latest" --title "$TAG" --notes-file notes.md dist/*.whl dist/*.tar.gz
