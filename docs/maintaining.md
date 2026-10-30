@@ -120,7 +120,7 @@ The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`,
 - Every script carries a per-render nonce, and the content security policy runs nothing else. Don't add inline event handlers (`onclick=`); use the delegated listeners.
 - PR descriptions and comments are third-party HTML. They go through DOMPurify, and `test_browser.py` checks that an `onerror` attribute doesn't survive.
 - Escape everything else you interpolate with `esc()`.
-- Third-party JavaScript is vendored under `assets/vendor/` with its license, and listed in `build.VENDOR_SCRIPTS`. The page makes no requests to other sites.
+- Third-party JavaScript is vendored under `assets/vendor/` with its license, and listed in `build.VENDOR_SCRIPTS`. The page itself makes no requests to other sites; the images in a PR's description are the one exception, and `SECURITY.md` says what that means.
 - Check both themes. New colors go in `theme.css` as tokens if both pages use them, otherwise at the top of the page's CSS.
 
 ### The contract with the server
@@ -146,18 +146,18 @@ A terminal launcher is a pure function from a `Command` to a `Spawn`; only the W
 
 ## Releasing
 
-A release is a `vX.Y.Z` tag on `main` (or on a `release/*` branch, for a patch to an older line). The tag starts `.github/workflows/release.yml`, which checks that the tagged commit is on one of those branches, that the tag is the version in `pyproject.toml`, and that `CHANGELOG.md` has a section for it; runs the whole gate again through `test.yml`; and then waits. Approving the `pypi` environment (Actions → the run → *Review deployments*) lets the last job run: it takes the wheel and sdist the gate built, attests their provenance, uploads them to PyPI through trusted publishing (no token anywhere), and creates the GitHub release with the changelog section as its notes. Nothing in that last job builds anything, and nothing starts it but a tag plus a click, so a leaked push credential can burn runner minutes but can't publish.
+A release is a `vX.Y.Z` tag on `main` (or on a `release/*` branch, for a patch to an older line). The tag starts `.github/workflows/release.yml`, which checks that the tagged commit is on one of those branches, that the tag is the version in `pyproject.toml`, and that `CHANGELOG.md` has a section for it; runs the whole gate again through `test.yml`; and then waits. Approving the `pypi` environment (Actions → the run → *Review deployments*) lets the last job run: it takes the wheel and sdist the gate built, attests their provenance, uploads them to PyPI through trusted publishing (no token anywhere), and creates the GitHub release with the changelog section as its notes. Nothing in that last job builds anything, and nothing starts it but a tag plus a click. Only an admin can create a `v*` tag or a `release/*` branch, and anyone else needs a reviewed pull request to land a commit on `main`, so a leaked push credential can burn runner minutes but can't publish to PyPI; a GitHub release someone else created for the tag ahead of the pipeline makes the publish job fail rather than pass, since it only leaves an existing release alone when it carries exactly the files it built.
 
 1. Bump `version` in `pyproject.toml` and run `uv lock`, so the lockfile names the new version (`UV_LOCKED` in CI refuses a stale one). `readthrough.__version__` reads it from the installed package.
 2. Add a `## X.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md`; the release notes are that section, up to the next heading.
 3. Run `uv run python scripts/check.py`, commit, and push `main`. Wait for CI.
-4. `git tag vX.Y.Z && git push origin vX.Y.Z`. Only a repository admin can create a `v*` tag, and once it exists it can't be moved or deleted.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`. Only a repository admin can create a `v*` tag, and once it exists it can't be moved or deleted. The same goes for `release/*` branches, and a non-admin lands a commit on `main` only through a pull request the admin has approved.
 5. Approve the deployment when the run reaches `publish`. Then check it from the outside, on a downloaded file rather than a local build:
 
 ```sh
 gh release verify vX.Y.Z                                    # the release is immutable and attested
 gh release verify-asset vX.Y.Z readthrough-X.Y.Z-py3-none-any.whl   # this file is the published asset
-gh attestation verify readthrough-X.Y.Z-py3-none-any.whl --owner spencrr   # built by release.yml at the tagged commit
+gh attestation verify readthrough-X.Y.Z-py3-none-any.whl -R spencrr/readthrough --signer-workflow spencrr/readthrough/.github/workflows/release.yml   # built by release.yml in this repo
 uv tool install readthrough==X.Y.Z && readthrough --version
 ```
 

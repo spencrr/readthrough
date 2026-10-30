@@ -12,7 +12,7 @@ Install it as a uv tool so `readthrough` is on your PATH. `[study]` adds the Cop
 uv tool install "readthrough[study]"
 ```
 
-Releases on PyPI are built by the repository's release workflow from a tagged commit, with signed provenance; `gh attestation verify <downloaded file> --owner spencrr` checks one. For the latest `main` instead, install from the repository: `uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"`.
+Releases on PyPI are built by the repository's release workflow from a tagged commit, with signed provenance; `gh attestation verify <downloaded file> -R spencrr/readthrough --signer-workflow spencrr/readthrough/.github/workflows/release.yml` checks one. For the latest `main` instead, install from the repository: `uv tool install "readthrough[study] @ git+https://github.com/spencrr/readthrough"`.
 
 To work on the tool itself, clone it and install it editable, so edits take effect right away:
 
