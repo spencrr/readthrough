@@ -825,13 +825,23 @@ function onStudyEvent(ev){
 }
 
 // ---- render + events
-const VIEWS = new Map([["map", renderMap], ["plan", renderPlan], ["overlap", renderOverlap], ["table", renderTable]]);
+// The tab comes from the URL, so it never picks a function by name: a switch names the four views, and anything
+// else is the map.
+function viewFor(tab){
+  switch (tab) {
+    case "map": return renderMap;
+    case "plan": return renderPlan;
+    case "overlap": return renderOverlap;
+    case "table": return renderTable;
+    default: return null;
+  }
+}
 function render(){
-  // The tab comes from the URL: anything that isn't a view of ours (a prototype member's name, say) is the map.
-  if (!VIEWS.has(state.tab)) state.tab = "map";
+  let view = viewFor(state.tab);
+  if (!view) { state.tab = "map"; view = renderMap; }
   header();
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + state.tab));
-  VIEWS.get(state.tab)();
+  view();
   if (state.sel) renderDrawer();
 }
 document.addEventListener("click", e => {
