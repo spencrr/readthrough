@@ -532,6 +532,10 @@ def test_onboarding_access_details_fold_without_losing_auth_transparency(page):
     assert details.get_attribute("open") is None
     details.locator("summary").focus()
     details.locator("summary").press("Enter")
+    expect(details).to_have_attribute("open", "")
+    # The toggle event that records the open state is dispatched asynchronously; wait for the record, not the
+    # attribute, before a re-render reads it.
+    page.wait_for_function("() => S.w && S.w.accessOpen === true")
     expect(details).to_contain_text("gh CLI")
     expect(details).to_contain_text("gh account you pick here")
     page.select_option("#w-forge", "ado")
