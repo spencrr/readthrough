@@ -4,7 +4,7 @@ Busy repos have fifty-plus open pull requests. I wanted two things from a queue 
 
 readthrough does both, for repos on GitHub, GitLab, Forgejo (Codeberg), or Azure DevOps. It pulls the open PRs (the hundred most recently active by default; `limit` raises it) and places each on the repo's architecture (its layers and components), marking which ones come from outside contributors and which have CI trouble. It packs the reviewable ones into hour-long sessions grouped by component, then gives each PR a study brief.
 
-From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before the agent shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade.
+From there you can go two ways. A button on each PR starts a deep-review session in a terminal, in the GitHub Copilot CLI or Claude Code, where you predict what the PR does, answer questions about it, explain it back, and list your concerns before the agent shows you its own. Or you study it right in the dashboard: an assistant quizzes you on the change one question at a time and keeps everything you got right and wrong in an append-only study log that becomes part of the brief. Given a model (GitHub Copilot through the Copilot SDK, or Claude or GPT through their own APIs, including Azure OpenAI), the assistant reads the code and grades your answers; without one, a rules-based assistant asks the questions the repo's profile already carries and never pretends to grade. In VS Code the two meet: the dashboard sits beside the deep-review session, steered by the agent, which puts the PR on the map before you predict and opens its brief after.
 
 ![The architecture map of microsoft/vscode, with each open PR placed on the component it changes most](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/map.webp)
 
@@ -21,7 +21,7 @@ uv tool install "readthrough[study]"           # from PyPI; drop [study] to skip
 
 readthrough onboard microsoft/vscode --accept  # map the repo's architecture (edit the draft first if you like)
 readthrough build --open                       # fetch the PRs and open the dashboard
-readthrough install                            # the rest, one question each: the agents' review skill, the live server, one-click links
+readthrough install                            # the rest, one question each: the agents' review skill, the VS Code canvas, the live server
 ```
 
 Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/forgejo`, `--forge gitlab gitlab-org/cli`, or `--forge ado organization/project/repository`. Those are read through the platform's REST API, with a token from its own CLI (`glab`, `az`) or an environment variable when there is one, and anonymously otherwise, which is enough for public repos.

@@ -1,4 +1,5 @@
 import json
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -346,20 +347,22 @@ def test_install_with_nothing_named_offers_what_is_missing(isolated, capsys, mon
     assert "Not set up yet:" in out and "skill (copilot)" in out and "protocol" in out and "install --all" in out
     assert calls == []
 
-    # A terminal: one question per piece (both agents count as installed here); the answers in order are yes,
-    # no, no, Enter (the default: yes), Enter (the nudge's default: no).
+    # A terminal: one question per piece (both agents count as installed here, and the Copilot home exists, so
+    # the canvas is offered); the answers in order are yes, no, yes, no, Enter (the default: yes), Enter (the
+    # nudge's default: no).
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    answers = iter(["y", "n", "n", "", ""])
+    answers = iter(["y", "n", "y", "n", "", ""])
     asked: list[str] = []
     monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or next(answers))
     assert dashboard(isolated, "install") == 0
     out = capsys.readouterr().out
-    assert len(asked) == 5, asked  # skill (copilot), skill (claude), protocol, server, schedule
-    assert asked[:4] == ["Set it up? [Y/n] "] * 4 and asked[4] == "Set it up? [y/N] ", "the nudge defaults to no"
+    assert len(asked) == 6, asked  # skill (copilot), skill (claude), canvas, protocol, server, schedule
+    assert asked[:5] == ["Set it up? [Y/n] "] * 5 and asked[5] == "Set it up? [y/N] ", "the nudge defaults to no"
     assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
     assert not (isolated.tmp / "claude" / "skills" / "readthrough").exists(), "declined"
+    assert (isolated.tmp / "copilot" / "extensions" / "readthrough" / "extension.mjs").exists()
     assert calls == ["server"], "protocol was declined; the nudge's default is no"
-    assert "Set up: skill (copilot), server" in out
+    assert "Set up: skill (copilot), canvas, server" in out
 
     # --all: the recommended pieces, no questions; the nudge stays a choice.
     calls.clear()
@@ -371,9 +374,10 @@ def test_install_with_nothing_named_offers_what_is_missing(isolated, capsys, mon
 
 
 def test_install_with_everything_in_place_says_so(isolated, capsys, monkeypatch):
-    monkeypatch.setattr(system, "automated_here", lambda: False)  # nothing to automate but the skill
+    monkeypatch.setattr(system, "automated_here", lambda: False)  # nothing to automate but the skill and the canvas
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated.tmp / "homedir"))
     assert dashboard(isolated, "install", "skill") == 0
+    assert dashboard(isolated, "install", "canvas") == 0
     assert dashboard(isolated, "install") == 0
     out = capsys.readouterr().out
     assert "Everything readthrough can set up here is set up" in out
@@ -387,6 +391,48 @@ def test_doctor_points_at_the_one_command_when_two_or_more_pieces_are_missing(is
     assert "--  server         not running" in out, "a server that isn't running is something to want, not a fault"
     assert "--  schedule" in out, "the nudge is a choice, not a problem"
     assert "`readthrough install` sets these up in one go" in out
+
+
+def test_canvas_install_records_how_to_run_readthrough_and_uninstall_takes_only_its_own(isolated, capsys, monkeypatch):
+    """The canvas goes under the Copilot home's extensions with a record of the interpreter that installed it;
+    the doctor tells a current install from a stale one; uninstall removes exactly what install wrote."""
+    dest = isolated.tmp / "copilot" / "extensions" / "readthrough"
+    assert dashboard(isolated, "install", "canvas") == 0
+    assert "experimental" in capsys.readouterr().out
+    assert {p.name for p in dest.iterdir()} == {"extension.mjs", "readthrough.mjs", "readthrough.json"}
+    shipped = Path(cli.__file__).parent / "assets" / "extension"
+    assert (dest / "extension.mjs").read_text(encoding="utf-8") == (shipped / "extension.mjs").read_text(
+        encoding="utf-8"
+    )
+    record = json.loads((dest / "readthrough.json").read_text(encoding="utf-8"))
+    assert record["argv"] == [sys.executable, "-m", "readthrough"] and record["version"] == cli.__version__
+    assert system.canvas_state(dest)[0] is True
+
+    # Doctor: installed and current. A record from another install is reported as such, not as fine.
+    monkeypatch.setattr("readthrough.cli.signed_in_accounts", lambda: ["me"])
+    assert dashboard(isolated, "doctor") in (0, 1)
+    assert "ok  canvas" in capsys.readouterr().out
+    (dest / "readthrough.json").write_text(
+        json.dumps({"argv": ["C:/old/python.exe", "-m", "readthrough"], "version": "0.1.0"}), encoding="utf-8"
+    )
+    ok, detail = system.canvas_state(dest)
+    assert ok is False and "0.1.0" in detail and "C:/old/python.exe" in detail
+    (dest / "readthrough.json").write_text("{not json", encoding="utf-8")
+    assert system.canvas_state(dest) == (False, f"{dest} (its record is unreadable)")
+
+    (dest / "theirs.txt").write_text("not ours", encoding="utf-8")
+    assert dashboard(isolated, "uninstall", "canvas") == 0
+    assert capsys.readouterr().out.strip().endswith("removed")
+    assert [p.name for p in dest.iterdir()] == ["theirs.txt"], "a file that isn't ours stays, and so does its directory"
+    assert system.canvas_state(dest) == (None, "not installed")
+    assert dashboard(isolated, "uninstall", "canvas") == 0
+    assert "nothing to remove" in capsys.readouterr().out
+
+    other = isolated.tmp / "elsewhere"
+    assert dashboard(isolated, "install", "canvas", "--dest", str(other)) == 0
+    assert (other / "extension.mjs").exists()
+    assert dashboard(isolated, "uninstall", "canvas", "--dest", str(other)) == 0
+    assert not other.exists(), "an empty directory of ours goes too"
 
 
 def test_system_installs_are_delegated(isolated, capsys, monkeypatch):

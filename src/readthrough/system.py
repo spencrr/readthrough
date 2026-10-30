@@ -7,13 +7,17 @@ platforms the functions explain what to set up by hand.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from readthrough import agents
+from readthrough import __version__, agents
+from readthrough.files import write_atomic
 from readthrough.review import URL_SCHEME
 
 if sys.platform == "win32":
@@ -250,6 +254,14 @@ def pieces(agent: str, agent_options: dict[str, Any] | None = None) -> list[Piec
             current if candidate.available() else None,
             str(skill) if skill.exists() else "not installed", f"readthrough install skill --agent {candidate.name}",
         ))  # fmt: skip
+    # The canvas is for Copilot hosts; it only makes sense where the Copilot CLI or its home is.
+    copilot_here = agents.make("copilot", agent_options).available() or agents.copilot_home().exists()
+    canvas_ok, canvas_detail = canvas_state()
+    out.append(Piece(
+        "canvas", "canvas",
+        "show the dashboard beside agent sessions in VS Code's Agents window, steered by the agent (experimental)",
+        (canvas_ok is True) if copilot_here else None, canvas_detail, "readthrough install canvas",
+    ))  # fmt: skip
     automated = automated_here()
     registered = registered_protocol_command()
     out.append(Piece(
@@ -271,3 +283,62 @@ def pieces(agent: str, agent_options: dict[str, Any] | None = None) -> list[Piec
         "readthrough install schedule", recommended=False,
     ))  # fmt: skip
     return out
+
+
+# ---------------------------------------------------------------- the Copilot canvas
+
+
+CANVAS_FILES = ("extension.mjs", "readthrough.mjs")
+CANVAS_RECORD = "readthrough.json"  # how the extension runs readthrough: the installing interpreter, and the version
+
+
+def canvas_dir() -> Path:
+    """Where the Copilot runtime loads a user's extensions from."""
+    return agents.copilot_home() / "extensions" / "readthrough"
+
+
+def canvas_record() -> dict[str, Any]:
+    return {"argv": [sys.executable, "-m", "readthrough"], "version": __version__}
+
+
+def canvas_state(dest: Path | None = None) -> tuple[bool | None, str]:
+    """Whether the installed canvas is this readthrough's: ``None`` when absent, ``False`` when another version
+    or interpreter installed it (the recorded argv is what it will run)."""
+    dest = dest or canvas_dir()
+    record_path = dest / CANVAS_RECORD
+    if not record_path.exists() or not all((dest / name).exists() for name in CANVAS_FILES):
+        return None, "not installed"
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        current = record.get("argv") == canvas_record()["argv"] and record.get("version") == __version__
+        return bool(
+            current
+        ), f"{dest} (version {record.get('version', '?')}, runs {' '.join(record.get('argv', ['?']))})"
+    except (OSError, ValueError, AttributeError):
+        return False, f"{dest} (its record is unreadable)"
+
+
+def install_canvas(dest: Path | None = None) -> Path:
+    """Copy the extension beside a record of how to run this readthrough; atomic per file, so a host reloading
+    its extensions mid-install never reads half a module."""
+    dest = dest or canvas_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in CANVAS_FILES:
+        write_atomic(dest / name, files("readthrough").joinpath("assets/extension", name).read_text(encoding="utf-8"))
+    write_atomic(dest / CANVAS_RECORD, json.dumps(canvas_record(), indent=2) + "\n")
+    return dest
+
+
+def uninstall_canvas(dest: Path | None = None) -> bool:
+    """Remove only the files the install wrote, and the directory if nothing else is in it. Says whether there was
+    anything to remove; raises ``OSError`` naming what couldn't be."""
+    dest = dest or canvas_dir()
+    ours = [dest / name for name in (*CANVAS_FILES, CANVAS_RECORD)]
+    removed = any(p.exists() for p in ours)
+    for p in ours:
+        p.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        dest.rmdir()
+    if left := [p for p in ours if p.exists()]:
+        raise OSError(", ".join(str(p) for p in left))
+    return removed

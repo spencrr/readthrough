@@ -29,6 +29,7 @@ Then run `readthrough install`. With nothing named it goes through everything re
 - `readthrough install server` starts the live dashboard now and again every time you log in. Open it with `readthrough open`, or bookmark <http://127.0.0.1:8765/>.
 - `readthrough install schedule` creates a Task Scheduler entry that refreshes every repo in the morning and opens the dashboard when something needs you. More on this below.
 - `readthrough install protocol` registers a `readthrough://` link handler for your Windows user, so the buttons in the snapshot version can start a review. The live dashboard doesn't need it. No admin rights are needed; it writes a single key under `HKCU\Software\Classes`.
+- `readthrough install canvas` puts the dashboard beside agent sessions in VS Code's Agents window (see [The dashboard beside the session](#the-dashboard-beside-the-session-experimental)). Offered wherever the Copilot CLI is.
 
 None of this does anything until you onboard a repo. With the server running, its front page takes you to onboarding.
 
@@ -251,6 +252,14 @@ Sessions are linked to their PR wherever they started. Every prompt readthrough 
 **Copy prompt** is the fallback for anywhere else you run an agent. It and **Copy worktree cmd** are under **More review actions (⋯)** in Overview. Enter or Space opens the menu, Tab reaches the copy buttons, and Escape closes the menu before closing the panel.
 
 To burn down a whole session, ask Copilot for "burn down session 2 of OWNER/NAME". It gives you a quick overview of how the PRs in that session relate, then runs the routine for each one.
+
+### The dashboard beside the session (experimental)
+
+In VS Code's Agents window a session can have *canvases*: pages shown beside the chat that the agent can open and steer. `readthrough install canvas` adds one that shows the live dashboard, so the map, a PR's panel, and its study log sit next to the deep review instead of in a browser tab you keep switching to. It needs the live dashboard running (`readthrough serve`, or `readthrough install server` to keep it running), and it appears after the Agents window reloads its extensions.
+
+The agent opens the canvas on a repo and points it: in the predict phase it places the PR on the architecture map without opening anything (the map narrows to that one PR, so you see which components it touches and nothing more), and once you've committed it opens the brief, the overview, or the study log. The same page, a browser tab included, answers to `readthrough show 2897` (`--panel none|overview|study|brief`), which is all the agent does. Beside a session the page knows that the session is the deep review: the buttons that would start another one are hidden, and the Study tab shows the log the session writes to rather than a second composer.
+
+The canvas is a small Copilot extension (two JavaScript files the Copilot runtime loads, under `~/.copilot/extensions/readthrough/`) that only runs the `readthrough` CLI; it records which interpreter installed it, so it keeps working when the editor's PATH doesn't have `readthrough`. `readthrough doctor` says whether the installed copy matches the version you have; `readthrough uninstall canvas` removes exactly what was installed. The canvas API is experimental in the Copilot SDK, so this part of readthrough is too.
 
 ## Studying a PR
 
@@ -486,7 +495,7 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 | Command | What it does |
 | --- | --- |
 | `onboard OWNER/NAME [--forge F] [--clone P] [--account A] [--assisted] [--update] [--preview] [--accept] [--force]` | Draft, check, preview, and accept a repo's profile |
-| `repos` | List the repos you've onboarded |
+| `repos [--json]` | List the repos you've onboarded (`--json` for programs: the live server, each repo's URL) |
 | `default OWNER/NAME` | Set the default repo |
 | `remove OWNER/NAME [--purge]` | Stop tracking a repo |
 | `profile [show\|check\|sources\|path\|export] [--file F]` | Look at, check, or export the repo's profile |
@@ -494,13 +503,14 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 | `build [--all] [--open [auto\|always\|never]] [--no-diffs]` | Fetch, analyze, and write the snapshot and briefs |
 | `open` | Open the dashboard (live if the server is up) |
 | `brief N [--path]` | Print a PR's study brief |
+| `show N [--panel none\|overview\|study\|brief] [--client ID] [--wait S]` | Point every open dashboard page at a PR |
 | `review N [--fresh] [--here] [--vscode] [--print]` | Start or resume the deep-review session |
 | `worktree N [--remove]` | Check out a PR in its own worktree and print the diff command |
 | `ledger N [--status S] [--note T] [--clear]` | Record, show, or clear what you did with a PR |
 | `study N [--prediction T] [--teachback T] [--note T] [--finding S:T --at P:L]` | Show or add to a PR's study log |
 | (browser) `/setup` | Onboard a repo, or change a repo's settings |
-| `install [skill\|server\|schedule\|protocol] [--all]` | Set up the integrations: all that are missing, asking about each, or one |
-| `uninstall skill\|server\|schedule\|protocol` | Undo one |
+| `install [skill\|server\|schedule\|protocol\|canvas] [--all]` | Set up the integrations: all that are missing, asking about each, or one |
+| `uninstall skill\|server\|schedule\|protocol\|canvas` | Undo one |
 | `config [--edit] [--defaults] [--check]` | Show, open, explain, or validate the configuration |
 | `doctor [--bundle]` | Check the setup, or write a debug bundle for a bug report |
 
