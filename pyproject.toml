@@ -44,6 +44,7 @@ Homepage = "https://github.com/spencrr/readthrough"
 Documentation = "https://github.com/spencrr/readthrough/blob/main/docs/guide.md"
 Changelog = "https://github.com/spencrr/readthrough/blob/main/CHANGELOG.md"
 Issues = "https://github.com/spencrr/readthrough/issues"
+Security = "https://github.com/spencrr/readthrough/blob/main/SECURITY.md"
 
 [dependency-groups]
 # The dev group installs the [study] extra too, so the Copilot assistant's code is type-checked and tested.
