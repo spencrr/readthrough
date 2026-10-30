@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Spencer Schoenberg" }]
-keywords = ["code-review", "pull-requests", "github", "dashboard", "learning", "copilot"]
+keywords = ["code-review", "pull-requests", "github", "gitlab", "azure-devops", "dashboard", "learning"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -33,7 +33,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# The Copilot study assistant and Copilot-drafted profiles. Without it, the rules-based assistant is used.
+# The Copilot SDK, one of the runtimes the study assistant and the profile drafter can run on. Without it (or an API key for another runtime), the rules-based assistant is used.
 study = ["github-copilot-sdk>=1.0.11,<2"]
 
 [project.scripts]
@@ -47,7 +47,7 @@ Issues = "https://github.com/spencrr/readthrough/issues"
 Security = "https://github.com/spencrr/readthrough/blob/main/SECURITY.md"
 
 [dependency-groups]
-# The dev group installs the [study] extra too, so the Copilot assistant's code is type-checked and tested.
+# The dev group installs the [study] extra too, so the Copilot runtime's code is type-checked and tested.
 dev = [
     "readthrough[study]",
     "playwright>=1.47",
