@@ -3,6 +3,7 @@
 Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't available.
 """
 
+import base64
 import datetime as dt
 import json
 import os
@@ -373,6 +374,18 @@ def test_the_markup_carries_no_inline_handlers_or_script_urls(page):
 
 def test_model_text_renders_without_images_while_a_description_keeps_its_screenshots(page):
     """An image URL is a way for a steered model to send data out; a PR author's screenshot is content."""
+    requested: list[str] = []
+    pixel = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    # Answer for the outside host ourselves: the test is about what the page asks for, not what the network says.
+    page.route(
+        "https://example.test/**",
+        lambda route: (
+            requested.append(route.request.url),
+            route.fulfill(status=200, content_type="image/png", body=pixel),
+        ),
+    )
     _open_study(page, 2)
     page.evaluate(
         """() => {
@@ -386,6 +399,8 @@ def test_model_text_renders_without_images_while_a_description_keeps_its_screens
     assert page.locator("#drawer .transcript strong", has_text="bold").count() == 1, "the rest still renders"
     page.click('[data-dtab="overview"]')
     assert page.get_attribute("#drawer .desc img", "src") == "https://example.test/shot.png"
+    page.wait_for_function("() => document.querySelector('#drawer .desc img').complete")
+    assert requested == ["https://example.test/shot.png"], "the screenshot was fetched; the model's beacon never was"
     assert page.errors == []
 
 
