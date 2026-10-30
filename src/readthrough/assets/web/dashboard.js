@@ -825,10 +825,13 @@ function onStudyEvent(ev){
 }
 
 // ---- render + events
+const VIEWS = {map: renderMap, plan: renderPlan, overlap: renderOverlap, table: renderTable};
 function render(){
+  // The tab comes from the URL: anything that isn't a view of ours (a prototype member, say) is the map.
+  if (!Object.hasOwn(VIEWS, state.tab)) state.tab = "map";
   header();
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + state.tab));
-  ({map: renderMap, plan: renderPlan, overlap: renderOverlap, table: renderTable})[state.tab]();
+  VIEWS[state.tab]();
   if (state.sel) renderDrawer();
 }
 document.addEventListener("click", e => {

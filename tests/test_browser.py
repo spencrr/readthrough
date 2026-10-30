@@ -152,6 +152,16 @@ def test_every_view_renders_without_script_errors(page):
     assert page.errors == []
 
 
+def test_a_link_naming_a_view_that_does_not_exist_opens_the_map(page):
+    """The tab is read from the URL and used to pick a renderer; a prototype member's name must not be one."""
+    for i, hash_ in enumerate(("constructor", "__proto__", "toString", "nope")):
+        page.goto(f"{page.base}/r/{SLUG}/?load={i}#{hash_}?lanes=draft")  # a new query: a real load, not a hash hop
+        page.wait_for_selector("#v-map.on")
+        assert page.evaluate("state.tab") == "map"
+        assert page.evaluate("location.hash").startswith("#map"), "the URL is corrected along with the view"
+    assert page.errors == []
+
+
 def test_warnings_from_the_build_are_shown(page):
     """A standing fact about a big repo (only the most active PRs are fetched) is in the header's count, with the
     explanation on hover, rather than a warning banner on every visit; the other warnings stay banners."""
