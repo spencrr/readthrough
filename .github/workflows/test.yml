@@ -1,6 +1,6 @@
 # The gate, as both CI and the release pipeline run it: lint, format, and types; the tests on every supported
 # platform and Python; then a build whose wheel is installed into a clean environment and run. Only ever called
-# (by ci.yml, and by the release pipeline once there is one), never triggered on its own.
+# (by ci.yml on every push and PR, and by release.yml on a tag), never triggered on its own.
 name: Checks
 
 on:

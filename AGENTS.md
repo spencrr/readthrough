@@ -23,7 +23,9 @@ in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linte
 ruleset requires. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
 stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
 `uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
-installed; on CI they fail instead, since the hosted runners have one.
+installed; on CI they fail instead, since the hosted runners have one. A release is a `vX.Y.Z` tag on `main`:
+`release.yml` runs the gate again and, after the maintainer approves, publishes to PyPI and GitHub
+(`docs/maintaining.md`, "Releasing").
 
 ## Conventions that aren't obvious
 

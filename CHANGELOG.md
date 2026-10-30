@@ -80,6 +80,13 @@
   check; the browser tests fail on CI instead of skipping when the runner has no browser. Dependabot keeps the
   Python dependencies and the action pins fresh, a week after each release. A pre-push hook in `.githooks`
   lets only `main`, `release/*`, and `v*` tags leave a clone. Python 3.15 is in the matrix and the classifiers.
+- A release pipeline (`release.yml`). A `vX.Y.Z` tag on `main` or a `release/*` branch is checked (the commit is
+  on one of those branches, the tag is the version in `pyproject.toml`, the changelog has its section), put
+  through the whole gate again, and then held until the maintainer approves the `pypi` environment. The last
+  job builds nothing: it attests the provenance of the wheel and sdist the gate built, uploads them to PyPI
+  through trusted publishing, and creates the GitHub release with the changelog section as its notes. There is
+  no manual trigger; `gh release verify`, `gh release verify-asset`, and `gh attestation verify` check a
+  published file from the outside.
 
 ### Changed
 

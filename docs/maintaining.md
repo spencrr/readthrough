@@ -146,6 +146,21 @@ A terminal launcher is a pure function from a `Command` to a `Spawn`; only the W
 
 ## Releasing
 
+A release is a `vX.Y.Z` tag on `main` (or on a `release/*` branch, for a patch to an older line). The tag starts `.github/workflows/release.yml`, which checks that the tagged commit is on one of those branches, that the tag is the version in `pyproject.toml`, and that `CHANGELOG.md` has a section for it; runs the whole gate again through `test.yml`; and then waits. Approving the `pypi` environment (Actions → the run → *Review deployments*) lets the last job run: it takes the wheel and sdist the gate built, attests their provenance, uploads them to PyPI through trusted publishing (no token anywhere), and creates the GitHub release with the changelog section as its notes. Nothing in that last job builds anything, and nothing starts it but a tag plus a click, so a leaked push credential can burn runner minutes but can't publish.
+
 1. Bump `version` in `pyproject.toml` and run `uv lock`, so the lockfile names the new version (`UV_LOCKED` in CI refuses a stale one). `readthrough.__version__` reads it from the installed package.
-2. Add a section to `CHANGELOG.md`.
-3. Run `uv run python scripts/check.py`, then commit and tag `vX.Y.Z`. Every CI run's build job uploads the sdist and wheel as the `dist` artifact.
+2. Add a `## X.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md`; the release notes are that section, up to the next heading.
+3. Run `uv run python scripts/check.py`, commit, and push `main`. Wait for CI.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`. Only a repository admin can create a `v*` tag, and once it exists it can't be moved or deleted.
+5. Approve the deployment when the run reaches `publish`. Then check it from the outside, on a downloaded file rather than a local build:
+
+```sh
+gh release verify vX.Y.Z                                    # the release is immutable and attested
+gh release verify-asset vX.Y.Z readthrough-X.Y.Z-py3-none-any.whl   # this file is the published asset
+gh attestation verify readthrough-X.Y.Z-py3-none-any.whl --owner spencrr   # built by release.yml at the tagged commit
+uv tool install readthrough==X.Y.Z && readthrough --version
+```
+
+If the run fails after PyPI accepted the files, fix what failed and re-run the failed job: the upload skips files PyPI already has, and the release step leaves an existing release alone. The tag can't be moved, so a mistake in the release itself means a new patch version.
+
+For a patch to an older line when `main` has unfinished work: `git switch -c release/X.Y vX.Y.0`, cherry-pick with `-x`, release from there, and add the changelog section to `main` by hand.
