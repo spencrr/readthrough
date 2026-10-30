@@ -388,14 +388,22 @@ def test_drawer_copy_actions_use_a_keyboard_reachable_disclosure(page):
     page.click('#v-table [data-open="1"]')
     summary = page.locator(".action-menu summary")
     expect(summary).to_have_attribute("aria-label", "More review actions")
-    for width in (560, 380):
-        page.evaluate("w => document.documentElement.style.setProperty('--drawer-w', w + 'px')", width)
-        positions = (
-            page.locator("#drawer .actions")
-            .first.locator(":scope > .btn, summary")
-            .evaluate_all("els => els.map(el => el.getBoundingClientRect().top)")
-        )
-        assert max(positions) - min(positions) <= 1, f"the main actions fit in a {width}px drawer"
+    positions = (
+        page.locator("#drawer .actions")
+        .first.locator(":scope > .btn, summary")
+        .evaluate_all("els => els.map(el => el.getBoundingClientRect().top)")
+    )
+    assert max(positions) - min(positions) <= 1, "the main actions fit on one row at the default width"
+    # At the panel's minimum width the row may wrap where the system font is wide (Linux), but nothing overflows
+    # and the menu stays in reach.
+    page.evaluate("document.documentElement.style.setProperty('--drawer-w', '380px')")
+    assert page.evaluate(
+        """(() => { const body = document.querySelector('#drawer .dbody').getBoundingClientRect();
+          return [...document.querySelectorAll('#drawer .review-actions > .btn, #drawer .review-actions summary')]
+            .every(el => el.getBoundingClientRect().right <= body.right + 0.5); })()"""
+    ), "no action is pushed past the panel's edge"
+    expect(summary).to_be_in_viewport()
+    page.evaluate("document.documentElement.style.removeProperty('--drawer-w')")
     assert page.get_by_role("button", name="Copy prompt", exact=True).count() == 0, "hidden until asked for"
     summary.focus()
     summary.press("Enter")
