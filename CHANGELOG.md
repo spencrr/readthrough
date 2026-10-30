@@ -184,6 +184,9 @@
   labelled as the maintainers' advice rather than as part of its own instructions. `SECURITY.md` was corrected
   where it claimed more than the code does (an `Origin` header is checked when the browser sends one; images in
   a description may load from any `https` host; the profile's guidance does reach the models).
+- Text a model wrote is rendered without images in the Study tab and the brief. A model that read a hostile PR
+  could have been steered into writing an image whose URL carried what it had read; a PR's own description
+  keeps its screenshots.
 - A page that fell behind the server's events (a long streamed reply, a throttled background tab) was quietly
   unsubscribed and kept showing a stale page over a connection that looked healthy. It's now sent one `resync`
   and fetches everything it holds again; the same happens after a reconnect, which used to refresh the PR list

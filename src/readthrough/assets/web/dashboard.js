@@ -116,6 +116,9 @@ DOMPurify.addHook("afterSanitizeAttributes", node => {
 const PURIFY = {FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe"], FORBID_ATTR: ["style"], ALLOW_DATA_ATTR: false};
 const safeHtml = html => DOMPurify.sanitize(html || "", PURIFY);
 const md = text => safeHtml(marked.parse(text || "", {gfm: true, breaks: false}));
+// What a model wrote never needs a picture, and an image URL is a way to send data out: no images in study
+// text or the brief. A PR's own description keeps its screenshots.
+const mdModel = text => DOMPurify.sanitize(marked.parse(text || "", {gfm: true, breaks: false}), {...PURIFY, FORBID_TAGS: [...PURIFY.FORBID_TAGS, "img", "picture", "source", "video", "audio"]});
 
 function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 2200); }
 function copy(text, msg){ navigator.clipboard.writeText(text).then(() => toast(msg || "Copied")).catch(err => toast(`Couldn't copy: ${err.message}`)); }
@@ -642,7 +645,7 @@ function briefTab(n){
     api(`/api/brief/${n}`, null, "GET").then(r => { briefs[n] = r.markdown; if (state.sel === n && state.dtab === "brief") renderDrawer(); })
       .catch(err => { briefs[n] = `_Couldn't load the brief: ${err.message}_`; renderDrawer(); });
   }
-  return briefs[n] === null ? `<p class="muted">Loading…</p>` : `<div class="md" style="margin-top:12px">${md(briefs[n])}</div>`;
+  return briefs[n] === null ? `<p class="muted">Loading…</p>` : `<div class="md" style="margin-top:12px">${mdModel(briefs[n])}</div>`;
 }
 
 // ---- panel resizing
@@ -716,29 +719,29 @@ function studyTab(n){
   const who = author;
   const qcard = q => { const a = answers[q.qid], v = assessments[q.qid];
     return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${esc(v.verdict)}">${esc(v.verdict)}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}</div>
-      <div class="md">${md(q.question)}</div>
-      ${a ? `<div class="answer md">${md(a.text)}</div>` : ""}
-      ${v ? `<div class="md">${md(v.feedback)}</div>${v.evidence?.length ? `<div class="hint">Evidence: ${v.evidence.map(x => `<code>${esc(x)}</code>`).join(" ")}</div>` : ""}` : ""}
+      <div class="md">${mdModel(q.question)}</div>
+      ${a ? `<div class="answer md">${mdModel(a.text)}</div>` : ""}
+      ${v ? `<div class="md">${mdModel(v.feedback)}</div>${v.evidence?.length ? `<div class="hint">Evidence: ${v.evidence.map(x => `<code>${esc(x)}</code>`).join(" ")}</div>` : ""}` : ""}
       ${a && q.expected_points?.length ? `<details class="hint"><summary>What a good answer covers</summary><ul>${q.expected_points.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}</div>`; };
   const timeline = entries.map(e => {
     switch (e.kind) {
       case "prediction": return e.skipped ? `<div class="event">You skipped the prediction.</div>`
-        : `<div class="bubble you"><div class="who-line">You <span class="tag">prediction</span></div><div class="md">${md(e.text)}</div></div>`;
+        : `<div class="bubble you"><div class="who-line">You <span class="tag">prediction</span></div><div class="md">${mdModel(e.text)}</div></div>`;
       case "chat":
         if (e.action === "brief") return `<div class="event">${icon("lightbulb", "ico sm")}You asked for a briefing.</div>`;
-        return `<div class="bubble ${esc(e.by)}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${md(e.text)}</div></div>`;
+        return `<div class="bubble ${esc(e.by)}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${mdModel(e.text)}</div></div>`;
       case "question": return qcard(e);
-      case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${md(e.text)}</div></div>`;
-      case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${md(e.text)}</div></div>`;
-      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${esc(e.verdict)}">${esc(e.verdict)}</span></div><div class="md">${md(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
-      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${md(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
+      case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${mdModel(e.text)}</div></div>`;
+      case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${mdModel(e.text)}</div></div>`;
+      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${esc(e.verdict)}">${esc(e.verdict)}</span></div><div class="md">${mdModel(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
+      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${mdModel(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
       // A failure is named by the runtime, never a model: a model that never answered reached nothing.
       case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${esc(e.runtime ? `The ${e.runtime} runtime` : e.assistant === "rules" ? "The rules assistant" : "The assistant")} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
       case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${esc(e.line ?? "?")}</code> ` : ""}${esc(e.summary)} <span class="muted">(${esc(e.by)})</span></div>`;
       default: return "";
     }
   }).join("");
-  const pending = st.pending ? `<div class="bubble model" id="pending"><div class="who-line">${engineLabel(st.engine)}</div><div class="md typing" id="pending-text">${md(st.pending.text || "")}</div><div class="tools" id="pending-tools">${pendingTools(st.pending)}</div></div>` : "";
+  const pending = st.pending ? `<div class="bubble model" id="pending"><div class="who-line">${engineLabel(st.engine)}</div><div class="md typing" id="pending-text">${mdModel(st.pending.text || "")}</div><div class="tools" id="pending-tools">${pendingTools(st.pending)}</div></div>` : "";
   const step = (label, done, detail) => `<span class="step ${done ? "done" : ""}">${icon(done ? "circle-check" : "circle", "ico sm")}${label}${detail ? ` <span class="muted">${detail}</span>` : ""}</span>`;
   const stepper = `<div class="stepper">${step("Predict", s.predictions || s.prediction_skipped, s.prediction_skipped && !s.predictions ? "skipped" : "")}<span class="line"></span>
     ${step("Quiz", s.assessed, s.assessed ? `${s.correct}/${s.assessed} correct` : "")}<span class="line"></span>${step("Teach back", s.teachback, s.teachback || "")}</div>`;
@@ -802,7 +805,7 @@ function onStudyEvent(ev){
     const el = $("pending-text");
     if (here && el) {
       const body = drawerBody(), pinned = nearEnd(body);
-      el.innerHTML = md(st.pending.text); $("pending-tools").innerHTML = pendingTools(st.pending);
+      el.innerHTML = mdModel(st.pending.text); $("pending-tools").innerHTML = pendingTools(st.pending);
       if (pinned) body.scrollTop = body.scrollHeight;
       return;
     }
