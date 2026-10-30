@@ -164,3 +164,5 @@ uv tool install readthrough==X.Y.Z && readthrough --version
 If the run fails after PyPI accepted the files, fix what failed and re-run the failed job: the upload skips files PyPI already has, and the release step leaves an existing release alone. The tag can't be moved, so a mistake in the release itself means a new patch version.
 
 For a patch to an older line when `main` has unfinished work: `git switch -c release/X.Y vX.Y.0`, cherry-pick with `-x`, release from there, and add the changelog section to `main` by hand.
+
+The toolchain that builds a release is pinned, in two places: `uv` is whatever version the pinned `setup-uv` action ships a checksum for (`version: latest-known`, so Dependabot's bump of the action, after its cooldown, is what moves `uv`), and the build backend is an exact `build-constraint-dependencies` entry in `pyproject.toml`, bumped by hand like `ty`.

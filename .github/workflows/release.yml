@@ -27,6 +27,7 @@ jobs:
           fetch-depth: 0 # the ancestry check needs the branches' history
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: latest-known # the newest uv this pinned setup-uv ships a checksum for, as in test.yml
           enable-cache: false
       # Only an admin can create a v* tag or a release/* branch, and nobody else lands a commit on main without a
       # reviewed pull request, so a commit here was put on a release branch by the maintainer.

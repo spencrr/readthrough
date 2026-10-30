@@ -58,6 +58,11 @@ dev = [
     "pillow>=10",
 ]
 
+[tool.uv]
+# The build backend is resolved at build time, outside uv.lock; pinned exactly so a release is built by a known
+# version (1.33.0 built 0.4.0). Bump it deliberately, like ty.
+build-constraint-dependencies = ["hatchling==1.33.0"]
+
 [tool.uv.sources]
 readthrough = { workspace = true }
 

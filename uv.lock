@@ -1,6 +1,9 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
+
+[manifest]
+build-constraints = [{ name = "hatchling", specifier = "==1.33.0" }]
 
 [[package]]
 name = "annotated-types"
