@@ -28,7 +28,8 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: false
-      # A leaked push credential can create a tag; it can't make that tag's commit appear on a protected branch.
+      # Only an admin can create a v* tag or a release/* branch, and nobody else lands a commit on main without a
+      # reviewed pull request, so a commit here was put on a release branch by the maintainer.
       - name: the tagged commit is on main or a release branch
         env:
           SHA: ${{ github.sha }}
@@ -98,14 +99,27 @@ jobs:
         with:
           skip-existing: true # a re-run after a failure later in this job must not fail here
       # The publisher leaves its PEP 740 attestation files in dist/; the release carries only the distributions.
+      # A release that already exists is accepted only if it carries exactly the files this run built: anyone with
+      # write access can create a release for a tag, and the approval here must not turn theirs into ours.
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists; leaving it as it is"
+          if gh release view "$TAG" --json assets --jq '.assets[] | "\(.digest) \(.name)"' > existing.txt 2>/dev/null; then
+            for file in dist/*.whl dist/*.tar.gz; do
+              line="sha256:$(sha256sum "$file" | cut -d' ' -f1) $(basename "$file")"
+              if ! grep -qxF "$line" existing.txt; then
+                echo "::error::release $TAG already exists and its $(basename "$file") is not the one this run built"
+                exit 1
+              fi
+            done
+            if [ "$(wc -l < existing.txt)" -ne 2 ]; then
+              echo "::error::release $TAG already exists with assets this run didn't build"
+              exit 1
+            fi
+            echo "release $TAG already exists with exactly this run's files; leaving it as it is"
             exit 0
           fi
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md dist/*.whl dist/*.tar.gz
