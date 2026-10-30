@@ -20,7 +20,7 @@ uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw d
 
 CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python
 in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linter) are the two checks the branch
-ruleset requires, and a change reaches `main` through a pull request the maintainer has approved, rebased or squashed so the history stays linear. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
+ruleset requires, and a change reaches `main` through a pull request the maintainer (the code owner) has approved, up to date with `main` and rebased or squashed so the history stays linear. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
 stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
 `uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
 installed; on CI they fail instead, since the hosted runners have one. A release is a `vX.Y.Z` tag on `main`:
