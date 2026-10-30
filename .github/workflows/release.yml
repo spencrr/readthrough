@@ -122,4 +122,7 @@ jobs:
             echo "release $TAG already exists with exactly this run's files; leaving it as it is"
             exit 0
           fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md dist/*.whl dist/*.tar.gz
+          # A patch for an older line, released from its release/* branch, must not become the latest release.
+          newest=$({ echo "$TAG"; gh release list --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName'; } | sort -V | tail -n 1)
+          if [ "$newest" = "$TAG" ]; then latest=true; else latest=false; fi
+          gh release create "$TAG" --verify-tag --latest="$latest" --title "$TAG" --notes-file notes.md dist/*.whl dist/*.tar.gz
