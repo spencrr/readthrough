@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The release pipeline marks a release as latest only when its version is the highest released, so a patch to
+  an older line doesn't take the badge from a newer one; and when a GitHub release already exists for the tag, it
+  is left alone only if it carries exactly the files the run built, and otherwise fails the run instead of
+  lending its approval to someone else's assets.
+- The toolchain that builds a release is pinned: `uv` is the version the pinned `setup-uv` action ships a
+  checksum for, and the build backend is an exact build constraint in `pyproject.toml`.
+- The documented provenance check names the signing workflow and the tag, not just the owner, so an attestation
+  from another workflow or branch no longer passes it.
+- The page picks its view from a `Map`, so a tab name from the URL can't reach a prototype member.
+
 ## 0.4.0 (2026-10-30)
 
 ### Added
