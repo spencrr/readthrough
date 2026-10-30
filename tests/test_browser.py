@@ -194,6 +194,31 @@ def test_a_link_naming_a_view_that_does_not_exist_opens_the_map(page):
     assert page.errors == []
 
 
+def test_a_pr_named_in_the_url_opens_in_the_panel_and_the_panel_keeps_the_url_current(page):
+    """`#map?pr=N` is a deep link to one PR's panel; opening or closing the panel writes it back, so the address
+    bar always names what is on screen, and the link wins over the panel this tab remembered."""
+    page.goto(f"{page.base}/r/{SLUG}/#table?pr=2")
+    page.wait_for_selector("body.drawer-open")
+    assert page.evaluate("state.sel") == 2
+    assert page.evaluate("location.hash") == "#table?pr=2"
+    page.click("#close")
+    page.wait_for_selector("body:not(.drawer-open)")
+    assert page.evaluate("location.hash") == "#table"
+    page.click('#v-table [data-open="1"]')
+    page.wait_for_selector("body.drawer-open")
+    assert page.evaluate("location.hash") == "#table?pr=1"
+    page.goto(f"{page.base}/r/{SLUG}/?load=1#table?pr=2")  # the tab remembers #1; the link says #2
+    page.wait_for_selector("body.drawer-open")
+    assert page.evaluate("state.sel") == 2
+    page.goto(
+        f"{page.base}/r/{SLUG}/?load=2#table?pr=999"
+    )  # a PR that isn't there: the remembered panel, URL corrected
+    page.wait_for_selector("body.drawer-open")
+    assert page.evaluate("state.sel") == 2
+    assert page.evaluate("location.hash") == "#table?pr=2"
+    assert page.errors == []
+
+
 def test_warnings_from_the_build_are_shown(page):
     """A standing fact about a big repo (only the most active PRs are fetched) is in the header's count, with the
     explanation on hover, rather than a warning banner on every visit; the other warnings stay banners."""
@@ -729,4 +754,63 @@ def test_the_open_pr_vanishing_from_a_reload_closes_the_panel_cleanly(page):
     assert page.evaluate("document.body.classList.contains('drawer-open')") is False
     assert page.evaluate("state.sel") is None
     assert sorted(rows(page)) == [1, 3]
+    assert page.errors == []
+
+
+def test_a_canvas_page_is_steered_by_readthrough_show_and_starts_no_second_session(page):
+    """Beside an agent session, the page names itself on its event stream, `readthrough show` points it at a PR
+    through the live server (placing it on the map, then opening a panel), and nothing on it starts another
+    review or talks to a second model."""
+    import urllib.request
+
+    from readthrough import cli
+    from readthrough.serve import serve_file
+
+    page.goto(f"{page.base}/r/{SLUG}/#map?canvas=canvas-1")
+    page.wait_for_selector("#v-map.on")
+    page.wait_for_function("() => LIVE && !LIVE.disconnected")
+    assert page.evaluate("document.body.classList.contains('canvas')")
+    assert page.evaluate("location.hash") == "#map?canvas=canvas-1", "the page keeps its name in the URL"
+
+    health = json.loads(urllib.request.urlopen(f"{page.base}/api/health", timeout=5).read())
+    record = {
+        "port": int(page.base.rsplit(":", 1)[1]),
+        "instance": health["instance"],
+        "token": page.evaluate("LIVE.token"),
+        "pid": 0,
+    }
+    serve_file(page.cfg.home).write_text(json.dumps(record), encoding="utf-8")
+    home = str(page.cfg.home)
+
+    def show(*argv: str) -> int:
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["--home", home, "--repo", REPO, "show", *argv])
+        return int(exc.value.code or 0)
+
+    assert show("2", "--panel", "none", "--client", "canvas-1", "--wait", "5") == 0
+    page.wait_for_function("() => state.q === '#2'")
+    assert page.evaluate("document.body.classList.contains('drawer-open')") is False, (
+        "placed on the map, nothing revealed"
+    )
+    chips = page.eval_on_selector_all("#v-map .chip[data-pr]", "els => [...new Set(els.map(e => e.dataset.pr))]")
+    assert chips == ["2"], "the map shows that PR alone"
+
+    assert show("2", "--panel", "brief", "--client", "canvas-1") == 0
+    page.wait_for_selector("body.drawer-open")
+    assert page.evaluate("[state.sel, state.dtab, state.q]") == [2, "brief", ""], (
+        "the panel opens and the filter it set is lifted"
+    )
+    assert page.evaluate("location.hash") == "#map?pr=2&panel=brief&canvas=canvas-1"
+
+    assert show("2", "--client", "someone-else") == 1, "a name nobody answers to reaches nobody"
+    assert show("999") == 0, "the server delivers it; whether the PR exists is the page's to say"
+    page.wait_for_selector("#toast.on:has-text('#999')")
+
+    page.click('[data-dtab="study"]')
+    page.wait_for_selector(".transcript")
+    assert page.query_selector("#drawer .composer") is None, "no second tutor beside the session"
+    assert "deep-review session in the chat" in page.inner_text("#drawer")
+    page.click('[data-dtab="overview"]')
+    assert page.locator("#drawer [data-review]").count() == 1 and not page.is_visible("#drawer [data-review]")
+    assert not page.is_visible('#drawer a[href^="vscode:"]')
     assert page.errors == []

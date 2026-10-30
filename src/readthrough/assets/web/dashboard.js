@@ -26,10 +26,15 @@ const SLUG = DATA.slug || `${FORGE.name}/${DATA.repo}`;
 const GROUPS = {lanes: LANES, authors: AUTHORS, cis: CI_GROUPS};
 const HASH = new URLSearchParams(location.hash.slice(1).split("?")[1] || "");
 const fromHash = (key, all) => { const v = HASH.get(key); const keep = v ? v.split(",").filter(k => k in all) : []; return new Set(keep.length ? keep : Object.keys(all)); };
+const PANELS = ["overview", "study", "brief"];
+// `canvas=<id>` says this page is a canvas beside an agent session: it names itself so `readthrough show` can address
+// it, and the session in the chat is the deep review, so the controls that would start another are not shown.
+const CANVAS = (HASH.get("canvas") || "").match(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/) ? HASH.get("canvas") : null;
 const state = {
   tab: location.hash.slice(1).split("?")[0] || "map", lanes: fromHash("lanes", LANES), authors: fromHash("authors", AUTHORS),
   cis: fromHash("ci", CI_GROUPS), greenFirst: localStorage.getItem("readthrough:green-first") !== "0",
-  q: HASH.get("q") || "", comp: HASH.get("comp"), sel: null, dtab: "overview", srcOnly: true, overlapOnly: true,
+  q: HASH.get("q") || "", comp: HASH.get("comp"), sel: null, dtab: PANELS.includes(HASH.get("panel")) ? HASH.get("panel") : "overview",
+  srcOnly: true, overlapOnly: true,
   drafts: JSON.parse(sessionStorage.getItem(STORE + ":drafts") || "{}"),
 };
 const saveDrafts = () => sessionStorage.setItem(STORE + ":drafts", JSON.stringify(state.drafts));
@@ -279,12 +284,15 @@ function renderTabs(){
   const ind = nav.querySelector(".tab-ind");
   if (on) requestAnimationFrame(() => { ind.style.left = on.offsetLeft + "px"; ind.style.width = on.offsetWidth + "px"; });
 }
-// Filters live in the URL, so a view like "only my PRs" can be bookmarked.
+// Filters and the open PR live in the URL, so a view like "only my PRs", or one PR's panel, can be bookmarked
+// or handed to someone.
 function syncHash(){
   const q = new URLSearchParams(), key = {lanes: "lanes", authors: "authors", cis: "ci"};
   for (const [g, labels] of Object.entries(GROUPS)) if (state[g].size !== Object.keys(labels).length) q.set(key[g], [...state[g]].join(","));
   if (state.q.trim()) q.set("q", state.q.trim());
   if (state.comp) q.set("comp", state.comp);
+  if (state.sel) { q.set("pr", state.sel); if (state.dtab !== "overview") q.set("panel", state.dtab); }
+  if (CANVAS) q.set("canvas", CANVAS);
   const hash = "#" + state.tab + (q.size ? "?" + q.toString().replace(/%2C/g, ",") : "");
   if (location.hash !== hash) history.replaceState(null, "", hash);
 }
@@ -549,11 +557,13 @@ function openDrawer(n, tab){
   if (tab) state.dtab = tab;
   document.body.classList.add("drawer-open");
   renderDrawer({resetScroll: changed});
+  syncHash();
   if (cy) setTimeout(() => cy.resize(), 0);
 }
 function closeDrawer(){
   document.body.classList.remove("drawer-open"); state.sel = null;
   sessionStorage.removeItem(STORE + ":panel");
+  syncHash();
   if (cy) setTimeout(() => cy.resize(), 0);
 }
 // Whether the drawer body is scrolled to (or near) its end, so new study entries keep it there, like any chat.
@@ -762,6 +772,12 @@ function studyTab(n){
   const engineNote = ai ? (st.engine.name === "rules"
       ? `Questions come from the repo's profile, not a model; nothing here is graded.`
       : `Questions and grades come from <b title="${esc(st.engine.describe || "")}">${esc(st.engine.model || `the ${st.engine.runtime} runtime`)}</b>; each reply names the model that wrote it.`) : "";
+  // Beside an agent session, that session is the tutor: the log is shown as evidence, and nothing here talks to a
+  // second model.
+  if (CANVAS) return `${stepper}
+    ${mode === "predict" ? "" : watchList(p)}
+    <div class="transcript">${timeline || `<p class="hint">Nothing recorded for this ${FORGE.pr_noun} yet.</p>`}</div>
+    <p class="hint">This is the study log the deep-review session in the chat writes to; what you say there is recorded here, and the brief carries it. ${icon("sparkles", "ico sm")}marks what a model wrote.</p>`;
   return `${stepper}
     ${ai ? "" : `<div class="banner warn">${esc(st.engine.reason)}</div>`}
     ${mode === "predict" ? "" : watchList(p)}
@@ -857,7 +873,7 @@ document.addEventListener("click", e => {
   if (t.id === "fit") return cy && cy.fit(undefined, 24);
   if (t.dataset.review) return startReview(+t.dataset.review, t);
   if (t.hasAttribute("data-refresh")) return api("/api/refresh").then(() => toast("Refreshing…")).catch(err => toast(err.message));
-  if (t.dataset.dtab) { state.dtab = t.dataset.dtab; return renderDrawer({resetScroll: true}); }
+  if (t.dataset.dtab) { state.dtab = t.dataset.dtab; syncHash(); return renderDrawer({resetScroll: true}); }
   if (t.dataset.ask) return studyAsk(state.sel, t.dataset.ask, t.dataset.qid);
   if (t.dataset.studyAdd) return studyAdd(state.sel, t.dataset.studyAdd, t.dataset.qid || null);
   if (t.hasAttribute("data-skip-predict")) return studyPost(state.sel, {kind: "prediction", skipped: true});
@@ -916,8 +932,15 @@ async function startReview(n, button){
 // Live mode: the server pushes changes. Re-render in place so tabs, filters, drafts, and the open panel survive.
 // Events are notifications, not state (see contract.py): after any gap the page fetches everything it holds
 // again rather than reasoning about what it missed.
+// A program (`readthrough show`) pointed the pages at a PR: open its panel, or with `none` narrow the map to it.
+function onFocus({pr, panel}){
+  if (!byNum[pr]) return toast(`#${pr} isn't an open ${FORGE.pr_noun} here`);
+  if (panel === "none") { closeDrawer(); state.q = "#" + pr; $("q").value = state.q; render(); return; }
+  if (state.q.trim() === "#" + pr) { state.q = ""; $("q").value = ""; render(); }
+  openDrawer(pr, PANELS.includes(panel) ? panel : "overview");
+}
 function connectLive(){
-  const es = new EventSource((LIVE.base || "") + "/api/events");
+  const es = new EventSource((LIVE.base || "") + "/api/events" + (CANVAS ? "?client=" + encodeURIComponent(CANVAS) : ""));
   // A restarted server has a new token; reload so the buttons keep working. Drafts survive in sessionStorage.
   es.addEventListener("hello", e => { if (JSON.parse(e.data).instance !== LIVE.instance) { es.close(); location.reload(); } });
   es.onopen = () => { if (LIVE.disconnected) { LIVE.disconnected = false; resync(); } header(); };
@@ -928,6 +951,7 @@ function connectLive(){
   es.addEventListener("ledger", e => { DATA.ledger = JSON.parse(e.data); loadProgress(); render(); });
   es.addEventListener("sessions", e => { for (const [n, info] of Object.entries(JSON.parse(e.data))) if (byNum[n]) Object.assign(byNum[n], info); render(); });
   es.addEventListener("study", e => onStudyEvent(JSON.parse(e.data)));
+  es.addEventListener("focus", e => onFocus(JSON.parse(e.data)));
 }
 // Everything the page holds, fetched afresh: the payload, and the study log of every PR it has looked at.
 async function resync(){
@@ -945,6 +969,13 @@ async function reloadData(announce){
   if (announce) toast(added ? `Updated: ${added} new PR${added > 1 ? "s" : ""}` : "Updated");
 }
 applyTheme();
+if (CANVAS) document.body.classList.add("canvas");
 render();
-{ const panel = JSON.parse(sessionStorage.getItem(STORE + ":panel") || "null"); if (panel && byNum[panel.sel]) openDrawer(panel.sel, panel.dtab); }
+{
+  // A PR named in the URL is a deliberate link and wins over the panel this tab remembers.
+  const linked = Number(HASH.get("pr"));
+  const panel = JSON.parse(sessionStorage.getItem(STORE + ":panel") || "null");
+  if (byNum[linked]) openDrawer(linked, state.dtab);
+  else if (panel && byNum[panel.sel]) openDrawer(panel.sel, panel.dtab);
+}
 if (LIVE) connectLive();

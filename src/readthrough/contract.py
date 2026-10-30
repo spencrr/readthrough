@@ -316,7 +316,7 @@ CLIENT_LIVE_FIELDS = frozenset({"disconnected"})
 # ---------------------------------------------------------------- events
 
 
-EVENTS = frozenset({"hello", "status", "data", "ledger", "sessions", "study", "resync"})
+EVENTS = frozenset({"hello", "status", "data", "ledger", "sessions", "study", "resync", "focus"})
 """Server-Sent Event names on /api/events.
 
 hello     {instance}                 first, on every (re)connection
@@ -326,7 +326,25 @@ ledger    the whole ledger            a status or note changed
 sessions  {number: {session, sessions}}  only the PRs whose agent sessions changed
 study     a StudyEvent                the Study tab's stream
 resync    {reason}                    this client missed events (its queue overflowed): fetch everything again
+focus     a FocusEvent                a program (``readthrough show``) asked the page to show a PR
+
+``focus`` is the one event that is a request rather than news: nothing to re-fetch, and one that was missed
+during a gap stays missed, since steering a page to where someone pointed a minute ago would be wrong.
 """
+
+FOCUS_PANELS = ("overview", "study", "brief", "none")
+"""What ``readthrough show`` can ask a page to open for a PR. ``none`` places the PR on the map (the page's
+filter narrows to it) without opening its panel, so nothing is revealed before the reviewer has predicted."""
+
+CLIENT_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}"
+"""A page may name itself on ``/api/events?client=<id>`` (a canvas does, with its instance id), and a ``focus``
+can then be addressed to that page alone."""
+
+
+class FocusEvent(TypedDict):
+    pr: int
+    panel: str  # one of FOCUS_PANELS
+
 
 STUDY_EVENT_TYPES = frozenset({"start", "delta", "tool", "entry", "usage", "done", "error", "reload"})
 """``StudyEvent.type``. The engine sends start, then any number of delta and tool, entries as they are written,

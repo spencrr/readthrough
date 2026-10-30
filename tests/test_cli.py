@@ -143,10 +143,25 @@ def test_an_invalid_config_is_reported_without_a_traceback(isolated, capsys):
     assert "retries" in err and "Traceback" not in err
 
 
-def test_repos_default_and_remove(isolated, capsys):
+def test_repos_default_and_remove(isolated, capsys, monkeypatch):
     assert dashboard(isolated, "repos") == 0
     out = capsys.readouterr().out
     assert f"* {REPO}" in out and "NOT ONBOARDED" in out
+    assert dashboard(isolated, "repos", "--json") == 0
+    listing = json.loads(capsys.readouterr().out)
+    assert listing["server"] == {"running": False, "port": 8765} and listing["default"] == SLUG
+    mine = next(r for r in listing["repos"] if r["slug"] == SLUG)
+    assert mine["name"] == REPO and mine["onboarded"] and mine["default"] and mine["built"] is None
+    assert mine["url"] == f"http://127.0.0.1:8765/r/{SLUG}/"
+    assert not next(r for r in listing["repos"] if r["name"] == "o/waiting")["onboarded"]
+    # A server on another port than the config's (`serve --port`) is the one the URLs point at.
+    monkeypatch.setattr(
+        "readthrough.serve.running_server", lambda home, **kw: {"port": 9999, "token": "t", "health": {"repos": [SLUG]}}
+    )
+    assert dashboard(isolated, "repos", "--json") == 0
+    listing = json.loads(capsys.readouterr().out)
+    assert listing["server"] == {"running": True, "port": 9999, "serving": [SLUG]}
+    assert next(r for r in listing["repos"] if r["slug"] == SLUG)["url"] == f"http://127.0.0.1:9999/r/{SLUG}/"
     assert dashboard(isolated, "default", "o/waiting") == 0
     assert dashboard(isolated, "repos") == 0
     assert "* o/waiting" in capsys.readouterr().out
@@ -160,6 +175,57 @@ def test_repos_default_and_remove(isolated, capsys):
     assert dashboard(isolated, "remove", "o/unknown") == 1
     assert dashboard(isolated, "repos") == 0
     assert "No repos yet" in capsys.readouterr().out
+
+
+def test_show_tells_the_truth_about_who_is_listening(isolated, monkeypatch, capsys):
+    """`show` steers open pages through the live server; without a server, or a page, it says so and fails."""
+    import urllib.request
+
+    found: dict | None = None
+    posted: list[dict] = []
+    delivered = {"n": 0}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"ok": True, "delivered": delivered["n"]}).encode()
+
+    def urlopen(request, timeout):  # the signature urllib has
+        posted.append(
+            {"url": request.full_url, "token": request.get_header("X-readthrough-token"), **json.loads(request.data)}
+        )
+        return Response()
+
+    monkeypatch.setattr("readthrough.serve.running_server", lambda home, **kw: found)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert dashboard(isolated, "show", "2") == 1
+    assert "isn't running" in capsys.readouterr().err
+    found = {"port": 8765, "token": "t0k", "instance": "abc", "health": {"repos": ["github/elsewhere/other"]}}
+    assert dashboard(isolated, "show", "2") == 1
+    assert "isn't serving" in capsys.readouterr().err
+    found["health"]["repos"] = [SLUG]
+    assert dashboard(isolated, "show", "2", "--client", "canvas-1", "--wait", "0.4") == 1
+    err = capsys.readouterr().err
+    assert "No dashboard page is showing" in err and "as canvas-1" in err
+    assert len(posted) >= 2, "it kept trying for as long as it was told to"
+    assert posted[0] == {
+        "url": f"http://127.0.0.1:8765/r/{SLUG}/api/focus",
+        "token": "t0k",
+        "pr": 2,
+        "panel": "overview",
+        "client": "canvas-1",
+    }
+    delivered["n"] = 2
+    assert dashboard(isolated, "show", "2", "--panel", "none") == 0
+    assert posted[-1]["panel"] == "none" and "client" not in posted[-1]
+    assert dashboard(isolated, "show", "0") == 1
+    assert dashboard(isolated, "show", "2", "--client", "no spaces") == 1
 
 
 def test_profile_actions(isolated, capsys):
