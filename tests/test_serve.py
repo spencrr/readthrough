@@ -345,6 +345,59 @@ def test_study_ask_accepts_and_reports_busy(live, monkeypatch):
     assert status == 409 and json.loads(body)["error"] == "already working"
 
 
+def test_focus_reaches_the_pages_and_says_how_many_heard(live):
+    """A program points the pages at a PR: every page of the repo, or only the one that named itself."""
+    dashboard, port = live
+    token = {"X-Readthrough-Token": dashboard.token}
+    anonymous, named = dashboard.subscribe(), dashboard.subscribe("canvas-1")
+
+    status, body = _request(port, R + "/api/focus", method="POST", body={"pr": 7, "panel": "brief"}, headers=token)
+    assert (status, json.loads(body)) == (200, {"ok": True, "delivered": 2})
+    assert anonymous.get(timeout=2) == ("focus", {"pr": 7, "panel": "brief"})
+    assert named.get(timeout=2) == ("focus", {"pr": 7, "panel": "brief"})
+
+    status, body = _request(port, R + "/api/focus", method="POST", body={"pr": 7, "client": "canvas-1"}, headers=token)
+    assert (status, json.loads(body)) == (200, {"ok": True, "delivered": 1})
+    assert named.get(timeout=2) == ("focus", {"pr": 7, "panel": "overview"}), "the panel defaults to the overview"
+    assert anonymous.empty()
+    assert json.loads(
+        _request(port, R + "/api/focus", method="POST", body={"pr": 7, "client": "nobody"}, headers=token)[1]
+    ) == {
+        "ok": True,
+        "delivered": 0,
+    }
+
+    for bad in ({"pr": 0}, {"pr": "7"}, {"pr": True}, {"pr": 7, "panel": "files"}, {"pr": 7, "client": "not ok!"}):
+        assert _request(port, R + "/api/focus", method="POST", body=bad, headers=token)[0] == 400, bad
+    assert _request(port, R + "/api/focus", method="POST", body={"pr": 7})[0] == 403, "the token is still required"
+    assert _request(port, R + "/api/events?client=not%20ok!")[0] == 400
+
+
+def test_repo_urls_quote_what_a_forge_puts_in_a_name():
+    """Azure DevOps projects have spaces; a URL handed to a program (`repos --json`, `show`) must be a URL."""
+    assert serve_mod.repo_url(8765, "ado/org/A Team/repo") == "http://127.0.0.1:8765/r/ado/org/A%20Team/repo/"
+    assert serve_mod.repo_url(8765, "github/o/r") == "http://127.0.0.1:8765/r/github/o/r/"
+
+
+def test_the_serve_file_names_the_running_server_and_only_that_one(live, tmp_path: Path):
+    """``serve.json`` is how programs of the same user find and drive the server; a stale one names nobody."""
+    dashboard, port = live
+    home = tmp_path / "home"
+    serve_mod.write_serve_file(home, port=port, instance=dashboard.instance, token=dashboard.token)
+    record = json.loads(serve_mod.serve_file(home).read_text(encoding="utf-8"))
+    assert record["port"] == port and record["token"] == dashboard.token and record["pid"] == os.getpid()
+    found = serve_mod.running_server(home)
+    assert found is not None and found["token"] == dashboard.token and found["health"]["repos"] == ["github/o/r"]
+    assert json.loads(_request(port, "/api/health")[1])["instance"] == dashboard.instance
+
+    serve_mod.write_serve_file(home, port=port, instance="stale", token=dashboard.token)
+    assert serve_mod.running_server(home) is None, "a record from a server that is gone names nobody"
+    serve_mod.serve_file(home).write_text("not json", encoding="utf-8")
+    assert serve_mod.running_server(home) is None
+    serve_mod.serve_file(home).unlink()
+    assert serve_mod.running_server(home) is None
+
+
 def test_server_alive_handles_good_bad_and_unreachable(monkeypatch):
     class Response:
         def __init__(self, payload: dict):

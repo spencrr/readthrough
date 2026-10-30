@@ -147,6 +147,8 @@ body.drawer-open #drawer{transform:none}
 .hint{font-size:12.5px;color:var(--mut);margin-top:4px}
 .actions{margin:10px 0 2px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .review-actions{gap:4px}
+/* Beside an agent session (a canvas), that session is the deep review: no button starts another, in a terminal or in VS Code. */
+body.canvas .review-actions [data-review],body.canvas .review-actions a[href^="vscode:"],body.canvas [data-review].small{display:none}
 /* In a narrow panel the buttons tighten before they wrap; system fonts on Linux run wider than Segoe UI. */
 @container (max-width:460px){.review-actions .btn{padding-left:7px;padding-right:7px;font-size:12.5px}.review-actions .action-menu summary{min-width:26px}}
 .action-menu{position:relative;margin-left:auto}

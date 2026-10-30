@@ -5,12 +5,14 @@ same single-file dashboard as a static build, plus a small API (paths relative t
 
     GET  /                    the dashboard
     GET  /api/data            the current payload
-    GET  /api/events          Server-Sent Events: data, ledger, sessions, status, study
+    GET  /api/events          Server-Sent Events: data, ledger, sessions, status, study, focus
+                              (``?client=<id>`` names the page, so a focus can be addressed to it alone)
     GET  /api/study/<n>       the PR's study log;  GET /api/brief/<n>  its brief
     POST /api/refresh         rebuild now
     POST /api/review/<n>      start or resume the deep-review session for a PR
     POST /api/ledger/<n>      {"status": "understood" | "reviewed" | ... | null}
     POST /api/study/<n>[/ask] add to the study log, or ask the study assistant
+    POST /api/focus           {"pr": n, "panel": ..., "client": ...}: ask the pages to show a PR
 
 ``GET /api/health`` (no prefix) is the liveness probe; ``/`` redirects to the default repo, or to ``/setup``
 when nothing is onboarded yet. ``/setup`` is browser onboarding and repo settings; its API lives under
@@ -18,7 +20,9 @@ when nothing is onboarded yet. ``/setup`` is browser onboarding and repo setting
 
 Only 127.0.0.1 is bound. Requests must carry a matching Host header (blocks DNS rebinding), and
 POSTs must carry the per-run token embedded in the page plus a same-origin Origin, so other sites
-in your browser can't drive it.
+in your browser can't drive it. The token is also written, with the port and the instance id, to
+``serve.json`` in the readthrough home (readable by this user alone), which is how ``readthrough show``
+and the Copilot canvas, programs of yours, find and drive the server; a web page can't read a file.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import contextlib
 import datetime as dt
 import json
 import logging
+import os
 import queue
 import random
 import re
@@ -39,6 +44,7 @@ import urllib.parse
 import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from readthrough import __version__, contract, ledger, logs, review, study
@@ -56,7 +62,7 @@ from readthrough.build import (
 from readthrough.config import DEFAULT_HOME, Config, load_settings
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.faults import ForgeError
-from readthrough.files import mtime, stamp
+from readthrough.files import mtime, stamp, write_atomic
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
 from readthrough.web_setup import Conflict, SetupError, SetupService
@@ -85,7 +91,8 @@ def base_url(port: int) -> str:
 
 
 def repo_url(port: int, slug: str) -> str:
-    return f"{base_url(port)}r/{slug}/"
+    """The repo's live page. The slug is quoted, since a forge may put spaces in a project's name."""
+    return f"{base_url(port)}r/{urllib.parse.quote(slug)}/"
 
 
 def server_url(cfg: Config) -> str:
@@ -118,7 +125,9 @@ class Dashboard:
         self._build_lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
-        self._clients: set[queue.Queue[tuple[str, Any]]] = set()
+        self._clients: dict[
+            queue.Queue[tuple[str, Any]], str | None
+        ] = {}  # each page's queue, and its name if it gave one
         # error is None or {"id", "message", "step", "at"}; the dashboard shows it, and so does /api/health.
         self.status: dict[str, Any] = {
             "building": False, "error": None, "last_build": None, "next_build": None,
@@ -173,24 +182,25 @@ class Dashboard:
 
     # ---- events
 
-    def subscribe(self) -> queue.Queue[tuple[str, Any]]:
+    def subscribe(self, client: str | None = None) -> queue.Queue[tuple[str, Any]]:
         q: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=100)
         with self._lock:
-            self._clients.add(q)
+            self._clients[q] = client
         return q
 
     def unsubscribe(self, q: queue.Queue[tuple[str, Any]]) -> None:
         with self._lock:
-            self._clients.discard(q)
+            self._clients.pop(q, None)
 
-    def broadcast(self, event: str, data: Any) -> None:
-        """Queue an event for every connected page. A page that can't keep up (a long streamed reply, a
-        throttled tab) loses what was queued and is told so with one ``resync``, so it fetches everything again
-        rather than quietly showing a stale page while its connection looks healthy."""
+    def broadcast(self, event: str, data: Any, *, client: str | None = None) -> int:
+        """Queue an event for every connected page, or only for the pages named ``client``; returns how many got
+        it. A page that can't keep up (a long streamed reply, a throttled tab) loses what was queued and is told
+        so with one ``resync``, so it fetches everything again rather than quietly showing a stale page while its
+        connection looks healthy."""
         if event not in contract.EVENTS:
             raise ValueError(f"{event!r} is not an event the page knows (contract.EVENTS)")
         with self._lock:
-            clients = list(self._clients)
+            clients = [q for q, name in self._clients.items() if client is None or name == client]
         for q in clients:
             try:
                 q.put_nowait((event, data))
@@ -200,10 +210,30 @@ class Dashboard:
                         q.get_nowait()
                 with contextlib.suppress(queue.Full):
                     q.put_nowait(("resync", {"reason": "this page fell behind the server's events"}))
+        return len(clients)
 
     def _set_status(self, **changes: Any) -> None:
         self.status.update(changes)
         self.broadcast("status", self.status)
+
+    def focus(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Ask the pages showing this repo (or the one named ``client``) to show a PR; says how many heard."""
+        number = body.get("pr")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+            or not re.fullmatch(PR_NUMBER, str(number))
+        ):
+            raise ValueError("pr must be a pull request number")
+        panel = body.get("panel", "overview")
+        if panel not in contract.FOCUS_PANELS:
+            raise ValueError(f"panel must be one of {', '.join(contract.FOCUS_PANELS)}")
+        client = body.get("client")
+        if client is not None and not (isinstance(client, str) and re.fullmatch(contract.CLIENT_ID_RE, client)):
+            raise ValueError("bad client id")
+        event: contract.FocusEvent = {"pr": number, "panel": panel}
+        return {"ok": True, "delivered": self.broadcast("focus", event, client=client)}
 
     # ---- background work
 
@@ -455,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
         dashboard, path = self._route()
         if dashboard is None:
             if path == "/api/health":
-                return self._json({"app": "readthrough", "version": __version__,
+                return self._json({"app": "readthrough", "version": __version__, "instance": self.app.instance,
                                    "repos": [r["slug"] for r in self.app.repo_names()],
                                    "status": self.app.repo_status()})  # fmt: skip
             if path in ("/", "/index.html"):
@@ -480,7 +510,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/data":
             return self._json(dashboard.snapshot())
         if path == "/api/events":
-            return self._events(dashboard)
+            client = dict(urllib.parse.parse_qsl(self.path.partition("?")[2])).get("client")
+            if client is not None and not re.fullmatch(contract.CLIENT_ID_RE, client):
+                return self._error(HTTPStatus.BAD_REQUEST, "bad client id")
+            return self._events(dashboard, client)
         try:
             if m := re.fullmatch(rf"/api/study/({PR_NUMBER})", path):
                 return self._json(dashboard.study_state(int(m.group(1))))
@@ -584,6 +617,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/refresh":
                 dashboard.request_refresh(f"requested from {self.headers.get('User-Agent', '?')[:60]}")
                 return self._json({"ok": True})
+            if path == "/api/focus":
+                return self._json(dashboard.focus(body))
             if m := re.fullmatch(rf"/api/review/({PR_NUMBER})", path):
                 sid = body.get("session")
                 if sid is not None and not (isinstance(sid, str) and re.fullmatch(r"[0-9a-f-]{36}", sid)):
@@ -627,12 +662,12 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("expected a JSON object")  # noqa: TRY004 - bad input, reported as a 400
         return data
 
-    def _events(self, dashboard: Dashboard) -> None:
+    def _events(self, dashboard: Dashboard, client: str | None = None) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        q = dashboard.subscribe()
+        q = dashboard.subscribe(client)
         try:
             self._event("hello", {"instance": self.app.instance})
             self._event("status", dashboard.status)
@@ -798,6 +833,7 @@ def serve(settings: Any, *, with_diffs: bool = True, on_ready: Any = None, setti
             f"Can't listen on port {settings.port} ({exc}). Is another program using it? Set `port` in config.toml."
         ) from exc
     httpd.sync(settings)
+    write_serve_file(settings.home, port=httpd.server_address[1], instance=httpd.instance, token=httpd.token)
     stop = threading.Event()
     threading.Thread(target=httpd.watch_config, args=(stop,), daemon=True, name="config-watch").start()
     stagger = settings.tuning.server.start_stagger_seconds
@@ -815,3 +851,28 @@ def serve(settings: Any, *, with_diffs: bool = True, on_ready: Any = None, setti
         stop.set()
         httpd.stop_all()
         httpd.server_close()
+        serve_file(settings.home).unlink(missing_ok=True)
+
+
+def serve_file(home: Path) -> Path:
+    return home / "serve.json"
+
+
+def write_serve_file(home: Path, *, port: int, instance: str, token: str) -> None:
+    """Record where this server is and how to drive it, for programs of the same user (``readthrough show``)."""
+    write_atomic(serve_file(home), json.dumps({"port": port, "instance": instance, "token": token, "pid": os.getpid()}))
+
+
+def running_server(home: Path, *, timeout: float = 0.5) -> dict[str, Any] | None:
+    """The server ``serve.json`` names, if it's the one answering on that port: its record plus the health info.
+    None when there's no record, or the record is stale (a server that stopped without cleaning up)."""
+    try:
+        record = json.loads(serve_file(home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("port"), int):
+        return None
+    info = server_alive(record["port"], timeout=timeout)
+    if info is None or info.get("instance") != record.get("instance"):
+        return None
+    return {**record, "health": info}

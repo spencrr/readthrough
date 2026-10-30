@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -14,11 +15,12 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, agents, forges, ledger, logs, review, study, system, usage
+from readthrough import __version__, agents, contract, forges, ledger, logs, review, study, system, usage
 from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
 from readthrough.faults import ForgeError
 from readthrough.forges.github import signed_in_accounts
+from readthrough.model import PR_NUMBER
 from readthrough.process import run
 from readthrough.profile import ProfileError
 
@@ -170,6 +172,60 @@ def cmd_brief(settings: Settings, args: argparse.Namespace) -> int:
         log.error("No brief for %s#%d. Run `readthrough build` (is the PR still open?).", cfg.repo, args.pr)
         return 1
     _say(str(path) if args.path else path.read_text(encoding="utf-8"))
+    return 0
+
+
+def cmd_show(settings: Settings, args: argparse.Namespace) -> int:
+    """Steer the dashboard pages showing a repo to one PR, through the live server's focus endpoint."""
+    import urllib.error
+    import urllib.request
+
+    from readthrough.serve import repo_url, running_server
+
+    cfg = settings.config_for(args.repo)
+    if args.pr < 1 or not re.fullmatch(PR_NUMBER, str(args.pr)):
+        log.error("%s isn't a pull request number", args.pr)
+        return 1
+    if args.client is not None and not re.fullmatch(contract.CLIENT_ID_RE, args.client):
+        log.error("A client id is letters, digits, and . _ : - (64 at most)")
+        return 1
+    server = running_server(settings.home)
+    if server is None:
+        log.error(
+            "The live dashboard isn't running. Start it with `readthrough serve` or `readthrough install server`."
+        )
+        return 1
+    if cfg.slug.lower() not in (s.lower() for s in server["health"].get("repos", [])):
+        log.error("The dashboard isn't serving %s. Is it onboarded? (`readthrough repos`)", cfg.repo)
+        return 1
+    body: dict[str, Any] = {"pr": args.pr, "panel": args.panel}
+    if args.client:
+        body["client"] = args.client
+    request = urllib.request.Request(  # noqa: S310 - a fixed http://127.0.0.1 URL
+        repo_url(server["port"], cfg.slug) + "api/focus",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Readthrough-Token": server["token"]},
+        method="POST",
+    )
+    deadline = time.monotonic() + max(args.wait, 0.0)
+    while True:
+        try:
+            with urllib.request.urlopen(request, timeout=5) as resp:  # noqa: S310 - a fixed http://127.0.0.1 URL
+                delivered = int(json.loads(resp.read()).get("delivered", 0))
+        except urllib.error.HTTPError as exc:
+            log.error("The dashboard refused: %s", exc.read().decode("utf-8", "replace").strip() or exc.reason)
+            return 1
+        except OSError as exc:
+            log.error("Couldn't reach the dashboard: %s", exc)
+            return 1
+        if delivered or time.monotonic() >= deadline:
+            break
+        time.sleep(0.3)
+    if not delivered:
+        where = f" as {args.client}" if args.client else ""
+        log.error("No dashboard page is showing %s%s. Open one with `readthrough open`.", cfg.repo, where)
+        return 1
+    _say(f"#{args.pr}: showing the {args.panel} panel on {delivered} page{'s' if delivered != 1 else ''}")
     return 0
 
 
@@ -398,10 +454,36 @@ def _raw_profile(source: Any) -> dict[str, Any] | None:
 def cmd_repos(settings: Settings, args: argparse.Namespace) -> int:
     from readthrough.profile import profile_sources
 
+    default = settings.entry(settings.default_repo) if settings.default_repo else None
+    if args.json:
+        # For programs (the Copilot canvas, scripts): where the live dashboard is, or would be, and what it shows.
+        from readthrough.serve import repo_url, running_server
+
+        live = running_server(settings.home)
+        port = live["port"] if live else settings.port
+        repos = [
+            {
+                "name": name,
+                "slug": cfg.slug,
+                "forge": cfg.forge,
+                "onboarded": bool(cfg.onboarded),
+                "built": dt.datetime.fromtimestamp(cfg.data_path.stat().st_mtime, tz=dt.UTC).isoformat()
+                if cfg.data_path.exists()
+                else None,
+                "url": repo_url(port, cfg.slug),
+                "default": default is not None and default is settings.entry(cfg.slug),
+            }
+            for name, cfg in zip(settings.names(), settings.all(), strict=True)
+        ]
+        picked = next((r["slug"] for r in repos if r["default"]), None)
+        server = {"running": live is not None, "port": port}
+        if live:
+            server["serving"] = live["health"].get("repos", [])
+        _say(json.dumps({"server": server, "default": picked, "repos": repos}, indent=2))
+        return 0
     if not settings.repos:
         _say("No repos yet. Onboard one with `readthrough onboard owner/name`.")
         return 0
-    default = settings.entry(settings.default_repo) if settings.default_repo else None
     for name, cfg in zip(settings.names(), settings.all(), strict=True):
         sources = profile_sources(cfg)
         built = (
@@ -866,7 +948,11 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("--no-diffs", action="store_true", help="--preview without diffs (faster)")
     p.set_defaults(func=cmd_onboard)
 
-    sub.add_parser("repos", help="list configured repos").set_defaults(func=cmd_repos)
+    p = sub.add_parser("repos", help="list configured repos")
+    p.add_argument(
+        "--json", action="store_true", help="machine-readable: the live server, the default, each repo's slug and URL"
+    )
+    p.set_defaults(func=cmd_repos)
     p = sub.add_parser("default", help="set the repo commands use when you leave out --repo")
     p.add_argument("target", metavar="OWNER/NAME")
     p.set_defaults(func=cmd_default)
@@ -902,6 +988,20 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("pr", type=int)
     p.add_argument("--path", action="store_true", help="print only the file path")
     p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser("show", help="point every open dashboard page (browser tabs, the Copilot canvas) at a PR")
+    p.add_argument("pr", type=int)
+    p.add_argument(
+        "--panel",
+        choices=contract.FOCUS_PANELS,
+        default="overview",
+        help="which panel to open; `none` places the PR on the map without opening one (default: overview)",
+    )
+    p.add_argument("--client", help="only the page that named itself this on its event stream (a canvas instance)")
+    p.add_argument(
+        "--wait", type=float, default=0.0, metavar="SECONDS", help="keep trying this long for a page to be there"
+    )
+    p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("ledger", help="record (or show) what you did with a PR")
     p.add_argument("pr", type=int)
