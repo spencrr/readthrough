@@ -10,6 +10,11 @@
   Conventional Commits (`type(scope): description`). The grammar is `scripts/commit_messages.py`, which also
   checks a range locally; Dependabot's pull requests carry `build(deps)` and `ci(deps)` prefixes so they pass.
   The history before this isn't rewritten.
+- `readthrough install` with nothing named sets up the machine in one go: it lists every piece that isn't set up
+  (each agent's review skill, the live server at logon, one-click links, the morning nudge), says what each does,
+  and asks; `--all` says yes to the recommended ones without asking, and outside a terminal it only reports. The
+  same table drives `doctor`, which now points at the one command when two or more pieces are missing, and the
+  setup page's side bar, which lists what is left to set up; onboarding ends with the same pointer.
 
 ### Fixed
 
@@ -22,6 +27,8 @@
 - Work in progress goes on `dev/<login>/<topic>` branches: the one place a collaborator can create a branch on the
   repository, with no checks required and rewriting allowed. The repository's rulesets are the whole policy now;
   the pre-push hook that kept other branches off the remote is gone.
+- `doctor` reports a missing morning nudge and, on platforms without the automation, the link handler and the
+  logon task as optional rather than as problems: they are choices, and nothing is wrong without them.
 - The release pipeline marks a release as latest only when its version is the highest released, so a patch to
   an older line doesn't take the badge from a newer one; and when a GitHub release already exists for the tag, it
   is left alone only if it is in every respect (files, title, notes, flags) the one the run would have made, and

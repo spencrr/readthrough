@@ -11,7 +11,6 @@ import subprocess
 import sys
 import time
 import webbrowser
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -71,10 +70,6 @@ def _head_for(cfg: Config, number: int) -> str:
 def _require_onboarded(cfg: Config) -> None:
     if not cfg.onboarded:
         raise ConfigError(f"{cfg.repo} isn't onboarded yet. Run `readthrough onboard {cfg.repo}`.")
-
-
-def _bundled_skill() -> str:
-    return files("readthrough").joinpath("assets/SKILL.md").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- per-repo commands
@@ -370,6 +365,9 @@ def cmd_onboard(settings: Settings, args: argparse.Namespace) -> int:
         _say(
             f"\n{repo} is onboarded. Build it with `readthrough --repo {name} build --open`; a running server picks it up on its own."
         )
+        # Said without checking, so onboarding never asks the scheduler; `install` itself knows what is left.
+        _say("Next: `readthrough install` offers whatever else isn't set up yet (the agents' review skill, the live "
+             "server, one-click links).")  # fmt: skip
         return 0
     settings.save()
     if not cfg.onboarded:
@@ -500,27 +498,76 @@ def cmd_profile(settings: Settings, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- machine setup
 
 
+def pieces(settings: Settings) -> list[system.Piece]:
+    """What ``install`` can set up here and ``doctor`` reports: the skill for each agent, then the OS pieces."""
+    return system.pieces(settings.agent, settings.agent_options)
+
+
+def _confirm(question: str, *, default: bool) -> bool:
+    answer = input(f"{question} [{'Y/n' if default else 'y/N'}] ").strip().lower()
+    return default if not answer else answer in ("y", "yes")
+
+
 def cmd_install(settings: Settings, args: argparse.Namespace) -> int:
+    if args.what is None:
+        return _install_pieces(settings, args)
+    _install(settings, args, args.what)
+    return 0
+
+
+def _install_pieces(settings: Settings, args: argparse.Namespace) -> int:
+    """``readthrough install`` with nothing named: offer every piece that isn't set up, or with ``--all`` do them."""
+    todo = [p for p in pieces(settings) if p.state is False]
+    skipped = [p for p in pieces(settings) if p.state is None and p.name != "skill"]
+    if not todo:
+        _say("Everything readthrough can set up here is set up. `readthrough doctor` has the details.")
+        return 0
+    if not args.all and not sys.stdin.isatty():
+        _say("Not set up yet:")
+        for p in todo:
+            _say(f"  {p.label:14} {p.what}")
+        _say("Run `readthrough install --all` to set them all up, or `readthrough install <name>` for one.")
+        return 1
+    done: list[str] = []
+    for p in todo:
+        if not args.all:
+            _say(f"\n{p.label}: {p.what}")
+            if not _confirm("Set it up?", default=p.recommended):
+                continue
+        elif not p.recommended:
+            continue
+        _install(settings, args, p.name.split(":")[0], agent_name=p.name.partition(":")[2] or None)
+        done.append(p.label)
+    if done:
+        _say(f"\nSet up: {', '.join(done)}. `readthrough doctor` checks it all.")
+    for p in skipped:
+        _say(f"({p.label}: {p.detail}; not automated on this platform)")
+    return 0
+
+
+def _install(settings: Settings, args: argparse.Namespace, what: str, *, agent_name: str | None = None) -> None:
     home = settings.home if args.home_set else None
-    if args.what == "skill":
-        for dest in _skill_dirs(settings, args):
+    if what == "skill":
+        dests = (
+            [agents.make(agent_name, settings.agent_options).skill_dir] if agent_name else _skill_dirs(settings, args)
+        )
+        for dest in dests:
             dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(_bundled_skill(), encoding="utf-8")
+            (dest / "SKILL.md").write_text(agents.bundled_skill(), encoding="utf-8")
             _say(f"Installed the {SKILL_NAME} skill to {dest}")
-    elif args.what == "protocol":
+    elif what == "protocol":
         _say(f"Registered {review.URL_SCHEME}:// -> {system.install_protocol()}")
         _say("Rebuild the dashboards (`readthrough build --all`) so their buttons switch to one-click launch.")
-    elif args.what == "schedule":
+    elif what == "schedule":
         command = system.install_schedule(at=args.at, days=args.days, open_mode=args.open, home=home)
         _say(f"Scheduled '{system.TASK_NAME}' ({args.days} at {args.at}): {command}")
         _say(f"Next run: {system.schedule_status().next_run or 'unknown'}")
-    elif args.what == "server":
+    elif what == "server":
         from readthrough.serve import base_url
 
         command = system.install_server_task(home=home)
         _say(f"'{system.SERVER_TASK_NAME}' starts at logon and is starting now: {command}")
         _say(f"Dashboard: {base_url(settings.port)}")
-    return 0
 
 
 def _skill_dirs(settings: Settings, args: argparse.Namespace) -> list[Path]:
@@ -607,36 +654,25 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
     check(bool(accounts), "gh", f"signed in as {', '.join(accounts)}" if accounts else "not signed in", "gh auth login")
     agent = agents.resolve(settings.agent, settings.agent_options)
     check(agent.available(), "agent", agents.describe(settings.agent, settings.agent_options), agent.install_hint)
-    for other in agents.all_agents(settings.agent_options):
-        if other.available() or other.name == agent.name:
-            skill = other.skill_dir / "SKILL.md"
-            current = skill.exists() and skill.read_text(encoding="utf-8") == _bundled_skill()
-            check(current if other.available() else None, f"skill ({other.name})",
-                  str(skill) if skill.exists() else "not installed", f"readthrough install skill --agent {other.name}")  # fmt: skip
-    registered = system.registered_protocol_command()
-    check(
-        registered == system.handler_command(),
-        "protocol",
-        registered or "not registered",
-        "readthrough install protocol",
-    )
-    sched = system.schedule_status()
-    check(sched.installed, "schedule",
-          f"{sched.state}, next {sched.next_run}, last result {sched.last_result}" if sched.installed else "not installed",
-          "readthrough install schedule")  # fmt: skip
     from readthrough import assistants, terminals
     from readthrough.serve import base_url, server_alive
 
     live = server_alive(settings.port)
     health = (live or {}).get("status") or {}
-    server_task = system.schedule_status(system.SERVER_TASK_NAME)
-    detail = f"running at {base_url(settings.port)}" if live else "not running"
-    check(
-        True if live else None,
-        "server",
-        detail + (" (starts at logon)" if server_task.installed else ""),
-        "readthrough install server",
-    )
+    machine = pieces(settings)
+    for p in machine:
+        if p.name == "server":
+            # Whether it's running now matters more than how it was started; a server that isn't is only optional.
+            detail = (f"running at {base_url(settings.port)}" if live else "not running") + (
+                " (starts at logon)" if p.state else ""
+            )
+            check(True if live else None, p.label, detail, p.fix)
+        elif p.name == "schedule":
+            check(True if p.state else None, p.label, p.detail, p.fix)  # a nudge is a choice, not a problem
+        else:
+            check(p.state, p.label, p.detail, p.fix)
+    if sum(p.state is False for p in machine) >= 2:
+        _say("    `readthrough install` sets these up in one go.")
     assistant = assistants.resolve(
         settings.assistant, runtime=settings.runtime, runtime_options=settings.runtime_options
     )
@@ -910,13 +946,18 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     for name, func in (("install", cmd_install), ("uninstall", cmd_uninstall)):
         p = sub.add_parser(
             name,
-            help=f"{name} the review skill, the readthrough:// link handler, the daily refresh, or the live server",
+            help=f"{name} the review skill, the readthrough:// link handler, the daily refresh, or the live server"
+            + ("; with nothing named, offer whatever isn't set up yet" if name == "install" else ""),
         )
-        p.add_argument("what", choices=("skill", "protocol", "schedule", "server"))
+        p.add_argument(
+            "what", nargs="?" if name == "install" else None, choices=("skill", "protocol", "schedule", "server")
+        )
         p.add_argument("--agent", choices=agents.AGENTS.names(),
                        help="skill: only this agent's skill directory (default: every installed agent's)")  # fmt: skip
         p.add_argument("--dest", help="skill: an explicit directory instead")
         if name == "install":
+            p.add_argument("--all", action="store_true",
+                           help="with nothing named: set up every recommended piece without asking")  # fmt: skip
             p.add_argument("--at", default="08:30", help="schedule: time of day, HH:MM (default 08:30)")
             p.add_argument("--days", choices=("daily", "weekdays"), default="weekdays")
             p.add_argument("--open", choices=("always", "auto", "never"), default="auto",

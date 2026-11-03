@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from fakes import FakeForge
 
-from readthrough import onboard, web_setup
+from readthrough import onboard, system, web_setup
 from readthrough.config import load_settings
 from readthrough.faults import NotFound
 from readthrough.limits import BROWSER_EDITABLE_INTS
@@ -37,6 +37,10 @@ class SetupForge(FakeForge):
 def service(tmp_path: Path, monkeypatch, fake_forge):
     home = tmp_path / "home"
     monkeypatch.setattr(web_setup, "signed_in_accounts", lambda: ["me", "me_corp"])
+    # The state names what `readthrough install` would still set up; nothing here may ask the real scheduler.
+    monkeypatch.setattr(system, "registered_protocol_command", lambda: None)
+    monkeypatch.setattr(system, "schedule_status", lambda name=system.TASK_NAME: system.ScheduleStatus(False))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "homedir"))
     monkeypatch.setattr(  # nothing here may reach a real forge
         "readthrough.forges.make", lambda cfg: SetupForge(cfg.repo, None, cfg.tuning.forge, account=cfg.account)
     )
@@ -81,6 +85,12 @@ def test_accept_needs_a_profile_that_passes(service):
     # ...and which model runtime would draft and study, so "Draft with a model" names it or says why it can't.
     assert set(state["runtime"]) == {"name", "available", "reason", "describe"}
     assert state["runtime"]["available"] == bool(state["runtime"]["describe"])
+    # ...and what `readthrough install` would still set up on this machine: only what is missing, each with the
+    # command for it, so the page can point at the one command instead of listing every integration.
+    assert all(
+        set(m) == {"label", "what", "fix"} and m["fix"].startswith("readthrough install ") for m in state["machine"]
+    )
+    assert any(m["label"].startswith("skill (") for m in state["machine"]), "no agent has the skill in this home"
     assert "never prompts" in ado["credentials"][1]
     # ...and, for an onboarded repo, which one is in use right now.
     assert state["repo"]["auth"] == "gh (active account)"

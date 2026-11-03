@@ -1,4 +1,5 @@
-"""OS integration: the ``readthrough://`` URL handler and the daily refresh task.
+"""OS integration: the ``readthrough://`` URL handler and the daily refresh task, and the table of everything
+``readthrough install`` can set up on this machine (``pieces``), which ``doctor`` and the setup page read too.
 
 Windows is implemented directly (HKCU registry and Task Scheduler, no admin rights needed). On other
 platforms the functions explain what to set up by hand.
@@ -10,7 +11,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from readthrough import agents
 from readthrough.review import URL_SCHEME
 
 if sys.platform == "win32":
@@ -203,3 +206,68 @@ def message_box(title: str, text: str) -> None:
         import ctypes
 
         ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)
+
+
+# ---------------------------------------------------------------- what install can set up
+
+
+@dataclass(frozen=True)
+class Piece:
+    """One thing ``readthrough install`` can set up on this machine, as ``doctor`` and ``install`` both see it.
+
+    ``state`` is ``True`` (installed and current), ``False`` (missing or stale), or ``None`` (not applicable
+    here: the agent isn't installed, the platform has no automation for it). ``recommended`` says whether the
+    interactive install proposes it by default; the daily nudge isn't, since it opens a browser on a timer.
+    """
+
+    name: str  # ``skill:<agent>``, or the single-piece command's name
+    label: str
+    what: str  # one line a person reads before saying yes
+    state: bool | None
+    detail: str
+    fix: str  # the single-piece command
+    recommended: bool = True
+
+
+def automated_here() -> bool:
+    """Whether this platform has the automation for the OS pieces (the link handler and the two scheduled tasks)."""
+    return sys.platform == "win32"
+
+
+def pieces(agent: str, agent_options: dict[str, Any] | None = None) -> list[Piece]:
+    """Every piece, in the order ``doctor`` lists them: the skill for each installed agent, then the OS pieces."""
+    out: list[Piece] = []
+    chosen = agents.resolve(agent, agent_options)
+    skill_text = agents.bundled_skill()
+    for candidate in agents.all_agents(agent_options):
+        if not (candidate.available() or candidate.name == chosen.name):
+            continue
+        skill = candidate.skill_dir / "SKILL.md"
+        current = skill.exists() and skill.read_text(encoding="utf-8") == skill_text
+        out.append(Piece(
+            f"skill:{candidate.name}", f"skill ({candidate.name})",
+            f"teach {candidate.label} the deep-review routine ({skill})",
+            current if candidate.available() else None,
+            str(skill) if skill.exists() else "not installed", f"readthrough install skill --agent {candidate.name}",
+        ))  # fmt: skip
+    automated = automated_here()
+    registered = registered_protocol_command()
+    out.append(Piece(
+        "protocol", "protocol", f"register {URL_SCHEME}:// links, so the dashboard's buttons work in one click",
+        (registered == handler_command()) if automated else None,
+        registered or "not registered", "readthrough install protocol",
+    ))  # fmt: skip
+    task = schedule_status(SERVER_TASK_NAME)
+    out.append(Piece(
+        "server", "server", "start the live dashboard at logon, so it is always fresh and always up",
+        task.installed if automated else None,
+        "starts at logon" if task.installed else "not installed", "readthrough install server",
+    ))  # fmt: skip
+    sched = schedule_status()
+    out.append(Piece(
+        "schedule", "schedule", "open the dashboard each weekday morning when something needs you (the nudge)",
+        sched.installed if automated else None,
+        f"{sched.state}, next {sched.next_run}, last result {sched.last_result}" if sched.installed else "not installed",
+        "readthrough install schedule", recommended=False,
+    ))  # fmt: skip
+    return out

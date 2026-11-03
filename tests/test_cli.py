@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import PROFILE_PATH, REPO, SLUG
 
-from readthrough import cli, ledger, logs, onboard, review, system
+from readthrough import agents, cli, ledger, logs, onboard, review, system
 from readthrough.faults import AuthError, NetworkError
 
 CONFIG = f"""
@@ -246,7 +246,7 @@ def test_doctor_shows_the_servers_last_failure(isolated, capsys, monkeypatch):
 def test_skill_install_and_uninstall(isolated, capsys, monkeypatch):
     dest = isolated.tmp / "skill"
     assert dashboard(isolated, "install", "skill", "--dest", str(dest)) == 0
-    assert (dest / "SKILL.md").read_text(encoding="utf-8") == cli._bundled_skill()
+    assert (dest / "SKILL.md").read_text(encoding="utf-8") == agents.bundled_skill()
     assert dashboard(isolated, "uninstall", "skill", "--dest", str(dest)) == 0
     assert capsys.readouterr().out.strip().endswith("removed")
     assert not dest.exists()
@@ -261,6 +261,66 @@ def test_skill_install_and_uninstall(isolated, capsys, monkeypatch):
     assert dashboard(isolated, "uninstall", "skill", "--agent", "claude") == 0
     assert not (isolated.tmp / "claude" / "skills" / "readthrough").exists()
     assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
+
+
+def test_install_with_nothing_named_offers_what_is_missing(isolated, capsys, monkeypatch):
+    """`readthrough install` asks about each piece that isn't set up (the nudge defaults to no), `--all` does the
+    recommended ones without asking, and a non-terminal without `--all` gets the plan and a non-zero exit."""
+    calls: list = []
+    monkeypatch.setattr(system, "install_protocol", lambda: calls.append("protocol") or "handler")
+    monkeypatch.setattr(system, "install_schedule", lambda **kw: calls.append("schedule") or "cmd")
+    monkeypatch.setattr(system, "install_server_task", lambda **kw: calls.append("server") or "cmd")
+    monkeypatch.setattr(system, "automated_here", lambda: True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated.tmp / "homedir"))
+
+    # Not a terminal: say what would be done and how, and don't do it.
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    assert dashboard(isolated, "install") == 1
+    out = capsys.readouterr().out
+    assert "Not set up yet:" in out and "skill (copilot)" in out and "protocol" in out and "install --all" in out
+    assert calls == []
+
+    # A terminal: one question per piece (both agents count as installed here); the answers in order are yes,
+    # no, no, Enter (the default: yes), Enter (the nudge's default: no).
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    answers = iter(["y", "n", "n", "", ""])
+    asked: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or next(answers))
+    assert dashboard(isolated, "install") == 0
+    out = capsys.readouterr().out
+    assert len(asked) == 5, asked  # skill (copilot), skill (claude), protocol, server, schedule
+    assert asked[:4] == ["Set it up? [Y/n] "] * 4 and asked[4] == "Set it up? [y/N] ", "the nudge defaults to no"
+    assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
+    assert not (isolated.tmp / "claude" / "skills" / "readthrough").exists(), "declined"
+    assert calls == ["server"], "protocol was declined; the nudge's default is no"
+    assert "Set up: skill (copilot), server" in out
+
+    # --all: the recommended pieces, no questions; the nudge stays a choice.
+    calls.clear()
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("--all must not ask"))
+    assert dashboard(isolated, "install", "--all") == 0
+    assert calls == ["protocol", "server"], "the copilot skill is current now, and the nudge isn't recommended"
+    assert (isolated.tmp / "claude" / "skills" / "readthrough" / "SKILL.md").exists()
+    assert "Set up: skill (claude), protocol, server" in capsys.readouterr().out
+
+
+def test_install_with_everything_in_place_says_so(isolated, capsys, monkeypatch):
+    monkeypatch.setattr(system, "automated_here", lambda: False)  # nothing to automate but the skill
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: isolated.tmp / "homedir"))
+    assert dashboard(isolated, "install", "skill") == 0
+    assert dashboard(isolated, "install") == 0
+    out = capsys.readouterr().out
+    assert "Everything readthrough can set up here is set up" in out
+
+
+def test_doctor_points_at_the_one_command_when_two_or_more_pieces_are_missing(isolated, capsys, monkeypatch):
+    monkeypatch.setattr(system, "automated_here", lambda: True)
+    assert dashboard(isolated, "doctor") in (0, 1)
+    out = capsys.readouterr().out
+    assert "XX  skill (copilot)" in out and "XX  protocol" in out
+    assert "--  server         not running" in out, "a server that isn't running is something to want, not a fault"
+    assert "--  schedule" in out, "the nudge is a choice, not a problem"
+    assert "`readthrough install` sets these up in one go" in out
 
 
 def test_system_installs_are_delegated(isolated, capsys, monkeypatch):
