@@ -2,6 +2,8 @@
 :root,[data-theme=light]{--bg:#ffffff;--subtle:#f6f8fa;--panel:#ffffff;--inset:#f6f8fa;--line:#d1d9e0;--line-strong:#afb8c1;--fg:#1f2328;--mut:#59636e;--acc:#0969da;--acc-fg:#ffffff;--acc-soft:#ddf4ff;--good:#1a7f37;--warn:#9a6700;--bad:#d1242f;--external:#bc4c00;--glass-bg:rgba(255,255,255,.72);--glass-line:rgba(31,35,40,.12);--shadow:0 1px 3px rgba(31,35,40,.12)}
 [data-theme=dark]{--bg:#22272e;--subtle:#2d333b;--panel:#2d333b;--inset:#1c2128;--line:#444c56;--line-strong:#545d68;--fg:#cdd9e5;--mut:#909dab;--acc:#539bf5;--acc-fg:#1c2128;--acc-soft:#2b3b52;--good:#57ab5a;--warn:#c69026;--bad:#e5534b;--external:#e0823d;--glass-bg:rgba(34,39,46,.72);--glass-line:rgba(205,217,229,.12);--shadow:none}
 *{box-sizing:border-box}
+/* The views differ in height, so without this the page's scrollbar comes and goes as the tabs change, and everything shifts sideways by its width. */
+html{scrollbar-gutter:stable}
 body{margin:0;font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 code,.mono{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:12.5px}

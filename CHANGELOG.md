@@ -11,12 +11,17 @@
   checks a range locally; Dependabot's pull requests carry `build(deps)` and `ci(deps)` prefixes so they pass.
   The history before this isn't rewritten.
 
+### Fixed
+
+- Switching views no longer shifts the page sideways: the views differ in height, so the scrollbar came and went
+  with the tab and the layout moved by its width each time. The gutter is reserved now, on the page and in the
+  PR panel.
+
 ### Changed
 
 - Work in progress goes on `dev/<login>/<topic>` branches: the one place a collaborator can create a branch on the
   repository, with no checks required and rewriting allowed. The repository's rulesets are the whole policy now;
   the pre-push hook that kept other branches off the remote is gone.
-
 - The release pipeline marks a release as latest only when its version is the highest released, so a patch to
   an older line doesn't take the badge from a newer one; and when a GitHub release already exists for the tag, it
   is left alone only if it is in every respect (files, title, notes, flags) the one the run would have made, and
