@@ -4,7 +4,18 @@
 
 ## Unreleased
 
+### Added
+
+- `CONTRIBUTING.md`, and a check on every pull request that its title and each of its commits follow
+  Conventional Commits (`type(scope): description`). The grammar is `scripts/commit_messages.py`, which also
+  checks a range locally; Dependabot's pull requests carry `build(deps)` and `ci(deps)` prefixes so they pass.
+  The history before this isn't rewritten.
+
 ### Changed
+
+- Work in progress goes on `dev/<login>/<topic>` branches: the one place a collaborator can create a branch on the
+  repository, with no checks required and rewriting allowed. The repository's rulesets are the whole policy now;
+  the pre-push hook that kept other branches off the remote is gone.
 
 - The release pipeline marks a release as latest only when its version is the highest released, so a patch to
   an older line doesn't take the badge from a newer one; and when a GitHub release already exists for the tag, it

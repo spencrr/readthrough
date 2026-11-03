@@ -67,7 +67,7 @@ build-constraint-dependencies = ["hatchling==1.33.0"]
 readthrough = { workspace = true }
 
 [tool.hatch.build.targets.sdist]
-include = ["src/readthrough", "tests", "docs", "examples", "CHANGELOG.md", "LICENSE", "README.md", "AGENTS.md"]
+include = ["src/readthrough", "tests", "docs", "examples", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "README.md", "AGENTS.md"]
 exclude = ["docs/img"]
 
 [tool.hatch.build.targets.wheel]
@@ -159,8 +159,9 @@ skip_covered = true
 
 [tool.ty.environment]
 python-version = "3.11"
-# tests/ is a root too, so `from conftest import ...` resolves the way pytest's rootdir import does.
-root = ["src", "tests"]
+# tests/ is a root too, so `from conftest import ...` resolves the way pytest's rootdir import does; scripts/ so a
+# test can import the script it checks.
+root = ["src", "tests", "scripts"]
 
 [tool.ty.src]
 include = ["src", "tests", "scripts"]
