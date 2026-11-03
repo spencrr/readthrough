@@ -14,13 +14,13 @@ uv run pytest tests/test_engine.py -q    # one file; -k NAME for one test; -m e2
 uv run readthrough --help                # the CLI from the checkout
 uv build                                 # sdist and wheel into dist/
 uvx zizmor .github/workflows             # lint the workflows; a required check, so keep it clean
-git config core.hooksPath .githooks      # once per clone: --quick before every commit; push only main, release/*, v* tags
+git config core.hooksPath .githooks      # once per clone: runs --quick before every commit
 uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw docs/img/*.webp from a built repo
 ```
 
 CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python
 in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linter) are the two checks the branch
-ruleset requires, and a change reaches `main` through a pull request the maintainer (the code owner) has approved, up to date with `main` and rebased or squashed so the history stays linear. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
+ruleset requires, and a change reaches `main` through a pull request the maintainer (the code owner) has approved, up to date with `main` and rebased or squashed so the history stays linear. Work in progress lives on `dev/<your login>/<topic>` branches, the one namespace a collaborator can create on the repository; they take no checks and may be rewritten freely. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
 stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
 `uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
 installed; on CI they fail instead, since the hosted runners have one. A release is a `vX.Y.Z` tag on `main`:
