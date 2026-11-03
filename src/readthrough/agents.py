@@ -23,6 +23,7 @@ import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -33,6 +34,11 @@ from readthrough.tuning import default_tuning
 AUTO = "auto"
 AUTO_ORDER = ("copilot", "claude")  # the first installed wins when agent = "auto"
 SKILL_NAME = "readthrough"
+
+
+def bundled_skill() -> str:
+    """The deep-review skill as shipped, which ``install skill`` writes and ``doctor`` compares against."""
+    return files("readthrough").joinpath("assets/SKILL.md").read_text(encoding="utf-8")
 
 
 @dataclass(frozen=True)

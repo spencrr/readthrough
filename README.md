@@ -21,11 +21,12 @@ uv tool install "readthrough[study]"           # from PyPI; drop [study] to skip
 
 readthrough onboard microsoft/vscode --accept  # map the repo's architecture (edit the draft first if you like)
 readthrough build --open                       # fetch the PRs and open the dashboard
+readthrough install                            # the rest, one question each: the agents' review skill, the live server, one-click links
 ```
 
 Repos elsewhere take a `--forge`: `readthrough onboard --forge forgejo forgejo/forgejo`, `--forge gitlab gitlab-org/cli`, or `--forge ado organization/project/repository`. Those are read through the platform's REST API, with a token from its own CLI (`glab`, `az`) or an environment variable when there is one, and anonymously otherwise, which is enough for public repos.
 
-That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or `readthrough install server` to start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with a model drafting the profile if you like. `readthrough install skill` teaches the review agents the deep-review routine, and `readthrough doctor` tells you what's missing.
+That gives you a static dashboard you rebuild when you want. For one that stays fresh, run the live server (`readthrough serve`, or let `readthrough install` start it at logon on Windows) and open <http://127.0.0.1:8765/>; with nothing onboarded yet it walks you through onboarding, with a model drafting the profile if you like. `readthrough install` offers everything else readthrough can set up on your machine and asks about each (`--all` skips the questions); `readthrough doctor` tells you what's missing afterwards.
 
 ![Studying a vscode PR: the prediction, a question the model asked, the answer, and its verdict with evidence](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/study.webp)
 

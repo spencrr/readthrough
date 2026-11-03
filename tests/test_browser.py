@@ -55,6 +55,10 @@ def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
     fake_forge.total = 40  # more open than fetched, so the "limit" banner shows
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
     monkeypatch.setattr("readthrough.build.registered_protocol_command", lambda: None)
+    # The setup page's state names what `install` would still set up; the real scheduler is never asked.
+    monkeypatch.setattr("readthrough.system.registered_protocol_command", lambda: None)
+    monkeypatch.setattr("readthrough.system.schedule_status", lambda name="": SimpleNamespace(installed=False))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "homedir"))
     cfg = Config(home=tmp_path / "home", repo=REPO, onboarded="2026-10-01T00:00:00+00:00")
     cfg.home.mkdir(parents=True)
     (cfg.home / "config.toml").write_text(
@@ -574,6 +578,11 @@ def test_setup_page_loads_and_lists_the_repo(page):
     page.goto(f"{page.base}/setup")
     page.wait_for_selector("#nav .ritem")
     assert REPO in page.inner_text("#nav")
+    # The side bar says what `readthrough install` would still set up here (the skill at least: no agent has it in
+    # this test's home), so a newcomer who onboarded in the browser learns the rest exists.
+    machine = page.inner_text("#nav ul.machine")
+    assert "skill (" in machine and "deep-review routine" in machine
+    assert "readthrough install" in page.inner_text("#nav")
     assert page.errors == []
 
 

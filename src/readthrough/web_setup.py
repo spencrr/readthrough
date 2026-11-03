@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from readthrough import forges, onboard, review
+from readthrough import forges, onboard, review, system
 from readthrough.config import Config, ConfigError, Settings, guess_clone, remote_for
 from readthrough.faults import ForgeError
 from readthrough.forges import Forge
@@ -104,6 +104,7 @@ class SetupService:
             "accounts": signed_in_accounts(),
             "forges": [_forge_view(name) for name in forges.names()],
             "runtime": _runtime_view(settings),
+            "machine": _machine_view(settings),
         }
         if repo:
             forge_name, repo = _locator(repo, forge)
@@ -598,6 +599,15 @@ def _forge_view(name: str) -> dict[str, Any]:
         "access": adapter.access,
         "credentials": list(adapter.credentials),
     }
+
+
+def _machine_view(settings: Settings) -> list[dict[str, Any]]:
+    """What ``readthrough install`` would still set up on this machine, so the setup page can say so."""
+    return [
+        {"label": p.label, "what": p.what, "fix": p.fix}
+        for p in system.pieces(settings.agent, settings.agent_options)
+        if p.state is False
+    ]
 
 
 def _runtime_view(settings: Settings) -> dict[str, Any]:

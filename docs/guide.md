@@ -23,7 +23,7 @@ uv tool install -e "~/src/readthrough[study]"
 
 If the live server is running, stop it before reinstalling (`readthrough uninstall server`, then `install server` again afterwards). Windows won't let uv replace files the server has open.
 
-Then run the installers. Each one is optional and can be undone with `readthrough uninstall <same thing>`.
+Then run `readthrough install`. With nothing named it goes through everything readthrough can set up on this machine that isn't set up yet, says what each piece does, and asks; `--all` says yes to every recommended piece without asking (the morning nudge isn't one: it opens a browser on a timer, so it stays a question, or `readthrough install schedule`). In a script, or anywhere that isn't a terminal, `readthrough install` without `--all` only lists what it would do. Each piece can also be installed on its own, and undone with `readthrough uninstall <same thing>`:
 
 - `readthrough install skill` copies the deep-review instructions into each installed agent's skill directory: `~/.agents/skills/readthrough` for the Copilot CLI and VS Code's agent sessions, `~/.claude/skills/readthrough` for Claude Code (`--agent claude` for just one). Re-run it after pulling changes; `doctor` warns you when an installed copy is out of date.
 - `readthrough install server` starts the live dashboard now and again every time you log in. Open it with `readthrough open`, or bookmark <http://127.0.0.1:8765/>.
@@ -499,7 +499,8 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 | `ledger N [--status S] [--note T] [--clear]` | Record, show, or clear what you did with a PR |
 | `study N [--prediction T] [--teachback T] [--note T] [--finding S:T --at P:L]` | Show or add to a PR's study log |
 | (browser) `/setup` | Onboard a repo, or change a repo's settings |
-| `install` / `uninstall skill\|server\|schedule\|protocol` | Manage the integrations |
+| `install [skill\|server\|schedule\|protocol] [--all]` | Set up the integrations: all that are missing, asking about each, or one |
+| `uninstall skill\|server\|schedule\|protocol` | Undo one |
 | `config [--edit] [--defaults] [--check]` | Show, open, explain, or validate the configuration |
 | `doctor [--bundle]` | Check the setup, or write a debug bundle for a bug report |
 

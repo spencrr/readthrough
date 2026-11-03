@@ -81,7 +81,16 @@ function globalCard(){
     <label class="f">Default repo<select id="g-default"><option value="">(none)</option>${onboarded.map(r => `<option value="${esc(r.slug)}" ${same(st.default_repo, r.cli_name) ? "selected" : ""}>${esc(r.cli_name)}</option>`).join("")}</select></label>
     <label class="f" style="margin-top:6px">Refresh every (minutes)<input type="number" id="g-refresh" min="1" max="1440" value="${st.refresh_minutes}" style="width:90px"></label>
     <div class="row"><button class="btn" data-act="save-global">Save</button></div>
-    <div class="cli" style="margin-top:4px">Port <b>${st.port}</b> (change it in <code>config.toml</code>, then restart the server)</div></div>`;
+    <div class="cli" style="margin-top:4px">Port <b>${st.port}</b> (change it in <code>config.toml</code>, then restart the server)</div>
+    ${machineCard()}</div>`;
+}
+// What `readthrough install` would still set up on this machine: the one place a newcomer learns the rest exists.
+function machineCard(){
+  const missing = S.state.machine || [];
+  if (!missing.length) return "";
+  return `<h2 style="font-size:13px;margin-top:12px">${icon("terminal", "ico sm")}This machine</h2>
+    <ul class="machine">${missing.map(m => `<li><b>${esc(m.label)}</b>: ${esc(m.what)}</li>`).join("")}</ul>
+    <div class="cli">Set them up in one go: <code>readthrough install</code> (it asks about each; <code>--all</code> doesn't)</div>`;
 }
 
 // ---- onboarding wizard
