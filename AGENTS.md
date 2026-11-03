@@ -19,7 +19,7 @@ uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw d
 ```
 
 CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python
-in its matrix, and sums it up in `gate`; `gate` and `zizmor` (the workflow linter) are the two checks the branch
+in its matrix, and sums it up in `gate`; `gate`, `zizmor` (the workflow linter), and `commits` (Conventional Commits on the PR title and each commit) are the checks the branch
 ruleset requires, and a change reaches `main` through a pull request the maintainer (the code owner) has approved, up to date with `main` and rebased or squashed so the history stays linear. Work in progress lives on `dev/<your login>/<topic>` branches, the one namespace a collaborator can create on the repository; they take no checks and may be rewritten freely. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
 stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
 `uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
@@ -109,4 +109,6 @@ installed; on CI they fail instead, since the hosted runners have one. A release
   builds what gets published uses no package cache (the test jobs may: a coverage report isn't shipped);
   in-repo workflows are called as `$/.github/workflows/<file>` so they count as pinned. `.github/zizmor.yml`
   holds the policy and the `zizmor` job fails on any finding.
-- **Commits** are one logical change each, with a message a person would write, and no trailers.
+- **Commits** are one logical change each. The subject is Conventional Commits, `type(scope): description`
+  (`CONTRIBUTING.md` lists the types; `scripts/commit_messages.py --range origin/main..HEAD` checks what you're
+  about to propose); the body is prose a person would write, and there are no trailers.

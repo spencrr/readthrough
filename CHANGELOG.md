@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+### Added
+
+- `CONTRIBUTING.md`, and a check on every pull request that its title and each of its commits follow
+  Conventional Commits (`type(scope): description`). The grammar is `scripts/commit_messages.py`, which also
+  checks a range locally; Dependabot's pull requests carry `build(deps)` and `ci(deps)` prefixes so they pass.
+  The history before this isn't rewritten.
+
 ### Changed
 
 - Work in progress goes on `dev/<login>/<topic>` branches: the one place a collaborator can create a branch on the

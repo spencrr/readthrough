@@ -1,0 +1,33 @@
+# Every pull request's title and commit subjects follow Conventional Commits (CONTRIBUTING.md). The title is
+# checked because a squash makes it the commit; each commit because a rebase lands them as they are. The grammar
+# lives in scripts/commit_messages.py, where the tests cover it; this workflow only runs it.
+name: Commit messages
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: commits-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  commits:
+    name: commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout, and the commits between the base and the head
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the range check needs the base branch's history
+      # The script needs only the standard library, so the runner's own Python does; nothing else is installed.
+      # The title reaches the shell through the environment, never by interpolation, so it can't inject.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/commit_messages.py --title "$TITLE" --range "$BASE..$HEAD"
