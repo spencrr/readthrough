@@ -6,6 +6,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7 # a release has to be a week old before it is proposed
+    commit-message:
+      prefix: build(deps) # Conventional Commits, as the pull request check requires
     groups:
       python:
         patterns: ["*"]
@@ -18,6 +20,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: ci(deps)
     groups:
       actions:
         patterns: ["*"]

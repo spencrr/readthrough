@@ -34,6 +34,7 @@ That gives you a static dashboard you rebuild when you want. For one that stays 
 - [Using readthrough](https://github.com/spencrr/readthrough/blob/main/docs/guide.md): onboarding, the dashboard, deep reviews, studying, keeping it fresh, configuration, and troubleshooting.
 - [Writing a profile](https://github.com/spencrr/readthrough/blob/main/docs/profiles.md): how to describe a repo's architecture well, and how to share it.
 - [Maintaining readthrough](https://github.com/spencrr/readthrough/blob/main/docs/maintaining.md): the checks, error handling, logging, settings, plugins, and the pages' structure.
+- [Contributing](CONTRIBUTING.md): branches, commit messages, and the checks a change goes through.
 - [Working on readthrough](AGENTS.md): the exact commands and the conventions that aren't obvious.
 - [Examples](examples/): runnable scripts, including one that needs nothing but the standard library.
 - [Changelog](CHANGELOG.md).
