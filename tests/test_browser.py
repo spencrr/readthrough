@@ -152,6 +152,33 @@ def test_every_view_renders_without_script_errors(page):
     assert page.errors == []
 
 
+def test_switching_views_never_shifts_the_layout_sideways(page):
+    """The views differ in height, so the page's scrollbar would come and go as the tabs change and everything
+    would shift by its width; the gutter is reserved instead. The same holds for the drawer's tabs."""
+    page.set_viewport_size({"width": 1100, "height": 560})  # short enough that the longest view scrolls
+    open_dashboard(page)
+    widths = {}
+    for tab in ("map", "plan", "overlap", "table"):
+        page.click(f'[data-tab="{tab}"]')
+        page.wait_for_selector(f"#v-{tab}.on")
+        widths[tab] = page.evaluate(
+            "[document.documentElement.clientWidth, document.getElementById('tabs').getBoundingClientRect().width]"
+        )
+    assert len({tuple(w) for w in widths.values()}) == 1, f"the layout width changed with the view: {widths}"
+    # Headless Chromium draws overlay scrollbars that take no width, so the reservation itself can't be seen here;
+    # that the rule is in force is what can be checked.
+    assert page.evaluate("getComputedStyle(document.documentElement).scrollbarGutter") == "stable"
+    page.click('#v-table [data-open="2"]')
+    page.wait_for_selector("body.drawer-open")
+    body_widths = set()
+    for dtab in ("overview", "study", "brief"):
+        page.click(f'[data-dtab="{dtab}"]')
+        page.wait_for_timeout(100)
+        body_widths.add(page.evaluate("document.querySelector('#drawer .dbody').clientWidth"))
+    assert len(body_widths) == 1, f"the drawer's content width changed with its tab: {body_widths}"
+    assert page.errors == []
+
+
 def test_a_link_naming_a_view_that_does_not_exist_opens_the_map(page):
     """The tab is read from the URL and used to pick a renderer; a prototype member's name must not be one."""
     for i, hash_ in enumerate(("constructor", "__proto__", "toString", "nope")):
