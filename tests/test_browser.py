@@ -766,11 +766,12 @@ def test_a_canvas_page_is_steered_by_readthrough_show_and_starts_no_second_sessi
     from readthrough import cli
     from readthrough.serve import serve_file
 
-    page.goto(f"{page.base}/r/{SLUG}/#map?canvas=canvas-1")
-    page.wait_for_selector("#v-map.on")
+    page.goto(f"{page.base}/r/{SLUG}/#table?canvas=canvas-1")  # the reviewer was looking at the table
+    page.wait_for_selector("#v-table.on")
     page.wait_for_function("() => LIVE && !LIVE.disconnected")
     assert page.evaluate("document.body.classList.contains('canvas')")
-    assert page.evaluate("location.hash") == "#map?canvas=canvas-1", "the page keeps its name in the URL"
+    assert page.evaluate("location.hash") == "#table?canvas=canvas-1", "the page keeps its name in the URL"
+    assert page.locator("#banners .banner").count() == 0, "no 'since you last opened' news beside a session"
 
     health = json.loads(urllib.request.urlopen(f"{page.base}/api/health", timeout=5).read())
     record = {
@@ -789,6 +790,7 @@ def test_a_canvas_page_is_steered_by_readthrough_show_and_starts_no_second_sessi
 
     assert show("2", "--panel", "none", "--client", "canvas-1", "--wait", "5") == 0
     page.wait_for_function("() => state.q === '#2'")
+    assert page.evaluate("state.tab") == "map", "`none` means the map, whichever view was showing"
     assert page.evaluate("document.body.classList.contains('drawer-open')") is False, (
         "placed on the map, nothing revealed"
     )
