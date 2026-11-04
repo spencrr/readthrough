@@ -259,6 +259,8 @@ In VS Code's Agents window a session can have *canvases*: pages shown beside the
 
 The agent opens the canvas on a repo and points it: in the predict phase it places the PR on the architecture map without opening anything (the map narrows to that one PR, so you see which components it touches and nothing more), and once you've committed it opens the brief, the overview, or the study log. The same page, a browser tab included, answers to `readthrough show 2897` (`--panel none|overview|study|brief`), which is all the agent does. Beside a session the page knows that the session is the deep review: the buttons that would start another one are hidden, and the Study tab shows the log the session writes to rather than a second composer.
 
+![The dashboard beside a deep-review session in VS Code's Agents window, narrowed to the one PR under review](img/canvas.webp)
+
 The canvas is a small Copilot extension (two JavaScript files the Copilot runtime loads, under `~/.copilot/extensions/readthrough/`) that only runs the `readthrough` CLI; it records which interpreter installed it, so it keeps working when the editor's PATH doesn't have `readthrough`. `readthrough doctor` says whether the installed copy matches the version you have; `readthrough uninstall canvas` removes exactly what was installed. The canvas API is experimental in the Copilot SDK, so this part of readthrough is too.
 
 ## Studying a PR
