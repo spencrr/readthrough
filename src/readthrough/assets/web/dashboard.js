@@ -317,7 +317,8 @@ function banners(){
   for (const w of (DATA.warnings || []).filter(w => w.code !== "limit")) out.push(`<div class="banner warn"><b>${icon("info", "ico sm")}${esc(w.message)}</b>${w.details?.length ? `<details class="muted"><summary>${w.details.length} detail${w.details.length > 1 ? "s" : ""}</summary><ul>${w.details.map(d => `<li><code>${esc(d)}</code></li>`).join("")}</ul></details>` : ""}</div>`);
   if (DATA.draft) out.push(`<div class="banner warn"><b>Onboarding preview.</b><span class="muted">This map comes from a draft profile. Edit it, then finish with <code>readthrough onboard ${esc(DATA.repo)} --accept</code>.</span></div>`);
   if (DATA.drift) out.push(`<div class="banner warn"><b>The map is drifting:</b><span>only ${Math.round(DATA.drift.coverage * 100)}% of open-PR changes land in a known component.</span><span class="muted">Unmapped: ${DATA.drift.unmapped.map(([p, n]) => `<code>${esc(p)}</code> (${n})`).join(", ")}. Update it with <code>readthrough onboard ${esc(DATA.repo)} --update</code>.</span></div>`);
-  const nw = DATA.news || {};
+  // Beside a session the page is a reference, not the morning's visit: what happened since is the browser tab's news.
+  const nw = CANVAS ? {} : DATA.news || {};
   if (nw.since){
     const list = ns => ns.filter(n => byNum[n]).map(n => chip(byNum[n])).join(" ");
     const parts = [];
@@ -935,7 +936,8 @@ async function startReview(n, button){
 // A program (`readthrough show`) pointed the pages at a PR: open its panel, or with `none` narrow the map to it.
 function onFocus({pr, panel}){
   if (!byNum[pr]) return toast(`#${pr} isn't an open ${FORGE.pr_noun} here`);
-  if (panel === "none") { closeDrawer(); state.q = "#" + pr; $("q").value = state.q; render(); return; }
+  // `none` places the PR on the architecture map, whichever view was showing: that is what "show me where it lands" means.
+  if (panel === "none") { closeDrawer(); state.tab = "map"; state.q = "#" + pr; $("q").value = state.q; render(); return; }
   if (state.q.trim() === "#" + pr) { state.q = ""; $("q").value = ""; render(); }
   openDrawer(pr, PANELS.includes(panel) ? panel : "overview");
 }
