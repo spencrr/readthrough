@@ -16,6 +16,7 @@ uv build                                 # sdist and wheel into dist/
 uvx zizmor .github/workflows             # lint the workflows; a required check, so keep it clean
 git config core.hooksPath .githooks      # once per clone: runs --quick before every commit
 uv run python scripts/screenshots.py --repo microsoft/vscode --pr N   # redraw docs/img/*.webp from a built repo
+uv run python scripts/screenshot_canvas.py --repo microsoft/PyRIT --pr N   # the VS Code canvas shot (Windows; a real session)
 ```
 
 CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS, and Windows for every Python

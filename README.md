@@ -30,6 +30,8 @@ That gives you a static dashboard you rebuild when you want. For one that stays 
 
 ![Studying a vscode PR: the prediction, a question the model asked, the answer, and its verdict with evidence](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/study.webp)
 
+![A deep review in VS Code's Agents window, with the dashboard beside it: the agent has placed the PR on the architecture map and asked for a prediction](https://raw.githubusercontent.com/spencrr/readthrough/main/docs/img/canvas.webp)
+
 ## Docs
 
 - [Using readthrough](https://github.com/spencrr/readthrough/blob/main/docs/guide.md): onboarding, the dashboard, deep reviews, studying, keeping it fresh, configuration, and troubleshooting.
