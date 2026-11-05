@@ -120,7 +120,7 @@ The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`,
 - Every script carries a per-render nonce, and the content security policy runs nothing else. Don't add inline event handlers (`onclick=`); use the delegated listeners.
 - PR descriptions and comments are third-party HTML. They go through DOMPurify, and `test_browser.py` checks that an `onerror` attribute doesn't survive.
 - Escape everything else you interpolate with `esc()`.
-- Third-party JavaScript is vendored under `assets/vendor/` with its license, and listed in `build.VENDOR_SCRIPTS`. The page itself makes no requests to other sites; the images in a PR's description are the one exception, and `SECURITY.md` says what that means.
+- Third-party JavaScript is vendored under `assets/vendor/` with its license, and listed in `pages.VENDOR_SCRIPTS`. The page itself makes no requests to other sites; the images in a PR's description are the one exception, and `SECURITY.md` says what that means.
 - Check both themes. New colors go in `theme.css` as tokens if both pages use them, otherwise at the top of the page's CSS.
 
 ### The contract with the server

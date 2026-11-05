@@ -59,6 +59,7 @@ forges/           a registry of forge adapters: github (gh), gitlab, forgejo, az
 faults.py         how outside calls fail, classified from a CLI's stderr or an HTTP status
 process.py        running programs: UTF-8, timeouts, secrets that never reach a log
 build.py          one build: fetch, analyze, write data.json, the dashboard, and the briefs
+pages.py          the served pages, assembled from assets/web with the data inlined and a nonce on every script
 analyze.py        lanes, signals, line heuristics, overlaps, and the burn-down plan
 ci.py             which checks are required, failing, or also failing on main
 brief.py          the Markdown brief a reviewer reads before the diff

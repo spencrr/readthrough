@@ -87,9 +87,9 @@ engine CI uses, else an installed Edge or Chrome; they skip when there is none, 
   by call id; tokens, Copilot's multiplier, and AI credits stay separate, a dollar figure must name its price
   table, and nothing unreported is written as zero. `billed_to` says whose account paid.
 - **The pages are one served file.** `assets/web/` holds separate `.html`, `.css`, `.js` for editing;
-  `build.page_source` inlines them, every script carries a per-render nonce, and the CSP runs nothing else.
+  `pages.page_source` inlines them, every script carries a per-render nonce, and the CSP runs nothing else.
   No inline `onclick=`; third-party HTML goes through DOMPurify. Vendored JS lives in `assets/vendor/` with
-  its license and is listed in `build.VENDOR_SCRIPTS`.
+  its license and is listed in `pages.VENDOR_SCRIPTS`.
 - **What crosses between page and server is declared in `contract.py`** (the payload, the SSE events, the
   study API) and `test_contract.py` checks both sides: a build has exactly those shapes, the page reads nothing
   else. Events are notifications; a GET is the truth, and after any gap (`hello` with a new instance, `resync`,

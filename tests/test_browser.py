@@ -19,8 +19,9 @@ import pytest
 from conftest import BROWSER_ENGINE, PROFILE_PATH, REPO, SLUG
 
 from readthrough import ledger, study
-from readthrough.build import build, render_html
+from readthrough.build import build
 from readthrough.config import Config
+from readthrough.pages import render_html
 from readthrough.serve import Dashboard, DashboardServer
 
 sync_api = pytest.importorskip("playwright.sync_api")

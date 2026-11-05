@@ -55,8 +55,6 @@ from readthrough.build import (
     build,
     mark_seen,
     refresh_sessions,
-    render_html,
-    render_setup,
     session_changes,
 )
 from readthrough.config import DEFAULT_HOME, Config, load_settings
@@ -66,6 +64,7 @@ from readthrough.faults import ForgeError
 from readthrough.files import mtime, stamp, write_atomic
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
+from readthrough.pages import render_html, render_setup
 from readthrough.study import Action, EntryKind, Writer
 from readthrough.web_setup import Conflict, SetupError, SetupService
 
