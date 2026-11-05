@@ -79,6 +79,8 @@ assets/web/       the pages as separate HTML, CSS, and JS, inlined into one serv
 assets/vendor/    Cytoscape, marked, DOMPurify, and Lucide icons, with their licenses
 ```
 
+The modules sit in layers, each importing only from the ones below it: the records and limits everything shares; the machine (processes, logs, config, the ledger); the plugins and what they fill in (forges, runtimes, agents, profiles, the study log); reading a PR (analysis, the brief, onboarding, review sessions); the assistants; building a dashboard; and the two entry points, `cli` and `serve`. `tests/test_layers.py` is that table, and fails when a module reaches up.
+
 To extend it: a new forge, a new place profiles can come from, a new review agent, a new terminal, or a new study assistant is a registry entry with an options dataclass, described in [Maintaining readthrough](https://github.com/spencrr/readthrough/blob/main/docs/maintaining.md#plugins). Everything repo-specific is data in a profile, described in [Writing a profile](https://github.com/spencrr/readthrough/blob/main/docs/profiles.md).
 
 ## Development
