@@ -453,19 +453,20 @@ class ModelAssistant:
         async def consume() -> None:
             nonlocal error, final, streamed
             async for event in session.send(prompt):
-                if event.kind == "text":
-                    streamed = True
-                    parts.append(event.text)
-                    self.h.broadcast("study", {"pr": number, "type": "delta", "text": event.text})
-                elif event.kind == "tool":
-                    self.h.broadcast("study", {"pr": number, "type": "tool", "name": event.name})
-                elif event.kind == "usage" and event.usage is not None:
-                    self._model_in_use[number] = event.usage.model
-                    self._record_usage(number, event.usage)
-                elif event.kind == "error":
-                    error = event.text
-                elif event.kind == "done":
-                    final = event.text
+                match event:
+                    case runtimes.Text(text):
+                        streamed = True
+                        parts.append(text)
+                        self.h.broadcast("study", {"pr": number, "type": "delta", "text": text})
+                    case runtimes.ToolCall(name):
+                        self.h.broadcast("study", {"pr": number, "type": "tool", "name": name})
+                    case runtimes.Used(usage):
+                        self._model_in_use[number] = usage.model
+                        self._record_usage(number, usage)
+                    case runtimes.Failed(reason):
+                        error = reason
+                    case runtimes.Done(text):
+                        final = text
 
         await asyncio.wait_for(consume(), timeout=timeout)
         if error:

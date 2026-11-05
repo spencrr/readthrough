@@ -28,9 +28,14 @@ from readthrough.runtimes import (
     RETRY_STATUSES,
     RUNTIMES,
     Conversation,
+    Done,
     Event,
+    Failed,
     Retryable,
+    Text,
+    ToolCall,
     Usage,
+    Used,
     check_arguments,
     parse_arguments,
     tool_schema,
@@ -131,26 +136,26 @@ class AnthropicSession:
             try:
                 result = await asyncio.to_thread(self._call)
             except RuntimeError as exc:
-                yield Event("error", text=str(exc))
+                yield Failed(str(exc))
                 return
             text, tool_uses, used = result
             if text:
                 reply.append(text)
-                yield Event("text", text=text)
-            yield Event("usage", usage=used)
+                yield Text(text)
+            yield Used(used)
             content: list[dict[str, Any]] = []
             if text:
                 content.append({"type": "text", "text": text})
             content += [{"type": "tool_use", "id": u["id"], "name": u["name"], "input": u["input"]} for u in tool_uses]
             self.messages.append({"role": "assistant", "content": content})
             if not tool_uses:
-                yield Event("done", text="".join(reply))
+                yield Done("".join(reply))
                 return
             results: list[dict[str, Any]] = []
             terminal = False
             for use in tool_uses:
                 spec = self._tools.get(use["name"])
-                yield Event("tool", name=use["name"])
+                yield ToolCall(use["name"])
                 if spec is None:
                     output = f"Unknown tool {use['name']!r}."
                 else:
@@ -162,11 +167,11 @@ class AnthropicSession:
                 results.append({"type": "tool_result", "tool_use_id": use["id"], "content": output})
             self.messages.append({"role": "user", "content": results})
             if terminal:
-                yield Event("done", text="".join(reply))
+                yield Done("".join(reply))
                 return
             if reply and not reply[-1].endswith("\n"):
                 reply.append("\n\n")
-        yield Event("error", text=f"the model made more than {self.options.max_calls_per_turn} calls in one turn")
+        yield Failed(f"the model made more than {self.options.max_calls_per_turn} calls in one turn")
 
     def _call(self) -> tuple[str, list[dict[str, Any]], Usage]:
         """One streamed Messages call. Returns (text, tool uses, usage)."""

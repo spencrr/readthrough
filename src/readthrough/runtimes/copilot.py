@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from readthrough.process import quiet_output
-from readthrough.runtimes import RUNTIMES, Conversation, Event, ToolSpec, Usage
+from readthrough.runtimes import RUNTIMES, Conversation, Done, Event, Failed, Text, ToolCall, ToolSpec, Usage, Used
 from readthrough.tuning import default_tuning
 
 log = logging.getLogger(__name__)
@@ -198,21 +198,21 @@ class CopilotSession:
             kind = getattr(event.type, "value", str(event.type))
             data = event.data
             if kind == "assistant.usage":
-                put(Event("usage", usage=_usage(data, self.billed_to)))
+                put(Used(_usage(data, self.billed_to)))
             elif kind == "assistant.message_delta":
                 delta = getattr(data, "delta_content", None) or ""
                 parts.append(delta)
-                put(Event("text", text=delta))
+                put(Text(delta))
             elif kind == "assistant.message" and parts and not parts[-1].endswith("\n"):
                 parts.append("\n\n")  # separate the text before and after a tool call
-                put(Event("text", text="\n\n"))
+                put(Text("\n\n"))
             elif kind == "tool.execution_start":
-                put(Event("tool", name=getattr(data, "tool_name", "?")))
+                put(ToolCall(getattr(data, "tool_name", "?")))
             elif kind == "session.error":
-                put(Event("error", text=getattr(data, "message", None) or "the model runtime reported an error"))
+                put(Failed(getattr(data, "message", None) or "the model runtime reported an error"))
                 put(None)
             elif kind == "session.idle":
-                put(Event("done", text="".join(parts)))
+                put(Done("".join(parts)))
                 put(None)
 
         unsubscribe = self.sdk.on(on_event)

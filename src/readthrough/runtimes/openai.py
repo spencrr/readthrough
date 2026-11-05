@@ -28,9 +28,14 @@ from readthrough.runtimes import (
     RETRY_STATUSES,
     RUNTIMES,
     Conversation,
+    Done,
     Event,
+    Failed,
     Retryable,
+    Text,
+    ToolCall,
     Usage,
+    Used,
     check_arguments,
     parse_arguments,
     tool_schema,
@@ -166,21 +171,21 @@ class OpenAISession:
             try:
                 text, calls, used, response_id = await asyncio.to_thread(self._call, items)
             except RuntimeError as exc:
-                yield Event("error", text=str(exc))
+                yield Failed(str(exc))
                 return
             self.previous_response_id = response_id or self.previous_response_id
             if text:
                 reply.append(text)
-                yield Event("text", text=text)
-            yield Event("usage", usage=used)
+                yield Text(text)
+            yield Used(used)
             if not calls:
-                yield Event("done", text="".join(reply))
+                yield Done("".join(reply))
                 return
             items = []
             terminal = False
             for call in calls:
                 spec = self._tools.get(call["name"])
-                yield Event("tool", name=call["name"])
+                yield ToolCall(call["name"])
                 if spec is None:
                     output = f"Unknown tool {call['name']!r}."
                 else:
@@ -197,11 +202,11 @@ class OpenAISession:
                     self.previous_response_id = settled_id or self.previous_response_id
                 except RuntimeError as exc:
                     log.warning("Couldn't settle the tool outputs after a terminal tool: %s", exc)
-                yield Event("done", text="".join(reply))
+                yield Done("".join(reply))
                 return
             if reply and not reply[-1].endswith("\n"):
                 reply.append("\n\n")
-        yield Event("error", text=f"the model made more than {self.options.max_calls_per_turn} calls in one turn")
+        yield Failed(f"the model made more than {self.options.max_calls_per_turn} calls in one turn")
 
     def _call(
         self, items: list[dict[str, Any]], *, settle_only: bool = False
