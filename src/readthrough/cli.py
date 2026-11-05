@@ -323,11 +323,13 @@ def cmd_handle_url(settings: Settings, args: argparse.Namespace) -> int:
             return cmd_open(settings, argparse.Namespace(repo=None))
         ns = argparse.Namespace(repo=target.repo, pr=target.number, fresh=False, vscode=False, print=False, here=False,
                                 all=False, no_diffs=False, open="always")  # fmt: skip
-        if target.action == "review":
-            return cmd_review(settings, ns)
-        if target.action == "refresh":
-            return cmd_build(settings, ns)
-        return cmd_open(settings, ns)
+        match target.action:
+            case review.UrlAction.REVIEW:
+                return cmd_review(settings, ns)
+            case review.UrlAction.REFRESH:
+                return cmd_build(settings, ns)
+            case review.UrlAction.OPEN:
+                return cmd_open(settings, ns)
     except Exception as exc:
         log.exception("URL handler failed")
         system.message_box("readthrough", f"{exc}\n\nDetails: {settings.log_path}")

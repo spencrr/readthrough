@@ -20,6 +20,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -37,6 +38,14 @@ from readthrough.registry import RegistryError
 log = logging.getLogger(__name__)
 
 EDITABLE_LISTS = ("internal_authors", "external_authors")
+
+
+class DraftMode(StrEnum):
+    """Where the setup page's draft of a profile comes from."""
+
+    PLAIN = "plain"  # the heuristic draft, from the file tree and recent merges
+    MODEL = "model"  # a model reads the repo and proposes one
+    SOURCE = "source"  # the profile a source already has (the repo's own file, a shared directory)
 
 
 class SetupError(ValueError):
@@ -212,9 +221,10 @@ class SetupService:
     def start_draft(self, body: dict[str, Any]) -> dict[str, Any]:
         forge_name, repo = _locator(body.get("repo"), body.get("forge"))
         account = _account(body.get("account"), forge_name)
-        mode = body.get("mode", "plain")
-        if mode not in ("plain", "model", "source"):
-            raise SetupError("mode must be plain, model, or source")
+        try:
+            mode = DraftMode(body.get("mode", DraftMode.PLAIN))
+        except ValueError:
+            raise SetupError(f"mode must be one of {', '.join(DraftMode)}") from None
         clone = _clone_path(body.get("clone"))
         remote = _remote(body.get("remote"))
         version = body.get("version")
@@ -223,12 +233,12 @@ class SetupService:
             cfg = self._remember(repo, forge_name, account=account, clone=clone, remote=remote, version=version)
             forge = forges.make(cfg)
             facts = self._gather(cfg, forge, say)
-            if mode == "source":
+            if mode is DraftMode.SOURCE:
                 view = self._profile_view(cfg, forge)
                 text = view["profile_text"]
                 if not text:
                     raise SetupError("There's no existing profile for this repo; draft one instead.")
-            elif mode == "model":
+            elif mode is DraftMode.MODEL:
                 from readthrough import runtimes
                 from readthrough.onboard_model import model_draft
 
