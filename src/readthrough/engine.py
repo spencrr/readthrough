@@ -16,8 +16,8 @@ from typing import Any
 
 from readthrough import assistants, process, runtimes, study
 from readthrough.config import Config
-from readthrough.contract import PullRequestItem
-from readthrough.study import Action, EntryKind, Writer
+from readthrough.contract import Action, PullRequestItem
+from readthrough.study import EntryKind, Writer
 
 log = logging.getLogger(__name__)
 

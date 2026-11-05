@@ -29,6 +29,7 @@ Rules:
   the message as it is.
 """
 
+from enum import StrEnum
 from typing import Any, NotRequired, TypedDict
 
 # ---------------------------------------------------------------- the payload
@@ -385,12 +386,17 @@ class StudyState(TypedDict):
     engine: EngineInfo
 
 
-STUDY_ADD_KINDS = frozenset({"prediction", "teachback", "note", "reflection", "finding"})
-"""``POST /api/study/<n>`` body ``kind``: what the learner writes without asking the assistant anything.
-``note`` with ``pinned`` keeps a message in the brief; ``prediction`` with ``skipped`` records skipping it."""
+class Action(StrEnum):
+    """``POST /api/study/<n>/ask`` body ``action``: what the learner asks of the assistant in a turn, with ``text``
+    and ``qid`` as the action needs. A ``chat`` entry in the log records it as ``action``; an assistant may write
+    its own there too (the rules assistant's ``reference``), so this is the learner's vocabulary, not the log's."""
 
-STUDY_ASK_ACTIONS = frozenset({"chat", "quiz", "brief", "answer", "teachback", "hint"})
-"""``POST /api/study/<n>/ask`` body ``action`` (``study.Action``); ``text`` and ``qid`` as the action needs."""
+    CHAT = "chat"
+    QUIZ = "quiz"
+    BRIEF = "brief"
+    ANSWER = "answer"
+    TEACHBACK = "teachback"
+    HINT = "hint"
 
 
 # ---------------------------------------------------------------- helpers for the tests

@@ -8,9 +8,8 @@ import pytest
 from readthrough import assistants, study
 from readthrough import engine as engine_mod
 from readthrough.config import Config
-from readthrough.contract import PullRequestItem
+from readthrough.contract import Action, PullRequestItem
 from readthrough.engine import Busy, StudyEngine, public_entry
-from readthrough.study import Action
 
 
 @pytest.fixture
