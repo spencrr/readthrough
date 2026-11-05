@@ -85,9 +85,8 @@ class Assistant(Protocol):
 
 AssistantFactory = Callable[[Harness, Any], Assistant]
 ASSISTANTS: Registry[AssistantFactory] = Registry("study assistant")
-MODEL_BY = Writer.MODEL  # the name the Socratic assistant writes under, whichever runtime carries it
-RULES_BY = Writer.RULES
-AUTO_ORDER = (MODEL_BY, RULES_BY)
+# An assistant's registry name is the name it writes under in the log, so the log's Writer names them.
+AUTO_ORDER = (Writer.MODEL.value, Writer.RULES.value)
 
 
 @dataclass(frozen=True)
@@ -100,7 +99,7 @@ class Resolved:
 
 def available(name: str, *, runtime: str = AUTO, runtime_options: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Whether ``name`` can run here. The model assistant can when some model runtime can."""
-    if name == MODEL_BY:
+    if name == Writer.MODEL:
         _, ok, why = runtimes.resolve(runtime, runtime_options)
         return ok, ("" if ok else f"The study assistant has no model to run on: {why}.")
     return True, ""
@@ -110,7 +109,7 @@ def resolve(name: str = AUTO, *, runtime: str = AUTO, runtime_options: dict[str,
     """Which assistant ``name`` means right now. ``auto`` is the first available one, the model assistant first."""
 
     def resolved(candidate: str, ok: bool, why: str) -> Resolved:
-        engine = runtimes.resolve(runtime, runtime_options)[0] if candidate == MODEL_BY else None
+        engine = runtimes.resolve(runtime, runtime_options)[0] if candidate == Writer.MODEL else None
         return Resolved(candidate, ok, why, engine)
 
     if name != AUTO:
@@ -219,7 +218,7 @@ def contract_text(component: dict[str, Any]) -> str:
 
 
 class RulesAssistant:
-    name = RULES_BY
+    name = Writer.RULES.value
 
     def __init__(self, harness: Harness, options: Any) -> None:
         self.h = harness
@@ -261,7 +260,7 @@ class RulesAssistant:
         return {e["question"]: e for e in study.load(self.h.cfg, number) if e["kind"] == EntryKind.QUESTION}
 
     def _say(self, number: int, text: str, **fields: Any) -> None:
-        self.h.append(number, EntryKind.CHAT, by=RULES_BY, role="assistant", text=text, **fields)
+        self.h.append(number, EntryKind.CHAT, by=Writer.RULES, role="assistant", text=text, **fields)
 
     # ---- actions
 
@@ -274,7 +273,7 @@ class RulesAssistant:
             )
             return
         self.h.append(
-            turn.number, EntryKind.QUESTION, by=RULES_BY, question=nxt.question, focus=nxt.focus, refs=nxt.refs,
+            turn.number, EntryKind.QUESTION, by=Writer.RULES, question=nxt.question, focus=nxt.focus, refs=nxt.refs,
             group=nxt.group, expected_points=[],
         )  # fmt: skip
 
@@ -430,7 +429,7 @@ class ModelAssistant:
     runtime last reported, so a verdict says who reached it.
     """
 
-    name = MODEL_BY
+    name = Writer.MODEL.value
 
     def __init__(self, harness: Harness, options: Any) -> None:
         self.h = harness
@@ -464,7 +463,7 @@ class ModelAssistant:
         says which runtime carried the conversation."""
         model = self._model_in_use.get(number)
         return self.h.append(
-            number, kind, by=MODEL_BY, runtime=self.runtime.name, **({"model": model} if model else {}), **fields
+            number, kind, by=Writer.MODEL, runtime=self.runtime.name, **({"model": model} if model else {}), **fields
         )
 
     async def _send(self, number: int, session: runtimes.Session, prompt: str) -> str:
@@ -527,7 +526,7 @@ class ModelAssistant:
     def _record_usage(self, number: int, used: runtimes.Usage) -> None:
         """One ledger line per model call. A failure to record never fails the turn."""
         try:
-            entry = record_usage(self.cfg, used, purpose="study", ref=f"#{number}", by=MODEL_BY)
+            entry = record_usage(self.cfg, used, purpose="study", ref=f"#{number}", by=Writer.MODEL)
         except Exception:
             log.exception("Couldn't record model usage for #%d", number)
             return
