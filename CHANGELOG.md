@@ -160,8 +160,8 @@
   warnings stay prominent. Its styling no longer spills onto a PR's active-session dot. Onboarding's
   read-only connection line expands to show the CLI or API and the ordered credential sources; the
   credential actually used is still shown after checking access.
-- The header puts the product first, the repo second, and the small print third: **readthrough / microsoft/vscode ·
-  100 of 2,885 open · as of 8:27 PM · @you**. The repo is a quiet pill that opens the switcher (the native select,
+- The header puts the product first, the repo second, and the small print third: `readthrough / microsoft/vscode ·
+  100 of 2,885 open · as of 8:27 PM · @you`. The repo is a quiet pill that opens the switcher (the native select,
   still keyboard-reachable, laid invisibly over it); the connection is a status chip that reads live, refreshing,
   offline, or refresh failed, with the next check on hover, and the refresh button spins while a refresh runs
   instead of growing a label. The tabs no longer breathe while the indicator slides (a selected tab is bolder, so
