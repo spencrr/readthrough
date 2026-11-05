@@ -8,6 +8,7 @@ from readthrough import assistants, study
 from readthrough import engine as engine_mod
 from readthrough.config import Config
 from readthrough.engine import Busy, StudyEngine, public_entry
+from readthrough.study import Action
 
 
 @pytest.fixture
@@ -89,19 +90,19 @@ def test_record_and_prompt_covers_actions_and_validation(cfg):
     engine = _engine(cfg, entries)
     study.append(cfg, 7, "question", by="model", question="Why?")
 
-    assert "assess_answer" in engine._record_and_prompt(7, "answer", "Because", "Q1")
-    assert "assess_teachback" in engine._record_and_prompt(7, "teachback", "It changes routing", None)
-    assert "Ask me the next quiz question" in engine._record_and_prompt(7, "quiz", "", None)
-    assert "path:line" in engine._record_and_prompt(7, "brief", "", None)
-    assert engine._record_and_prompt(7, "hint", "", "Q1") == "Give me a hint for Q1, without the answer."
+    assert "assess_answer" in engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1")
+    assert "assess_teachback" in engine._record_and_prompt(7, Action.TEACHBACK, "It changes routing", None)
+    assert "Ask me the next quiz question" in engine._record_and_prompt(7, Action.QUIZ, "", None)
+    assert "path:line" in engine._record_and_prompt(7, Action.BRIEF, "", None)
+    assert engine._record_and_prompt(7, Action.HINT, "", "Q1") == "Give me a hint for Q1, without the answer."
     hint = study.load(cfg, 7)[-1]
     assert (hint["text"], hint["action"], hint["qid"]) == ("Hint for Q1", "hint", "Q1")
-    assert engine._record_and_prompt(7, "chat", "hello", None) == "hello"
+    assert engine._record_and_prompt(7, Action.CHAT, "hello", None) == "hello"
 
     with pytest.raises(ValueError, match="question id"):
-        engine._record_and_prompt(7, "answer", "", None)
+        engine._record_and_prompt(7, Action.ANSWER, "", None)
     with pytest.raises(ValueError, match="teach-back"):
-        engine._record_and_prompt(7, "teachback", "", None)
+        engine._record_and_prompt(7, Action.TEACHBACK, "", None)
     assert entries[-1][1]["summary"]["questions"] == 1
 
 
@@ -109,12 +110,12 @@ def test_answers_are_tagged_with_the_aids_that_came_first(cfg):
     engine = _engine(cfg)
     study.append(cfg, 7, "question", by="rules", question="Why?")
     study.append(cfg, 7, "question", by="rules", question="How?")
-    engine._record_and_prompt(7, "answer", "Because", "Q1")
-    engine._record_and_prompt(7, "hint", "", "Q2")
-    engine._record_and_prompt(7, "answer", "Like so", "Q2")
-    engine._record_and_prompt(7, "brief", "", None)
+    engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1")
+    engine._record_and_prompt(7, Action.HINT, "", "Q2")
+    engine._record_and_prompt(7, Action.ANSWER, "Like so", "Q2")
+    engine._record_and_prompt(7, Action.BRIEF, "", None)
     study.append(cfg, 7, "question", by="rules", question="Where?")
-    engine._record_and_prompt(7, "answer", "There", "Q3")
+    engine._record_and_prompt(7, Action.ANSWER, "There", "Q3")
 
     answers = {e["qid"]: e["aided"] for e in study.load(cfg, 7) if e["kind"] == "answer"}
     assert answers == {"Q1": [], "Q2": ["hint"], "Q3": ["brief"]}
@@ -128,7 +129,7 @@ def test_turn_runs_the_assistant_and_reports_done(cfg):
     engine = _engine(cfg, events, assistant)
     engine._busy.add(7)
 
-    asyncio.run(engine._turn(assistants.Turn(7, "chat", "hello", None, "hello")))
+    asyncio.run(engine._turn(assistants.Turn(7, Action.CHAT, "hello", None, "hello")))
 
     assert assistant.turns[0].prompt == "hello"
     assert study.load(cfg, 7)[-1]["text"] == "  A reply  "
@@ -140,9 +141,9 @@ def test_turn_reports_errors_and_clears_busy(cfg):
     events = []
     engine = _engine(cfg, events, RecordingAssistant(fail=RuntimeError("no session")))
     engine._busy.add(7)
-    engine._record_and_prompt(7, "quiz", "", None)  # the request is logged before the turn runs...
+    engine._record_and_prompt(7, Action.QUIZ, "", None)  # the request is logged before the turn runs...
 
-    asyncio.run(engine._turn(assistants.Turn(7, "quiz", "", None, "quiz")))
+    asyncio.run(engine._turn(assistants.Turn(7, Action.QUIZ, "", None, "quiz")))
 
     assert events[-1] == ("study", {"pr": 7, "type": "error", "message": "no session"})
     assert 7 not in engine._busy
@@ -197,7 +198,7 @@ def test_engine_info_names_the_runtime_and_model_the_page_will_talk_to(cfg, monk
     assert engine.engine_info()["model"] == "claude-opus-5-5"
 
     engine._busy.add(7)
-    asyncio.run(engine._turn(assistants.Turn(7, "chat", "hi", None, "hi")))
+    asyncio.run(engine._turn(assistants.Turn(7, Action.CHAT, "hi", None, "hi")))
     failure = study.load(cfg, 7)[-1]
     assert (failure["kind"], failure["assistant"], failure["runtime"]) == ("failure", "model", "anthropic")
     assert "model" not in {k for k in failure if k != "assistant"}, "no model is named: none answered"
@@ -219,7 +220,7 @@ def test_reconfigure_keeps_the_assistant_unless_it_was_built_differently(cfg, tm
     other = Config(home=cfg.home, repo="o/r", clone=tmp_path / "elsewhere", assistant="rules", runtime="openai")
     engine.reconfigure(other)
     assert engine._assistant is None and not assistant.stopped, "replaced, but not stopped under a running turn"
-    asyncio.run(engine._turn(assistants.Turn(7, "chat", "hello", None, "hello")))
+    asyncio.run(engine._turn(assistants.Turn(7, Action.CHAT, "hello", None, "hello")))
     assert assistant.stopped, "stopped once the turn ended"
     assert isinstance(engine.assistant, assistants.RulesAssistant) and engine.assistant is not assistant
 

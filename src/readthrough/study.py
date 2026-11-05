@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import threading
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -32,32 +33,78 @@ from readthrough.files import locked
 from readthrough.limits import MAX_STUDY_TEXT
 
 MARKER = "<!-- readthrough:study-log -->"
-VERDICTS = ("correct", "partial", "incorrect")
-SEVERITIES = ("blocker", "major", "minor", "question")
 RESERVED = frozenset({"id", "ts", "kind", "by"})
 
-MODEL = "model"  # the Socratic assistant, whichever model runtime carries it
-RULES = "rules"  # the assistant that needs no model and never grades
-ASSISTANTS = (MODEL, RULES)
+
+class Writer(StrEnum):
+    """Who wrote an entry: its ``by``."""
+
+    YOU = "you"
+    MODEL = "model"  # the Socratic assistant, whichever model runtime carries it
+    RULES = "rules"  # the assistant that needs no model and never grades
+    TOOL = "readthrough"  # the engine itself, which only ever records that an assistant failed to answer
+
+
+ASSISTANTS = (Writer.MODEL, Writer.RULES)
 LEGACY_MODEL_BY = "copilot"  # the model assistant's former name in the log, after its first engine
-AIDS = ("hint", "brief")  # what can come before an answer and inform it
-TOOL = "readthrough"  # the engine itself, which only ever records that an assistant failed to answer
+
+
+class EntryKind(StrEnum):
+    PREDICTION = "prediction"
+    TEACHBACK = "teachback"
+    ANSWER = "answer"
+    REFLECTION = "reflection"  # "what I missed", after an answer or a teach-back
+    CHAT = "chat"
+    NOTE = "note"
+    FINDING = "finding"
+    QUESTION = "question"
+    ASSESSMENT = "assessment"
+    TEACHBACK_ASSESSMENT = "teachback_assessment"
+    FAILURE = "failure"  # a turn that ended in an error, so a request with no reply is never read as one you abandoned
+
+
+class Action(StrEnum):
+    """What the learner asks of the assistant in a turn; a ``chat`` entry records it as ``action``."""
+
+    CHAT = "chat"
+    QUIZ = "quiz"
+    BRIEF = "brief"
+    ANSWER = "answer"
+    TEACHBACK = "teachback"
+    HINT = "hint"
+
+
+AIDS = (Action.HINT, Action.BRIEF)  # what can come before an answer and inform it
+
+
+class Verdict(StrEnum):
+    CORRECT = "correct"
+    PARTIAL = "partial"
+    INCORRECT = "incorrect"
+
+
+class Severity(StrEnum):
+    BLOCKER = "blocker"
+    MAJOR = "major"
+    MINOR = "minor"
+    QUESTION = "question"
+
 
 # kind -> (who may write it, required fields)
-KINDS: dict[str, tuple[set[str], tuple[str, ...]]] = {
-    "prediction": ({"you"}, ("text",)),
-    "teachback": ({"you"}, ("text",)),
-    "answer": ({"you"}, ("qid", "text")),
-    "reflection": ({"you"}, ("text",)),  # "what I missed", after an answer or a teach-back
-    "chat": ({"you", *ASSISTANTS}, ("role", "text")),
-    "note": ({"you", *ASSISTANTS}, ("text",)),
-    "finding": ({"you", MODEL}, ("severity", "summary")),
-    "question": (set(ASSISTANTS), ("question",)),
-    "assessment": ({MODEL}, ("qid", "verdict", "feedback")),
-    "teachback_assessment": ({MODEL}, ("verdict", "feedback")),
-    # A turn that ended in an error, so a request with no reply is never read as one you abandoned.
-    "failure": ({TOOL}, ("assistant", "text")),
+KINDS: dict[EntryKind, tuple[set[Writer], tuple[str, ...]]] = {
+    EntryKind.PREDICTION: ({Writer.YOU}, ("text",)),
+    EntryKind.TEACHBACK: ({Writer.YOU}, ("text",)),
+    EntryKind.ANSWER: ({Writer.YOU}, ("qid", "text")),
+    EntryKind.REFLECTION: ({Writer.YOU}, ("text",)),
+    EntryKind.CHAT: ({Writer.YOU, *ASSISTANTS}, ("role", "text")),
+    EntryKind.NOTE: ({Writer.YOU, *ASSISTANTS}, ("text",)),
+    EntryKind.FINDING: ({Writer.YOU, Writer.MODEL}, ("severity", "summary")),
+    EntryKind.QUESTION: (set(ASSISTANTS), ("question",)),
+    EntryKind.ASSESSMENT: ({Writer.MODEL}, ("qid", "verdict", "feedback")),
+    EntryKind.TEACHBACK_ASSESSMENT: ({Writer.MODEL}, ("verdict", "feedback")),
+    EntryKind.FAILURE: ({Writer.TOOL}, ("assistant", "text")),
 }
+GRADES = (EntryKind.ASSESSMENT, EntryKind.TEACHBACK_ASSESSMENT)  # the entries that carry a verdict
 
 _lock = threading.Lock()
 
@@ -85,16 +132,19 @@ def _current(entry: dict[str, Any]) -> dict[str, Any]:
     name, not a record of the runtime (the same name was written through other runtimes for a while), so the
     author is renamed and the runtime is left unrecorded rather than guessed."""
     if entry.get("by") == LEGACY_MODEL_BY:
-        entry["by"] = MODEL
-    if entry.get("kind") == "failure" and entry.get("assistant") == LEGACY_MODEL_BY:
-        entry["assistant"] = MODEL
+        entry["by"] = Writer.MODEL
+    if entry.get("kind") == EntryKind.FAILURE and entry.get("assistant") == LEGACY_MODEL_BY:
+        entry["assistant"] = Writer.MODEL
     return entry
 
 
 def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]:
-    """Validate and append one entry. Returns the stored entry (with its id)."""
-    if kind not in KINDS:
-        raise ValueError(f"unknown entry kind {kind!r}")
+    """Validate and append one entry. ``kind`` and ``by`` arrive as text from a request or a tool call, and
+    are checked here. Returns the stored entry (with its id)."""
+    try:
+        kind = EntryKind(kind)
+    except ValueError:
+        raise ValueError(f"unknown entry kind {kind!r}") from None
     writers, required = KINDS[kind]
     if by not in writers:
         raise ValueError(f"{by} can't write {kind} entries")
@@ -119,10 +169,10 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             fields["line"] = int(fields["line"])
         except (TypeError, ValueError):
             raise ValueError("line must be a number") from None
-    if kind in ("assessment", "teachback_assessment") and fields["verdict"] not in VERDICTS:
-        raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
-    if kind == "finding" and fields["severity"] not in SEVERITIES:
-        raise ValueError(f"severity must be one of {', '.join(SEVERITIES)}")
+    if kind in GRADES and fields["verdict"] not in list(Verdict):
+        raise ValueError(f"verdict must be one of {', '.join(Verdict)}")
+    if kind is EntryKind.FINDING and fields["severity"] not in list(Severity):
+        raise ValueError(f"severity must be one of {', '.join(Severity)}")
 
     # Ids and question numbers come from what's already in the file, so reading and appending must be one step
     # for every writer: this process's threads (the lock) and other processes, such as a review agent's
@@ -132,15 +182,15 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
     with _lock, locked(path):
         entries = load(cfg, number)
         if (
-            kind in ("answer", "assessment", "reflection")
+            kind in (EntryKind.ANSWER, EntryKind.ASSESSMENT, EntryKind.REFLECTION)
             and fields.get("qid") is not None
-            and not any(e["kind"] == "question" and e.get("qid") == fields["qid"] for e in entries)
+            and not any(e["kind"] == EntryKind.QUESTION and e.get("qid") == fields["qid"] for e in entries)
         ):
             raise ValueError(f"no question {fields['qid']}")
-        if kind == "answer":
+        if kind is EntryKind.ANSWER:
             fields["aided"] = aids_before(entries, fields["qid"])
-        if kind == "question":
-            fields["qid"] = f"Q{sum(e['kind'] == 'question' for e in entries) + 1}"
+        if kind is EntryKind.QUESTION:
+            fields["qid"] = f"Q{sum(e['kind'] == EntryKind.QUESTION for e in entries) + 1}"
         entry = {
             "id": len(entries) + 1,
             "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
@@ -156,41 +206,41 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
 def aids_before(entries: list[dict[str, Any]], qid: str) -> list[str]:
     """What the learner had seen before answering ``qid``: a hint for it, or a briefing. Computed from the
     log, never asserted by anyone, so "worked out unaided" is something a reader can check."""
-    aids = []
-    if any(e["kind"] == "chat" and e.get("action") == "hint" and e.get("qid") == qid for e in entries):
-        aids.append("hint")
-    if any(e["kind"] == "chat" and e.get("action") == "brief" for e in entries):
-        aids.append("brief")
+    aids: list[str] = []
+    if any(e["kind"] == EntryKind.CHAT and e.get("action") == Action.HINT and e.get("qid") == qid for e in entries):
+        aids.append(Action.HINT)
+    if any(e["kind"] == EntryKind.CHAT and e.get("action") == Action.BRIEF for e in entries):
+        aids.append(Action.BRIEF)
     return aids
 
 
 def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    questions = {e["qid"]: e for e in entries if e["kind"] == "question"}
+    questions = {e["qid"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
     latest_assessment: dict[str, str] = {}
     for e in entries:
-        if e["kind"] == "assessment":
+        if e["kind"] == EntryKind.ASSESSMENT:
             latest_assessment[e["qid"]] = e["verdict"]
-    answers = {e["qid"]: e for e in entries if e["kind"] == "answer" and e["qid"] in questions}
-    counts = {v: sum(1 for x in latest_assessment.values() if x == v) for v in VERDICTS}
+    answers = {e["qid"]: e for e in entries if e["kind"] == EntryKind.ANSWER and e["qid"] in questions}
+    counts = {v: sum(1 for x in latest_assessment.values() if x == v) for v in Verdict}
     assessed = sum(counts.values())
-    teachbacks = [e for e in entries if e["kind"] == "teachback_assessment"]
+    teachbacks = [e for e in entries if e["kind"] == EntryKind.TEACHBACK_ASSESSMENT]
     return {
         "questions": len(questions),
         "answered": len(answers),
         "unaided": sum(1 for a in answers.values() if not a.get("aided")),
-        "after_hint": sum(1 for a in answers.values() if "hint" in (a.get("aided") or [])),
-        "after_brief": sum(1 for a in answers.values() if "brief" in (a.get("aided") or [])),
+        "after_hint": sum(1 for a in answers.values() if Action.HINT in (a.get("aided") or [])),
+        "after_brief": sum(1 for a in answers.values() if Action.BRIEF in (a.get("aided") or [])),
         "assessed": assessed,
-        **counts,
-        "score": round((counts["correct"] + 0.5 * counts["partial"]) / assessed, 2) if assessed else None,
-        "predictions": sum(e["kind"] == "prediction" and not e.get("skipped") for e in entries),
-        "prediction_skipped": any(e["kind"] == "prediction" and e.get("skipped") for e in entries),
-        "briefed": any(e["kind"] == "chat" and e.get("action") == "brief" for e in entries),
+        **{str(v): n for v, n in counts.items()},
+        "score": round((counts[Verdict.CORRECT] + 0.5 * counts[Verdict.PARTIAL]) / assessed, 2) if assessed else None,
+        "predictions": sum(e["kind"] == EntryKind.PREDICTION and not e.get("skipped") for e in entries),
+        "prediction_skipped": any(e["kind"] == EntryKind.PREDICTION and e.get("skipped") for e in entries),
+        "briefed": any(e["kind"] == EntryKind.CHAT and e.get("action") == Action.BRIEF for e in entries),
         "teachback": teachbacks[-1]["verdict"] if teachbacks else None,
-        "teachbacks": sum(e["kind"] == "teachback" for e in entries),
-        "reflections": sum(e["kind"] == "reflection" for e in entries),
-        "findings": sum(e["kind"] == "finding" for e in entries),
-        "notes": sum(e["kind"] == "note" for e in entries),
+        "teachbacks": sum(e["kind"] == EntryKind.TEACHBACK for e in entries),
+        "reflections": sum(e["kind"] == EntryKind.REFLECTION for e in entries),
+        "findings": sum(e["kind"] == EntryKind.FINDING for e in entries),
+        "notes": sum(e["kind"] == EntryKind.NOTE for e in entries),
     }
 
 
@@ -199,7 +249,7 @@ def graders(entries: list[dict[str, Any]]) -> str:
     them, else "a model" whose name wasn't recorded. Always from the entries, never from the current
     configuration: a verdict's weight depends on who reached it, and switching runtimes must not relabel it.
     """
-    verdicts = [e for e in entries if e["kind"] in ("assessment", "teachback_assessment")]
+    verdicts = [e for e in entries if e["kind"] in GRADES]
     if not verdicts:
         return "nobody"
     models = sorted({e["model"] for e in verdicts if e.get("model")})
@@ -211,15 +261,15 @@ def graders(entries: list[dict[str, Any]]) -> str:
 
 def _handoff(entries: list[dict[str, Any]]) -> str:
     """One line for whoever picks this up next (a deep review): where understanding is solid and where it isn't."""
-    focus = {e["qid"]: e.get("focus") or "" for e in entries if e["kind"] == "question"}
-    verdict = {e["qid"]: e["verdict"] for e in entries if e["kind"] == "assessment"}
-    answered = {e["qid"] for e in entries if e["kind"] == "answer"}
+    focus = {e["qid"]: e.get("focus") or "" for e in entries if e["kind"] == EntryKind.QUESTION}
+    verdict = {e["qid"]: e["verdict"] for e in entries if e["kind"] == EntryKind.ASSESSMENT}
+    answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
 
     def names(qids: list[str]) -> str:
         return ", ".join(f"{q} ({focus[q]})" if focus.get(q) else q for q in qids)
 
-    right = [q for q, v in verdict.items() if v == "correct"]
-    shaky = [q for q, v in verdict.items() if v != "correct"]
+    right = [q for q, v in verdict.items() if v == Verdict.CORRECT]
+    shaky = [q for q, v in verdict.items() if v != Verdict.CORRECT]
     open_ = [q for q in focus if q not in answered]
     parts = []
     if right:
@@ -228,7 +278,7 @@ def _handoff(entries: list[dict[str, Any]]) -> str:
         parts.append(f"revisit {names(shaky)}")
     if open_:
         parts.append(f"unanswered {names(open_)}")
-    teach = [e for e in entries if e["kind"] == "teachback_assessment"]
+    teach = [e for e in entries if e["kind"] == EntryKind.TEACHBACK_ASSESSMENT]
     if teach and teach[-1].get("gaps"):
         parts.append("teach-back gaps: " + "; ".join(teach[-1]["gaps"]))
     return "; ".join(parts) + "." if parts else ""
@@ -257,8 +307,8 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
     if handoff:
         out.append(f"**Handoff:** {handoff}\n")
     if s["briefed"]:
-        first_brief = next(e["id"] for e in entries if e["kind"] == "chat" and e.get("action") == "brief")
-        first_quiz = next((e["id"] for e in entries if e["kind"] == "answer"), None)
+        first_brief = next(e["id"] for e in entries if e["kind"] == EntryKind.CHAT and e.get("action") == Action.BRIEF)
+        first_quiz = next((e["id"] for e in entries if e["kind"] == EntryKind.ANSWER), None)
         when = (
             "before answering any quiz question"
             if first_quiz is None or first_brief < first_quiz
@@ -266,7 +316,7 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
         )
         out.append(f"Asked for a briefing {when}, so treat later answers as informed by it.\n")
 
-    def section(title: str, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
+    def section(title: str, kinds: tuple[EntryKind, ...]) -> list[dict[str, Any]]:
         picked = [e for e in entries if e["kind"] in kinds]
         if picked:
             if out[-1] != "":
@@ -276,19 +326,19 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
 
     out.extend(
         f"- {e['ts'][:16].replace('T', ' ')}: " + ("_skipped_" if e.get("skipped") else e["text"].strip())
-        for e in section("Predictions (before reading)", ("prediction",))
+        for e in section("Predictions (before reading)", (EntryKind.PREDICTION,))
     )
-    answers = {e["qid"]: e for e in entries if e["kind"] == "answer"}
-    assessments = {e["qid"]: e for e in entries if e["kind"] == "assessment"}
+    answers = {e["qid"]: e for e in entries if e["kind"] == EntryKind.ANSWER}
+    assessments = {e["qid"]: e for e in entries if e["kind"] == EntryKind.ASSESSMENT}
     reflections: dict[str | None, list[dict[str, Any]]] = {}
     for e in entries:
-        if e["kind"] == "reflection":
+        if e["kind"] == EntryKind.REFLECTION:
             reflections.setdefault(e.get("qid"), []).append(e)
-    for q in section("Quiz", ("question",)):
+    for q in section("Quiz", (EntryKind.QUESTION,)):
         out.append(
             f"**{q['qid']}.** {q['question'].strip()}"
             + (f" _(refs: {', '.join(q.get('refs') or [])})_" if q.get("refs") else "")
-            + (f" _(asked by {q['by']})_" if q["by"] != MODEL else "")
+            + (f" _(asked by {q['by']})_" if q["by"] != Writer.MODEL else "")
         )
         if q["qid"] in answers:
             a = answers[q["qid"]]
@@ -300,18 +350,18 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
             out.append(f"\n**{a['verdict'].capitalize()}.** {a['feedback'].strip()}{evidence}")
         out.extend(f"\n_What I missed:_ {r['text'].strip()}" for r in reflections.get(q["qid"], []))
         out.append("")
-    for e in section("Teach-back", ("teachback", "teachback_assessment")):
+    for e in section("Teach-back", (EntryKind.TEACHBACK, EntryKind.TEACHBACK_ASSESSMENT)):
         out.append(
             _quote(e["text"])
-            if e["kind"] == "teachback"
+            if e["kind"] == EntryKind.TEACHBACK
             else f"**{e['verdict'].capitalize()}.** {e['feedback'].strip()}"
         )
         out.append("")
     out.extend(f"_What I missed:_ {r['text'].strip()}\n" for r in reflections.get(None, []))
-    for e in section("Findings", ("finding",)):
+    for e in section("Findings", (EntryKind.FINDING,)):
         where = f"`{e['path']}:{e.get('line') or '?'}` " if e.get("path") else ""
         out.append(f"- [{e['severity']}] {where}{e['summary'].strip()} _({e['by']})_")
-    for e in section("Pinned notes", ("note",)):
+    for e in section("Pinned notes", (EntryKind.NOTE,)):
         who = "pinned from the conversation" if e.get("pinned") else e["by"]
         out.append(f"- {e['text'].strip()} _({who}{', ' + e['section'] if e.get('section') else ''})_")
     return "\n".join(out).rstrip() + "\n"

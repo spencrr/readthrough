@@ -98,7 +98,7 @@ def _seed_study_log(cfg: Config) -> None:
         cfg,
         2,
         "failure",
-        by=study.TOOL,
+        by=study.Writer.TOOL,
         assistant="model",
         runtime="openai",
         text="git merge-base failed: shallow clone",

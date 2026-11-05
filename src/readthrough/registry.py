@@ -110,7 +110,7 @@ def _suggest(name: str, options: Any) -> str:
     """A typo gets its likely correction; a name nothing resembles (one that was renamed, say) gets the list."""
     close = difflib.get_close_matches(name, list(options), n=1)
     if close:
-        return f" (did you mean {close[0]!r}?)"
+        return f" (did you mean '{close[0]}'?)"  # by value: a name may be a StrEnum member
     known = ", ".join(sorted(options))
     return f" (one of: {known})" if known else ""
 

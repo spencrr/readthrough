@@ -23,6 +23,7 @@ from readthrough.forges.github import signed_in_accounts
 from readthrough.model import PR_NUMBER
 from readthrough.process import run
 from readthrough.profile import ProfileError
+from readthrough.study import EntryKind, Writer
 
 log = logging.getLogger("readthrough")
 SKILL_NAME = agents.SKILL_NAME
@@ -246,8 +247,10 @@ def cmd_ledger(settings: Settings, args: argparse.Namespace) -> int:
 
 def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
     cfg = settings.config_for(args.repo)
-    adds: list[tuple[str, Any]] = [
-        (k, getattr(args, k)) for k in ("prediction", "teachback", "note") if getattr(args, k)
+    adds: list[tuple[EntryKind, Any]] = [
+        (k, getattr(args, k.value))
+        for k in (EntryKind.PREDICTION, EntryKind.TEACHBACK, EntryKind.NOTE)
+        if getattr(args, k.value)
     ]
     if args.finding:
         severity, _, summary = args.finding.partition(":")
@@ -257,10 +260,10 @@ def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
             fields["path"] = path
         if line.isdigit():
             fields["line"] = int(line)
-        adds.append(("finding", fields))
+        adds.append((EntryKind.FINDING, fields))
     for kind, value in adds:
         entry_fields = value if isinstance(value, dict) else {"text": value}
-        by = "you" if kind in ("prediction", "teachback") else args.by
+        by = Writer.YOU if kind in (EntryKind.PREDICTION, EntryKind.TEACHBACK) else args.by
         entry = study.append(cfg, args.pr, kind, by=by, **entry_fields)
         _say(f"#{args.pr}: added {kind} #{entry['id']}")
     if adds:
@@ -1037,8 +1040,8 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("--at", metavar="PATH:LINE", help="location for --finding")
     p.add_argument(
         "--by",
-        choices=("you", study.MODEL),
-        default="you",
+        choices=(Writer.YOU, Writer.MODEL),
+        default=Writer.YOU,
         help="who wrote a --note or --finding: you, or a model (a review agent)",
     )
     p.set_defaults(func=cmd_study)

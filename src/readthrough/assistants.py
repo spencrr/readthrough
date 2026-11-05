@@ -38,6 +38,7 @@ from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
 from readthrough.registry import Registry
+from readthrough.study import Action, EntryKind, Severity, Verdict, Writer
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class Turn:
     """One request from the learner. The engine has already recorded the learner's side."""
 
     number: int
-    action: str  # chat | quiz | brief | answer | teachback | hint
+    action: Action
     text: str
     qid: str | None
     prompt: str  # what to say to a model, if there is one
@@ -73,8 +74,8 @@ class Assistant(Protocol):
 
 AssistantFactory = Callable[[Harness, Any], Assistant]
 ASSISTANTS: Registry[AssistantFactory] = Registry("study assistant")
-MODEL_BY = study.MODEL  # the name the Socratic assistant writes under, whichever runtime carries it
-RULES_BY = study.RULES
+MODEL_BY = Writer.MODEL  # the name the Socratic assistant writes under, whichever runtime carries it
+RULES_BY = Writer.RULES
 AUTO_ORDER = (MODEL_BY, RULES_BY)
 
 
@@ -217,8 +218,8 @@ class RulesAssistant:
 
     async def turn(self, turn: Turn) -> None:
         handler = {
-            "quiz": self._quiz, "answer": self._after_answer, "hint": self._hint,
-            "brief": self._brief, "teachback": self._after_teachback,
+            Action.QUIZ: self._quiz, Action.ANSWER: self._after_answer, Action.HINT: self._hint,
+            Action.BRIEF: self._brief, Action.TEACHBACK: self._after_teachback,
         }.get(turn.action, self._chat)  # fmt: skip
         handler(turn)
 
@@ -236,10 +237,10 @@ class RulesAssistant:
 
     def _asked(self, number: int) -> dict[str, dict[str, Any]]:
         """Asked questions by text, so the bank's position survives a reload."""
-        return {e["question"]: e for e in study.load(self.h.cfg, number) if e["kind"] == "question"}
+        return {e["question"]: e for e in study.load(self.h.cfg, number) if e["kind"] == EntryKind.QUESTION}
 
     def _say(self, number: int, text: str, **fields: Any) -> None:
-        self.h.append(number, "chat", by=RULES_BY, role="assistant", text=text, **fields)
+        self.h.append(number, EntryKind.CHAT, by=RULES_BY, role="assistant", text=text, **fields)
 
     # ---- actions
 
@@ -252,7 +253,7 @@ class RulesAssistant:
             )
             return
         self.h.append(
-            turn.number, "question", by=RULES_BY, question=nxt.question, focus=nxt.focus, refs=nxt.refs,
+            turn.number, EntryKind.QUESTION, by=RULES_BY, question=nxt.question, focus=nxt.focus, refs=nxt.refs,
             group=nxt.group, expected_points=[],
         )  # fmt: skip
 
@@ -261,9 +262,9 @@ class RulesAssistant:
         can't leak into the answers that follow."""
         bank = self._bank(turn.number)
         entries = study.load(self.h.cfg, turn.number)
-        asked = {e["question"]: e for e in entries if e["kind"] == "question"}
-        answered = {e["qid"] for e in entries if e["kind"] == "answer"}
-        shown = {e.get("group") for e in entries if e["kind"] == "chat" and e.get("action") == "reference"}
+        asked = {e["question"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
+        answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
+        shown = {e.get("group") for e in entries if e["kind"] == EntryKind.CHAT and e.get("action") == "reference"}
         entry = next((e for e in asked.values() if e.get("qid") == turn.qid), None)
         if entry is None:
             return
@@ -431,7 +432,7 @@ class ModelAssistant:
             prompt = self._first_turn_context(turn.number) + "\n\n" + prompt
         text = await self._send(turn.number, session, prompt)
         if text.strip():
-            self._write(turn.number, "chat", role="assistant", text=text.strip())
+            self._write(turn.number, EntryKind.CHAT, role="assistant", text=text.strip())
 
     def _write(self, number: int, kind: str, **fields: Any) -> dict[str, Any]:
         """Append in the assistant's name. ``by`` says what kind of author this is; ``model`` says whose
@@ -478,7 +479,7 @@ class ModelAssistant:
         parts = self._pending.get(number) or []
         text = "".join(parts).strip()
         if text:
-            self._write(number, "chat", role="assistant", text=text)
+            self._write(number, EntryKind.CHAT, role="assistant", text=text)
             parts.clear()
 
     async def _session_for(self, number: int) -> runtimes.Session:
@@ -571,23 +572,23 @@ class ModelAssistant:
 
         async def ask_quiz_question(args: dict[str, Any]) -> str:
             self._flush_lead_in(number)
-            entry = self._write(number, "question", **args)
+            entry = self._write(number, EntryKind.QUESTION, **args)
             return f"Asked {entry['qid']}. Wait for the learner's answer."
 
         async def assess_answer(args: dict[str, Any]) -> str:
-            self._write(number, "assessment", **args)
+            self._write(number, EntryKind.ASSESSMENT, **args)
             return "Recorded."
 
         async def assess_teachback(args: dict[str, Any]) -> str:
-            self._write(number, "teachback_assessment", **args)
+            self._write(number, EntryKind.TEACHBACK_ASSESSMENT, **args)
             return "Recorded."
 
         async def append_to_brief(args: dict[str, Any]) -> str:
-            self._write(number, "note", **args)
+            self._write(number, EntryKind.NOTE, **args)
             return "Appended."
 
         async def record_finding(args: dict[str, Any]) -> str:
-            self._write(number, "finding", **args)
+            self._write(number, EntryKind.FINDING, **args)
             return "Recorded."
 
         s = runtimes.ToolSpec
@@ -622,7 +623,7 @@ class ModelAssistant:
             s("assess_answer", "Record your assessment of the learner's answer to a question.", {
                 "properties": {
                     "qid": {"type": "string", "description": "The question id, e.g. Q2"},
-                    "verdict": {"type": "string", "enum": ["correct", "partial", "incorrect"]},
+                    "verdict": {"type": "string", "enum": list(Verdict)},
                     "feedback": {"type": "string", "description": "One to three sentences. For partial or incorrect, a hint, not the answer."},
                     "evidence": {"type": "array", "items": {"type": "string"}, "description": "path:line references supporting the verdict"},
                 },
@@ -630,7 +631,7 @@ class ModelAssistant:
             }, assess_answer),
             s("assess_teachback", "Record your assessment of the learner's teach-back.", {
                 "properties": {
-                    "verdict": {"type": "string", "enum": ["correct", "partial", "incorrect"]},
+                    "verdict": {"type": "string", "enum": list(Verdict)},
                     "feedback": {"type": "string", "description": "What they got right and the specific gaps"},
                     "gaps": {"type": "array", "items": {"type": "string"}},
                 },
@@ -645,7 +646,7 @@ class ModelAssistant:
             }, append_to_brief),
             s("record_finding", "Record a concrete problem in the PR, with its location.", {
                 "properties": {
-                    "severity": {"type": "string", "enum": ["blocker", "major", "minor", "question"]},
+                    "severity": {"type": "string", "enum": list(Severity)},
                     "summary": {"type": "string"},
                     "path": {"type": "string"},
                     "line": {"type": "integer"},
