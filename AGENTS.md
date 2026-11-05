@@ -102,7 +102,7 @@ engine CI uses, else an installed Edge or Chrome; they skip when there is none, 
   runtime loads, installed by `install canvas`) is a client of the CLI alone: it runs the interpreter that
   installed it with an argument list from a fixed directory, reads, steers, and writes nothing to the log or the
   ledger; `test_extension.py` keeps its constants and flags in step with `contract.py` and `cli.py`.
-- **A vocabulary is a `StrEnum`** (`model.Kind`, `ci.State`, `study.EntryKind`, `runtimes.Event`'s records), and a
+- **A vocabulary is a `StrEnum`** (`model.Availability`, `ci.State`, `study.EntryKind`, `runtimes.Event`'s records), and a
   consumer dispatches with `match` ending in `case _: assert_never(x)`, so the type checker fails on a missing
   member. Compare members with `==`, never `is`: the same value read back from a file or a request is a plain
   `str`, and `is` would be silently false. Parse outside input with `Enum(value)` at the boundary, once.
