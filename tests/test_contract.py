@@ -98,8 +98,8 @@ def test_a_build_has_exactly_the_declared_shape(payload):
         _exactly(contract.PullRequestItem, pr, f"PR #{pr['number']}")
         _exactly(contract.StudySummary, pr["study"], "study summary")
         _exactly(contract.SessionInfo, pr["session"], "session")
-        assert set(pr["ci_checks"]) <= contract.fields(contract.CiChecks)
-        assert contract.required_fields(contract.CiChecks) - {"reason"} <= set(pr["ci_checks"])
+        assert contract.required_fields(contract.CiChecks) <= set(pr["ci_checks"]) <= contract.fields(contract.CiChecks)
+        assert "reason" in contract.fields(contract.CiChecks) - contract.required_fields(contract.CiChecks)
         for row in pr["files"]:
             _exactly(contract.FileRow, row, "file row")
         for flag in pr["flags"]:

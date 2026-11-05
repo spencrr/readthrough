@@ -29,8 +29,6 @@ Rules:
   the message as it is.
 """
 
-from __future__ import annotations
-
 from typing import Any, NotRequired, TypedDict
 
 # ---------------------------------------------------------------- the payload
@@ -63,7 +61,7 @@ class FailingCheck(TypedDict):
     on_main: bool  # also failing on the base branch: not this PR's fault
 
 
-class CiChecks(TypedDict, total=False):
+class CiChecks(TypedDict):
     state: str  # a ci.State: passing | failing | failing-optional | failing-main | not-run | pending | none | unknown
     failing: list[FailingCheck]
     pending: int
@@ -72,7 +70,7 @@ class CiChecks(TypedDict, total=False):
     total: int
     required_missing: list[str]
     required_known: bool
-    reason: str  # only when state is unknown: why the forge couldn't say
+    reason: NotRequired[str]  # only when state is unknown: why the forge couldn't say
 
 
 class Thread(TypedDict):
@@ -392,7 +390,7 @@ STUDY_ADD_KINDS = frozenset({"prediction", "teachback", "note", "reflection", "f
 ``note`` with ``pinned`` keeps a message in the brief; ``prediction`` with ``skipped`` records skipping it."""
 
 STUDY_ASK_ACTIONS = frozenset({"chat", "quiz", "brief", "answer", "teachback", "hint"})
-"""``POST /api/study/<n>/ask`` body ``action`` (``engine.ACTIONS``); ``text`` and ``qid`` as the action needs."""
+"""``POST /api/study/<n>/ask`` body ``action`` (``study.Action``); ``text`` and ``qid`` as the action needs."""
 
 
 # ---------------------------------------------------------------- helpers for the tests
