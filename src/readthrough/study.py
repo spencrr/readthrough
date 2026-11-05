@@ -65,7 +65,9 @@ class EntryKind(StrEnum):
 
 
 class Action(StrEnum):
-    """What the learner asks of the assistant in a turn; a ``chat`` entry records it as ``action``."""
+    """What the learner asks of the assistant in a turn; a ``chat`` entry records it as ``action``. (An assistant
+    may write its own ``action`` on a chat entry, such as the rules assistant's ``reference``; this is the
+    learner's vocabulary, and what the page may send.)"""
 
     CHAT = "chat"
     QUIZ = "quiz"
@@ -172,7 +174,7 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             raise ValueError("line must be a number") from None
     if kind in GRADES and fields["verdict"] not in list(Verdict):
         raise ValueError(f"verdict must be one of {', '.join(Verdict)}")
-    if kind is EntryKind.FINDING and fields["severity"] not in list(Severity):
+    if kind == EntryKind.FINDING and fields["severity"] not in list(Severity):
         raise ValueError(f"severity must be one of {', '.join(Severity)}")
 
     # Ids and question numbers come from what's already in the file, so reading and appending must be one step
@@ -188,9 +190,9 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             and not any(e["kind"] == EntryKind.QUESTION and e.get("qid") == fields["qid"] for e in entries)
         ):
             raise ValueError(f"no question {fields['qid']}")
-        if kind is EntryKind.ANSWER:
+        if kind == EntryKind.ANSWER:
             fields["aided"] = aids_before(entries, fields["qid"])
-        if kind is EntryKind.QUESTION:
+        if kind == EntryKind.QUESTION:
             fields["qid"] = f"Q{sum(e['kind'] == EntryKind.QUESTION for e in entries) + 1}"
         entry = {
             "id": len(entries) + 1,

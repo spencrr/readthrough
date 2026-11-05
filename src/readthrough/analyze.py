@@ -285,7 +285,7 @@ def analyze(
     for name, cap in pr.gaps():
         how = (
             "not something this forge can tell us"
-            if cap.kind is Kind.UNSUPPORTED
+            if cap.kind == Kind.UNSUPPORTED
             else f"couldn't be read: {cap.reason}"
         )
         flag("gap", "info", f"{GAP_MESSAGES[name]}: {how}")
@@ -407,11 +407,11 @@ def _ci_flags(ci_info: CiChecks, flag: Any) -> None:
     state, failing = ci_info["state"], ci_info["failing"]
     names = _check_names
     own = [r for r in failing if not r["on_main"]]
-    if state is ci.State.FAILING:
+    if state == ci.State.FAILING:
         flag("ci", "blocker", f"CI failing: {names(own)}")
-    elif state is ci.State.FAILING_OPTIONAL:
+    elif state == ci.State.FAILING_OPTIONAL:
         flag("ci-optional", "risk", f"Optional check failing: {names(own)}")
-    elif state is ci.State.NOT_RUN:
+    elif state == ci.State.NOT_RUN:
         flag(
             "ci-not-run",
             "info",

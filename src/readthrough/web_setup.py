@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 from urllib.parse import quote
 
 from readthrough import forges, onboard, review, system
@@ -233,24 +233,26 @@ class SetupService:
             cfg = self._remember(repo, forge_name, account=account, clone=clone, remote=remote, version=version)
             forge = forges.make(cfg)
             facts = self._gather(cfg, forge, say)
-            if mode is DraftMode.SOURCE:
-                view = self._profile_view(cfg, forge)
-                text = view["profile_text"]
-                if not text:
-                    raise SetupError("There's no existing profile for this repo; draft one instead.")
-            elif mode is DraftMode.MODEL:
-                from readthrough import runtimes
-                from readthrough.onboard_model import model_draft
+            match mode:
+                case DraftMode.SOURCE:
+                    text = self._profile_view(cfg, forge)["profile_text"]
+                    if not text:
+                        raise SetupError("There's no existing profile for this repo; draft one instead.")
+                case DraftMode.MODEL:
+                    from readthrough import runtimes
+                    from readthrough.onboard_model import model_draft
 
-                name, ok, why = runtimes.resolve(cfg.runtime, cfg.runtime_options)
-                if not ok:
-                    raise SetupError(f"Drafting with a model needs a model runtime: {why}.")
-                engine = runtimes.make(name, cfg.runtime_options).describe()
-                say(f"The model is reading the repo ({engine}). This takes a few minutes.")
-                text = model_draft(cfg, forge, facts, on_progress=say)
-            else:
-                say("Drafting from the file tree, CODEOWNERS, docs, and recent PRs")
-                text = onboard.draft_profile(facts, title=cfg.repo.rsplit("/", 1)[-1])
+                    name, ok, why = runtimes.resolve(cfg.runtime, cfg.runtime_options)
+                    if not ok:
+                        raise SetupError(f"Drafting with a model needs a model runtime: {why}.")
+                    engine = runtimes.make(name, cfg.runtime_options).describe()
+                    say(f"The model is reading the repo ({engine}). This takes a few minutes.")
+                    text = model_draft(cfg, forge, facts, on_progress=say)
+                case DraftMode.PLAIN:
+                    say("Drafting from the file tree, CODEOWNERS, docs, and recent PRs")
+                    text = onboard.draft_profile(facts, title=cfg.repo.rsplit("/", 1)[-1])
+                case _:
+                    assert_never(mode)
             return {"toml": text, "report": self._report(text, cfg, facts)}
 
         return {"job": self._run_job(f"draft:{forge_name}/{repo.lower()}", work)}

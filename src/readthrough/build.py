@@ -212,7 +212,7 @@ def _gap_warnings(warnings: Warnings, prs: list[PullRequest], forge: Forge) -> N
         for name, cap in pr.gaps():
             gaps.setdefault((name, cap.kind), []).append(f"#{pr.number}: {cap.reason}")
     for (name, kind), details in sorted(gaps.items()):
-        if kind is Kind.UNSUPPORTED:
+        if kind == Kind.UNSUPPORTED:
             warnings.add(
                 f"gap-{name}",
                 f"{forge.label} can't tell us the {name.replace('_', ' ')}; related signals and lanes use a neutral default",
