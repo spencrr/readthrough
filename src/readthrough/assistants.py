@@ -34,6 +34,7 @@ from typing import Any, Protocol
 
 from readthrough import review, runtimes, study, usage
 from readthrough.config import AUTO, Config
+from readthrough.contract import PullRequestItem, Smell
 from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
@@ -48,7 +49,7 @@ class Harness(Protocol):
 
     cfg: Config
     broadcast: Callable[[str, Any], None]
-    pr_info: Callable[[int], dict[str, Any] | None]
+    pr_info: Callable[[int], PullRequestItem | None]
 
     def append(self, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]: ...
     def components(self) -> list[dict[str, Any]]: ...
@@ -148,7 +149,7 @@ CANT_DISCUSS = (
 SIGNAL_KINDS = ("risk", "blocker", "responsibility", "correctness", "convention")
 
 
-def question_bank(item: dict[str, Any], components: list[dict[str, Any]], profile: Any) -> list[BankQuestion]:
+def question_bank(item: PullRequestItem, components: list[dict[str, Any]], profile: Any) -> list[BankQuestion]:
     """The questions the profile has for this PR, in the order the brief lists them: shared ones first,
     then each touched component's (most changed first), the author kind's, then one per signal."""
     by_id = {c["id"]: c for c in components}
@@ -183,7 +184,7 @@ def question_bank(item: dict[str, Any], components: list[dict[str, Any]], profil
                 [],
                 f"signal:{flag['id']}",
             )
-    smells: dict[str, list[dict[str, Any]]] = {}
+    smells: dict[str, list[Smell]] = {}
     for s in item.get("smells", []):
         smells.setdefault(s["id"], []).append(s)
     for sid, hits in smells.items():
@@ -228,7 +229,9 @@ class RulesAssistant:
     def _bank(self, number: int) -> list[BankQuestion]:
         from readthrough.profile import ProfileError, resolve_profile
 
-        item = self.h.pr_info(number) or {}
+        item = self.h.pr_info(number)
+        if item is None:
+            return []
         try:
             profile = resolve_profile(self.h.cfg)
         except ProfileError:
@@ -292,7 +295,9 @@ class RulesAssistant:
         )
 
     def _brief(self, turn: Turn) -> None:
-        item = self.h.pr_info(turn.number) or {}
+        item = self.h.pr_info(turn.number)
+        if item is None:
+            return
         by_id = {c["id"]: c for c in self.h.components()}
         out = ["**What the author says it changes**", (item.get("body") or "_No description._").strip()[:1500], ""]
         out.append("**Where it lands**")
@@ -302,7 +307,7 @@ class RulesAssistant:
             responsibility = (c.get("contract") or {}).get("responsibility")
             out.append(line + (f": {responsibility}" if responsibility else ""))
         watch = [f"- [{f['kind']}] {f['msg']}" for f in item.get("flags", []) if f.get("kind") != "info"]
-        smells: dict[str, list[dict[str, Any]]] = {}
+        smells: dict[str, list[Smell]] = {}
         for s in item.get("smells", []):
             smells.setdefault(s["id"], []).append(s)
         for group in smells.values():

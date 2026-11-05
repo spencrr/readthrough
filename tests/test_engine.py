@@ -1,12 +1,14 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from readthrough import assistants, study
 from readthrough import engine as engine_mod
 from readthrough.config import Config
+from readthrough.contract import PullRequestItem
 from readthrough.engine import Busy, StudyEngine, public_entry
 from readthrough.study import Action
 
@@ -45,7 +47,7 @@ class RecordingAssistant:
 
 def _engine(cfg, events=None, assistant=None, pr_info=None) -> StudyEngine:
     engine = StudyEngine(cfg, (lambda e, d: events.append((e, d))) if events is not None else (lambda _e, _d: None),
-                         pr_info or (lambda n: {"number": n, "title": "A title"}))  # fmt: skip
+                         pr_info or (lambda n: cast("PullRequestItem", {"number": n, "title": "A title"})))  # fmt: skip
     if assistant is not None:
         assistant.harness = engine
         engine._assistant = assistant

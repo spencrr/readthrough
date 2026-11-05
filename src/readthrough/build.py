@@ -16,6 +16,7 @@ from readthrough import __version__, forges, ledger, logs, review, study
 from readthrough.analyze import analyze, compute_overlaps, count_lines, plan_sessions, rule_descriptions, whats_new
 from readthrough.brief import build_brief
 from readthrough.config import Config
+from readthrough.contract import PullRequestItem
 from readthrough.faults import ForgeError, TooLarge
 from readthrough.files import write_atomic
 from readthrough.forges import Forge
@@ -335,7 +336,7 @@ def analyze_snapshot(
     }
 
 
-def _partial_flags(item: dict[str, Any], pr: PullRequest, diff_problem: str | None) -> None:
+def _partial_flags(item: PullRequestItem, pr: PullRequest, diff_problem: str | None) -> None:
     """Say on the PR itself when its data is incomplete, so nobody mistakes "no signals" for "nothing to see"."""
     if diff_problem == "too-large":
         item["flags"].append({"id": "diff-too-large", "kind": "info",
@@ -356,7 +357,6 @@ def _partial_flags(item: dict[str, Any], pr: PullRequest, diff_problem: str | No
                 "msg": f"Only partly fetched ({parts}): placement and checks may be incomplete",
             }
         )
-        item["truncated"] = {k: list(v) for k, v in pr.truncated.items()}
 
 
 def build(

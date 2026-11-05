@@ -31,17 +31,14 @@ Rules:
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 # ---------------------------------------------------------------- the payload
 
 
-class FileRow(TypedDict):
-    path: str
-    add: int
-    del_: int  # JSON key ``del``; see FIELD_NAMES
-    type: str  # ADDED | MODIFIED | DELETED | RENAMED | COPIED | CHANGED
-    comp: str  # the component the path belongs to (``other`` when unmapped)
+# Spelled out this way because ``del`` is a keyword. ``type``: ADDED | MODIFIED | DELETED | RENAMED | COPIED | CHANGED;
+# ``comp``: the component the path belongs to (``other`` when unmapped).
+FileRow = TypedDict("FileRow", {"path": str, "add": int, "del": int, "type": str, "comp": str})
 
 
 class Flag(TypedDict):
@@ -182,10 +179,11 @@ class PullRequestItem(TypedDict):
     lane: str  # mine | draft | blocked | waiting | approved | ready
     minutes: int
     priority: float
-    related: list[int]
-    session: SessionInfo
-    sessions: list[AgentSession]
-    study: StudySummary
+    # ``analyze`` makes everything above; the build adds these four, and a served item always has them.
+    related: NotRequired[list[int]]
+    session: NotRequired[SessionInfo]
+    sessions: NotRequired[list[AgentSession]]
+    study: NotRequired[StudySummary]
 
 
 CLIENT_PR_FIELDS = frozenset({"status", "note", "understood", "reviewed"})
@@ -399,14 +397,11 @@ STUDY_ASK_ACTIONS = frozenset({"chat", "quiz", "brief", "answer", "teachback", "
 
 # ---------------------------------------------------------------- helpers for the tests
 
-FIELD_NAMES = {"del_": "del"}  # TypedDict keys that can't be spelled as the JSON key
-
 
 def fields(record: type) -> frozenset[str]:
     """The JSON keys a TypedDict declares."""
-    return frozenset(FIELD_NAMES.get(k, k) for k in record.__annotations__)
+    return frozenset(record.__annotations__)
 
 
 def required_fields(record: type) -> frozenset[str]:
-    required: frozenset[str] = getattr(record, "__required_keys__", frozenset())
-    return frozenset(FIELD_NAMES.get(k, k) for k in required)
+    return frozenset(getattr(record, "__required_keys__", frozenset()))

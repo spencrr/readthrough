@@ -60,6 +60,7 @@ from readthrough.build import (
     session_changes,
 )
 from readthrough.config import DEFAULT_HOME, Config, load_settings
+from readthrough.contract import PullRequestItem, StudySummary
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.faults import ForgeError
 from readthrough.files import mtime, stamp, write_atomic
@@ -347,7 +348,7 @@ class Dashboard:
             if not first_look:
                 self._study_changed(int(path.stem.split("-")[1]), reload=True)
 
-    def _study_changed(self, number: int, *, reload: bool = False) -> dict[str, Any]:
+    def _study_changed(self, number: int, *, reload: bool = False) -> StudySummary:
         summary = study.summarize(study.load(self.cfg, number))
         info = self.pr_info(number)
         if info is not None:
@@ -372,7 +373,7 @@ class Dashboard:
 
     # ---- actions
 
-    def pr_info(self, number: int) -> dict[str, Any] | None:
+    def pr_info(self, number: int) -> PullRequestItem | None:
         return next((p for p in self.snapshot().get("prs", []) if p["number"] == number), None)
 
     def study_state(self, number: int) -> dict[str, Any]:

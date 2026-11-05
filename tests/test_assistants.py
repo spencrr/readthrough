@@ -20,6 +20,7 @@ from readthrough.assistants import (
     system_message,
 )
 from readthrough.config import Config
+from readthrough.contract import PullRequestItem
 from readthrough.registry import RegistryError
 from readthrough.rules import Contract
 from readthrough.study import Action
@@ -37,7 +38,7 @@ diff --git a/courier/transports/smtp.py b/courier/transports/smtp.py
 class Harness:
     """What an assistant sees: a Config, the PR items, the components, and somewhere to append."""
 
-    def __init__(self, cfg: Config, items: list[dict], components: list[dict]):
+    def __init__(self, cfg: Config, items: list[PullRequestItem], components: list[dict]):
         self.cfg = cfg
         self.items = {it["number"]: it for it in items}
         self._components = components

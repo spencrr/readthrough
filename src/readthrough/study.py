@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from readthrough.config import Config
+from readthrough.contract import StudySummary
 from readthrough.files import locked
 from readthrough.limits import MAX_STUDY_TEXT
 
@@ -214,7 +215,7 @@ def aids_before(entries: list[dict[str, Any]], qid: str) -> list[str]:
     return aids
 
 
-def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(entries: list[dict[str, Any]]) -> StudySummary:
     questions = {e["qid"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
     latest_assessment: dict[str, str] = {}
     for e in entries:
@@ -231,7 +232,9 @@ def summarize(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "after_hint": sum(1 for a in answers.values() if Action.HINT in (a.get("aided") or [])),
         "after_brief": sum(1 for a in answers.values() if Action.BRIEF in (a.get("aided") or [])),
         "assessed": assessed,
-        **{str(v): n for v, n in counts.items()},
+        "correct": counts[Verdict.CORRECT],
+        "partial": counts[Verdict.PARTIAL],
+        "incorrect": counts[Verdict.INCORRECT],
         "score": round((counts[Verdict.CORRECT] + 0.5 * counts[Verdict.PARTIAL]) / assessed, 2) if assessed else None,
         "predictions": sum(e["kind"] == EntryKind.PREDICTION and not e.get("skipped") for e in entries),
         "prediction_skipped": any(e["kind"] == EntryKind.PREDICTION and e.get("skipped") for e in entries),
