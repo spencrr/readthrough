@@ -1042,8 +1042,8 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p.add_argument("--at", metavar="PATH:LINE", help="location for --finding")
     p.add_argument(
         "--by",
-        choices=(Writer.YOU, Writer.MODEL),
-        default=Writer.YOU,
+        choices=(Writer.YOU.value, Writer.MODEL.value),  # by value: argparse lists choices by repr in its error
+        default=Writer.YOU.value,
         help="who wrote a --note or --finding: you, or a model (a review agent)",
     )
     p.set_defaults(func=cmd_study)
