@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -34,7 +35,16 @@ from readthrough.tuning import default_tuning
 log = logging.getLogger(__name__)
 
 URL_SCHEME = "readthrough"
-URL_ACTIONS = ("review", "refresh", "open")
+
+
+class UrlAction(StrEnum):
+    """What a ``readthrough://`` link asks for: the host part of the URL."""
+
+    REVIEW = "review"  # start or resume a deep review of one PR
+    REFRESH = "refresh"  # rebuild one repo
+    OPEN = "open"  # show a repo's dashboard, or the front page
+
+
 _SEGMENT_RE = re.compile(rf"^{PATH_SEGMENT}$")
 
 MARKER_RE = re.compile(rf"\[readthrough:({PATH_SEGMENT}(?:/{PATH_SEGMENT})+)#({PR_NUMBER})\]")
@@ -269,7 +279,7 @@ def launch_in_terminal(launch: ReviewLaunch, cfg: Config) -> str:
 
 @dataclass
 class ReadthroughUrl:
-    action: str
+    action: UrlAction
     repo: str | None = None
     number: int | None = None
 
@@ -284,18 +294,19 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
     parts = urlsplit(url.strip())
     if parts.scheme.lower() != URL_SCHEME:
         raise ValueError(f"Not a {URL_SCHEME}: URL")
-    action = parts.netloc.lower()
-    if action not in URL_ACTIONS:
-        raise ValueError(f"Unknown action {action!r}")
+    try:
+        action = UrlAction(parts.netloc.lower())
+    except ValueError:
+        raise ValueError(f"Unknown action {parts.netloc!r}") from None
     if parts.query or parts.fragment:
         raise ValueError("Unexpected query or fragment")
     segments = [unquote(s) for s in parts.path.split("/") if s]  # a project called "Delivery Team" travels as %20
-    if action == "open" and not segments:
+    if action is UrlAction.OPEN and not segments:
         return ReadthroughUrl(action)
     if not all(_SEGMENT_RE.match(s) for s in segments):
         raise ValueError("Unexpected characters in the path")
     number: int | None = None
-    if action == "review":
+    if action is UrlAction.REVIEW:
         if len(segments) < 3 or not re.fullmatch(PR_NUMBER, segments[-1]):
             raise ValueError(f"review needs a repo and a PR number, e.g. {URL_SCHEME}://review/github/owner/name/1234")
         number = int(segments.pop())
