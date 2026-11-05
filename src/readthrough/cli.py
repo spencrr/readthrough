@@ -786,7 +786,7 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
         check(
             False, "assistant", f"{assistant.name}: {assistant.reason}", 'set assistant = "rules", or install [study]'
         )
-    elif assistant.name == "rules" and settings.assistant == assistants.AUTO:
+    elif assistant.name == Writer.RULES and settings.assistant == assistants.AUTO:
         check(
             None,
             "assistant",
