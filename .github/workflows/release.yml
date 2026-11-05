@@ -49,11 +49,16 @@ jobs:
             echo "::error::tag $TAG, but pyproject.toml says $version"
             exit 1
           fi
-          # The section runs to the next heading, or to the link definitions a changelog may end with.
+          # The section runs to the next heading, or to the link definitions a changelog may end with. Its wrapped
+          # lines are joined, since GitHub shows a newline in release notes as a line break.
+          # shortcut: a fenced code block inside an entry would be flattened too; teach it fences when one appears.
           awk -v v="$version" '
             $0 ~ "^## " v "( |$)" { on = 1; next }
             on && (/^## / || /^\[[^]]+\]: /) { exit }
-            on { print }' CHANGELOG.md > notes.md
+            !on { next }
+            buf != "" && buf !~ /^#/ && !/^(#| *- |$)/ { sub(/^ +/, ""); buf = buf " " $0; next }
+            { if (buf != "") print buf; buf = $0; if ($0 == "") print }
+            END { if (buf != "") print buf }' CHANGELOG.md > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
             echo "::error::CHANGELOG.md has no section for $version"
             exit 1
