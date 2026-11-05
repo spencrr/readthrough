@@ -150,7 +150,7 @@ A release is a `vX.Y.Z` tag on `main` (or on a `release/*` branch, for a patch t
 
 1. Bump `version` in `pyproject.toml` and run `uv lock`, so the lockfile names the new version (`UV_LOCKED` in CI refuses a stale one). `readthrough.__version__` reads it from the installed package.
 2. Add a `## X.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md`; the release notes are that section, up to the next heading.
-3. Run `uv run python scripts/check.py`, commit, and push `main`. Wait for CI.
+3. Run `uv run python scripts/check.py`, commit on a `dev/<login>/*` branch, and land it on `main` through a pull request (nothing reaches `main` any other way). Wait for CI.
 4. `git tag vX.Y.Z && git push origin vX.Y.Z`. Only a repository admin can create a tag, and once a `v*` tag exists it can't be moved or deleted. The release is marked latest only when its version is the highest released, so a patch to an older line doesn't take the badge from a newer one.
 5. Approve the deployment when the run reaches `publish`. Then check it from the outside, on a downloaded file rather than a local build:
 
