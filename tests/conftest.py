@@ -44,6 +44,9 @@ def no_real_programs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv(f"READTHROUGH_{program.upper()}", f"readthrough-tests-must-not-run-{program}")
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    # Path.home(), where the shared skills directory lives: a developer's own installed skill must not show.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "user"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
 
     # The REST adapters speak urllib; a test that forgets to script `Rest.call` must fail, not reach a forge.
     # The live server's tests talk to 127.0.0.1 the same way, which is fine.
