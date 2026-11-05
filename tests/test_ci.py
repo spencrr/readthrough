@@ -92,15 +92,13 @@ def test_status_contexts_count():
     assert classify([status("ci/jenkins", "ERROR")], required={"ci/jenkins"}, main_failing=set())["state"] == "failing"
 
 
-def test_rank_puts_required_failures_first():
-    assert State.FAILING.rank < State.FAILING_OPTIONAL.rank < State.PASSING.rank < State.NONE.rank
-    assert State.UNKNOWN.rank < State.PASSING.rank, "an unreadable CI isn't filed with the passing ones"
+def test_every_state_has_its_words():
+    assert set(ci.LABELS) == set(State), "a new state needs the words the brief prints for it"
 
 
 def test_unreadable_checks_are_unknown_not_none():
     info = ci.unknown("HTTP 403")
     assert info["state"] == "unknown" and info["reason"] == "HTTP 403" and not info["required_known"]
-    assert State.UNKNOWN.label == "couldn't be read"
     assert ci.label("unknown") == ci.label("no such state") == "couldn't be read", "read back from a file, too"
     assert ci.label(State.PASSING) == "passing"
 

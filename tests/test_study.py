@@ -23,6 +23,10 @@ def cfg(tmp_path: Path) -> Config:
     return cfg
 
 
+def test_every_entry_kind_says_who_may_write_it():
+    assert set(study.KINDS) == set(study.EntryKind), "a new kind needs its row: who may write it, and what it needs"
+
+
 def test_append_validates_kind_writer_and_fields(cfg):
     with pytest.raises(ValueError, match="unknown"):
         study.append(cfg, 5, "edit", by="you", text="x")

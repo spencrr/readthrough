@@ -20,8 +20,7 @@ PENDING = {"QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED
 
 
 class State(StrEnum):
-    """One PR's CI, as the dashboard files it. Declared most in need of attention first: that is the sort order,
-    and ``unknown`` sits above the good news so an unreadable CI is never filed with the passing ones."""
+    """One PR's CI, as the dashboard files it (the page groups and orders these itself)."""
 
     FAILING = "failing"
     NOT_RUN = "not-run"
@@ -32,16 +31,8 @@ class State(StrEnum):
     PASSING = "passing"
     NONE = "none"
 
-    @property
-    def rank(self) -> int:
-        return list(State).index(self)
 
-    @property
-    def label(self) -> str:
-        return _LABELS[self]
-
-
-_LABELS = {
+LABELS = {
     State.FAILING: "failing",
     State.NOT_RUN: "not run",
     State.FAILING_OPTIONAL: "optional check failing",
@@ -54,11 +45,12 @@ _LABELS = {
 
 
 def label(state: object) -> str:
-    """The words for a state read back from a file; anything unrecognised reads as unreadable, never as passing."""
+    """The words for a state, as the brief prints it; one read back from a file is a plain string, and anything
+    unrecognised reads as unreadable, never as passing."""
     try:
-        return State(state).label
+        return LABELS[State(state)]
     except ValueError:
-        return State.UNKNOWN.label
+        return LABELS[State.UNKNOWN]
 
 
 def latest_checks(checks: list[Check]) -> dict[str, dict[str, Any]]:
