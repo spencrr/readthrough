@@ -14,6 +14,16 @@ from readthrough.forges.github import normalize
 from readthrough.model import PullRequest
 from readthrough.profile import load_profile
 
+BROWSER_ENGINE = pytest.StashKey[str]()
+"""Which browser the browser tests launched, set by their fixture, so a run here and a run on CI can be compared."""
+
+
+def pytest_terminal_summary(terminalreporter, config) -> None:
+    engine = config.stash.get(BROWSER_ENGINE, None)
+    if engine:
+        terminalreporter.write_line(f"browser tests ran on {engine}")
+
+
 NOW = dt.datetime(2026, 10, 2, 12, 0, tzinfo=dt.UTC)
 FIXTURES = Path(__file__).parent / "fixtures"
 PROFILE_PATH = FIXTURES / "courier.toml"

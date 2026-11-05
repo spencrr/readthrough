@@ -1,6 +1,10 @@
 """Drive the real pages in a headless browser: they load without script errors and the main interactions work.
 
-Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't available.
+Marked ``browser``; skipped when Playwright or a Chromium-family browser isn't available. Playwright's own
+Chromium is tried first, so a run here and a run on CI use the same engine (``uv run playwright install
+chromium`` gets it); an installed Edge or Chrome is the fallback. The branded builds are more lenient in places
+(Edge ran a string handed to ``wait_for_function`` that the page's CSP forbids), which is how a failure can
+pass locally and fail on CI. The engine that ran is in the report header, so the two can be compared.
 """
 
 import base64
@@ -12,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import PROFILE_PATH, REPO, SLUG
+from conftest import BROWSER_ENGINE, PROFILE_PATH, REPO, SLUG
 
 from readthrough import ledger, study
 from readthrough.build import build, render_html
@@ -26,11 +30,14 @@ pytestmark = pytest.mark.browser
 BODY = 'Adds **retries** to the transport.\n\n- one\n- two\n\n<img src="data:," onerror="window.pwned=1">'
 
 
+ENGINES = ({}, {"channel": "msedge"}, {"channel": "chrome"})  # Playwright's Chromium first: the same everywhere
+
+
 @pytest.fixture(scope="module")
-def browser():
+def browser(request):
     with sync_api.sync_playwright() as p:
         launched = None
-        for options in ({"channel": "msedge"}, {"channel": "chrome"}, {}):
+        for options in ENGINES:
             try:
                 launched = p.chromium.launch(headless=True, **options)
                 break
@@ -41,6 +48,7 @@ def browser():
             if os.environ.get("CI"):
                 pytest.fail("no Chromium-family browser on this runner; the browser tests must run on CI")
             pytest.skip("no Chromium-family browser available")
+        request.config.stash[BROWSER_ENGINE] = f"{options.get('channel', 'chromium')} {launched.version}"
         yield launched
         launched.close()
 
