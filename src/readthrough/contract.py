@@ -67,7 +67,7 @@ class FailingCheck(TypedDict):
 
 
 class CiChecks(TypedDict, total=False):
-    state: str  # ci.STATES: passing | failing | failing-optional | failing-main | not-run | pending | none | unknown
+    state: str  # a ci.State: passing | failing | failing-optional | failing-main | not-run | pending | none | unknown
     failing: list[FailingCheck]
     pending: int
     cancelled: int

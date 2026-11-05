@@ -9,6 +9,7 @@ couldn't say what the checks are, the answer is "unknown", never "passing" or "n
 from __future__ import annotations
 
 from collections.abc import Set as AbstractSet
+from enum import StrEnum
 from typing import Any
 
 from readthrough.model import Check
@@ -16,19 +17,47 @@ from readthrough.model import Check
 FAILED = {"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "ERROR"}
 PENDING = {"QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED"}
 
-# Sort order: most in need of attention first.
-STATES = ("failing", "not-run", "failing-optional", "failing-main", "unknown", "pending", "passing", "none")
-STATE_RANK = {s: i for i, s in enumerate(STATES)}
-STATE_LABELS = {
-    "failing": "failing",
-    "not-run": "not run",
-    "failing-optional": "optional check failing",
-    "failing-main": "failing on main too",
-    "unknown": "couldn't be read",
-    "pending": "pending",
-    "passing": "passing",
-    "none": "no CI",
+
+class State(StrEnum):
+    """One PR's CI, as the dashboard files it. Declared most in need of attention first: that is the sort order,
+    and ``unknown`` sits above the good news so an unreadable CI is never filed with the passing ones."""
+
+    FAILING = "failing"
+    NOT_RUN = "not-run"
+    FAILING_OPTIONAL = "failing-optional"
+    FAILING_MAIN = "failing-main"
+    UNKNOWN = "unknown"
+    PENDING = "pending"
+    PASSING = "passing"
+    NONE = "none"
+
+    @property
+    def rank(self) -> int:
+        return list(State).index(self)
+
+    @property
+    def label(self) -> str:
+        return _LABELS[self]
+
+
+_LABELS = {
+    State.FAILING: "failing",
+    State.NOT_RUN: "not run",
+    State.FAILING_OPTIONAL: "optional check failing",
+    State.FAILING_MAIN: "failing on main too",
+    State.UNKNOWN: "couldn't be read",
+    State.PENDING: "pending",
+    State.PASSING: "passing",
+    State.NONE: "no CI",
 }
+
+
+def label(state: object) -> str:
+    """The words for a state read back from a file; anything unrecognised reads as unreadable, never as passing."""
+    try:
+        return State(state).label
+    except ValueError:
+        return State.UNKNOWN.label
 
 
 def latest_checks(checks: list[Check]) -> dict[str, dict[str, Any]]:
@@ -50,7 +79,7 @@ def failing_names(checks: list[Check]) -> set[str]:
 def unknown(reason: str) -> dict[str, Any]:
     """The summary for a PR whose checks the forge couldn't supply."""
     return {
-        "state": "unknown", "reason": reason, "failing": [], "pending": 0, "cancelled": 0, "passed": 0, "total": 0,
+        "state": State.UNKNOWN, "reason": reason, "failing": [], "pending": 0, "cancelled": 0, "passed": 0, "total": 0,
         "required_missing": [], "required_known": False,
     }  # fmt: skip
 
@@ -81,19 +110,19 @@ def classify(
     own = [r for r in failed_rows if not r["on_main"]]
 
     if any(r["required"] for r in own) or (own and not required):
-        state = "failing"
+        state = State.FAILING
     elif own:
-        state = "failing-optional"
+        state = State.FAILING_OPTIONAL
     elif failed_rows:
-        state = "failing-main"
+        state = State.FAILING_MAIN
     elif required and len(missing) == len(required) and not pending:
-        state = "not-run"
+        state = State.NOT_RUN
     elif pending or missing or cancelled:
-        state = "pending"
+        state = State.PENDING
     elif checks:
-        state = "passing"
+        state = State.PASSING
     else:
-        state = "none"
+        state = State.NONE
 
     return {
         "state": state,

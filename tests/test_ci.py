@@ -1,5 +1,5 @@
 from readthrough import ci
-from readthrough.ci import STATE_RANK, failing_names, latest_checks
+from readthrough.ci import State, failing_names, latest_checks
 from readthrough.forges.github import _checks
 from readthrough.model import Check
 
@@ -93,14 +93,16 @@ def test_status_contexts_count():
 
 
 def test_rank_puts_required_failures_first():
-    assert STATE_RANK["failing"] < STATE_RANK["failing-optional"] < STATE_RANK["passing"] < STATE_RANK["none"]
-    assert STATE_RANK["unknown"] < STATE_RANK["passing"], "an unreadable CI isn't filed with the passing ones"
+    assert State.FAILING.rank < State.FAILING_OPTIONAL.rank < State.PASSING.rank < State.NONE.rank
+    assert State.UNKNOWN.rank < State.PASSING.rank, "an unreadable CI isn't filed with the passing ones"
 
 
 def test_unreadable_checks_are_unknown_not_none():
     info = ci.unknown("HTTP 403")
     assert info["state"] == "unknown" and info["reason"] == "HTTP 403" and not info["required_known"]
-    assert ci.STATE_LABELS["unknown"] == "couldn't be read"
+    assert State.UNKNOWN.label == "couldn't be read"
+    assert ci.label("unknown") == ci.label("no such state") == "couldn't be read", "read back from a file, too"
+    assert ci.label(State.PASSING) == "passing"
 
 
 def test_pending_status_contexts_have_no_conclusion():

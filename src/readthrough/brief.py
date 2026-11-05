@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from readthrough.ci import STATE_LABELS
+from readthrough import ci
 from readthrough.profile import Profile
 from readthrough.rules import Contract, Instruction
 
@@ -41,7 +41,7 @@ def build_brief(
     w(
         f"[Open on {forge_label}]({it['url']}) · [Files]({it['url']}{files_tab}) · author **@{it['author']}** ({_author_label(profile, it)}) · lane **{it['lane']}** · "
         f"+{it['additions']}/-{it['deletions']} in {it['changed_files']} files · opened {int(it['age_days'])}d ago · "
-        f"idle {int(it['idle_days'])}d · CI **{STATE_LABELS.get(it.get('ci_state', ''), 'unknown')}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
+        f"idle {int(it['idle_days'])}d · CI **{ci.label(it.get('ci_state'))}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
     )
     w(f"Head SHA: `{it['head']}`\n")
     if ledger_entry:

@@ -12,7 +12,7 @@ from collections.abc import Set as AbstractSet
 from typing import Any
 
 from readthrough import ci
-from readthrough.model import Capability, Check, PullRequest
+from readthrough.model import Capability, Check, Kind, PullRequest
 from readthrough.profile import Authors, Profile
 from readthrough.rules import Instruction
 from readthrough.tuning import PayloadTuning, PlanningTuning, default_tuning
@@ -271,7 +271,11 @@ def analyze(
         flags.append({"id": fid, "kind": kind, "msg": msg})
 
     for name, cap in pr.gaps():
-        how = "not something this forge can tell us" if cap.kind == "unsupported" else f"couldn't be read: {cap.reason}"
+        how = (
+            "not something this forge can tell us"
+            if cap.kind is Kind.UNSUPPORTED
+            else f"couldn't be read: {cap.reason}"
+        )
         flag("gap", "info", f"{GAP_MESSAGES[name]}: {how}")
 
     unresolved = _unresolved_threads(pr, payload)
@@ -391,11 +395,11 @@ def _ci_flags(ci_info: dict[str, Any], flag: Any) -> None:
     state, failing = ci_info["state"], ci_info["failing"]
     names = _check_names
     own = [r for r in failing if not r["on_main"]]
-    if state == "failing":
+    if state is ci.State.FAILING:
         flag("ci", "blocker", f"CI failing: {names(own)}")
-    elif state == "failing-optional":
+    elif state is ci.State.FAILING_OPTIONAL:
         flag("ci-optional", "risk", f"Optional check failing: {names(own)}")
-    elif state == "not-run":
+    elif state is ci.State.NOT_RUN:
         flag(
             "ci-not-run",
             "info",
@@ -439,8 +443,8 @@ def _lane(pr: PullRequest, *, decision: str, viewer: str, flags: list[dict[str, 
 
 
 def _priority(
-    lane: str, *, age: float, minutes: int, ci_state: str, requested: bool, pushed_since_cr: bool, closes_issue: bool,
-    planning: PlanningTuning,
+    lane: str, *, age: float, minutes: int, ci_state: ci.State, requested: bool, pushed_since_cr: bool,
+    closes_issue: bool, planning: PlanningTuning,
 ) -> float:  # fmt: skip
     t = planning
     if lane == "approved":
@@ -457,8 +461,8 @@ def _priority(
         else 0
     )
     # A green PR can be reviewed with confidence; one with its own optional failures will likely change.
-    score += {"passing": t.priority_ci_passing, "failing-main": t.priority_ci_failing_on_main,
-              "failing-optional": t.priority_ci_failing_optional, "not-run": t.priority_ci_not_run}.get(ci_state, 0)  # fmt: skip
+    score += {ci.State.PASSING: t.priority_ci_passing, ci.State.FAILING_MAIN: t.priority_ci_failing_on_main,
+              ci.State.FAILING_OPTIONAL: t.priority_ci_failing_optional, ci.State.NOT_RUN: t.priority_ci_not_run}.get(ci_state, 0)  # fmt: skip
     score += t.priority_closes_issue if closes_issue else 0
     return round(score, 1)
 
