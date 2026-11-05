@@ -46,11 +46,11 @@ class Capability(Generic[T]):
 
     @property
     def known(self) -> bool:
-        return self.kind is Kind.KNOWN
+        return self.kind == Kind.KNOWN
 
     def get(self, default: T) -> T:
         """The value when known, otherwise ``default``. Callers must have reported the gap first."""
-        return self.value if self.kind is Kind.KNOWN and self.value is not None else default
+        return self.value if self.kind == Kind.KNOWN and self.value is not None else default
 
 
 def known(value: T) -> Capability[T]:

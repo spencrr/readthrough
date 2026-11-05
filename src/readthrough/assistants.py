@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_never
 
 from readthrough import review, runtimes, study, usage
 from readthrough.config import AUTO, Config
@@ -228,11 +228,21 @@ class RulesAssistant:
         return None
 
     async def turn(self, turn: Turn) -> None:
-        handler = {
-            Action.QUIZ: self._quiz, Action.ANSWER: self._after_answer, Action.HINT: self._hint,
-            Action.BRIEF: self._brief, Action.TEACHBACK: self._after_teachback,
-        }.get(turn.action, self._chat)  # fmt: skip
-        handler(turn)
+        match turn.action:
+            case Action.QUIZ:
+                self._quiz(turn)
+            case Action.ANSWER:
+                self._after_answer(turn)
+            case Action.HINT:
+                self._hint(turn)
+            case Action.BRIEF:
+                self._brief(turn)
+            case Action.TEACHBACK:
+                self._after_teachback(turn)
+            case Action.CHAT:
+                self._chat(turn)
+            case _:
+                assert_never(turn.action)
 
     # ---- the bank for one PR
 
@@ -299,7 +309,10 @@ class RulesAssistant:
         refs = entry.get("refs") or []
         where = ", ".join(f"`{r}`" for r in refs) if refs else "the author's description and the tests"
         self._say(
-            turn.number, f"Look at {where}. I can't say more without reading the code.", action="hint", qid=turn.qid
+            turn.number,
+            f"Look at {where}. I can't say more without reading the code.",
+            action=Action.HINT,
+            qid=turn.qid,
         )
 
     def _brief(self, turn: Turn) -> None:
@@ -478,6 +491,8 @@ class ModelAssistant:
                         error = reason
                     case runtimes.Done(text):
                         final = text
+                    case _:
+                        assert_never(event)
 
         await asyncio.wait_for(consume(), timeout=timeout)
         if error:
@@ -705,6 +720,6 @@ def _clip(text: str, *, limit: int) -> str:
 
 
 ASSISTANTS.add(
-    MODEL_BY,
+    "model",
     "a Socratic assistant that reads the code and grades answers, on the configured model runtime (needs a runtime)",
 )(ModelAssistant)

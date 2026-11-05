@@ -301,12 +301,12 @@ def parse_readthrough_url(url: str, *, allowed_repos: list[str]) -> ReadthroughU
     if parts.query or parts.fragment:
         raise ValueError("Unexpected query or fragment")
     segments = [unquote(s) for s in parts.path.split("/") if s]  # a project called "Delivery Team" travels as %20
-    if action is UrlAction.OPEN and not segments:
+    if action == UrlAction.OPEN and not segments:
         return ReadthroughUrl(action)
     if not all(_SEGMENT_RE.match(s) for s in segments):
         raise ValueError("Unexpected characters in the path")
     number: int | None = None
-    if action is UrlAction.REVIEW:
+    if action == UrlAction.REVIEW:
         if len(segments) < 3 or not re.fullmatch(PR_NUMBER, segments[-1]):
             raise ValueError(f"review needs a repo and a PR number, e.g. {URL_SCHEME}://review/github/owner/name/1234")
         number = int(segments.pop())

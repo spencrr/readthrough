@@ -16,7 +16,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable
 from importlib.resources import files
-from typing import Any
+from typing import Any, assert_never
 
 from readthrough import runtimes
 from readthrough.config import Config
@@ -142,12 +142,17 @@ class _Drafter:
                 match event:
                     case runtimes.Used(usage):
                         self._record_usage(usage)
-                    case runtimes.ToolCall(name) if name != "propose_profile":
-                        self.say(f"model: {name.replace('_', ' ')}")
+                    case runtimes.ToolCall(name):
+                        if name != "propose_profile":
+                            self.say(f"model: {name.replace('_', ' ')}")
+                    case runtimes.Text():
+                        pass  # the drafter reports the model's steps, not its running text
                     case runtimes.Failed(reason):
                         error = reason
                     case runtimes.Done(text):
                         final = text
+                    case _:
+                        assert_never(event)
 
         await asyncio.wait_for(consume(), timeout=self.cfg.tuning.study.onboarding_turn_timeout_seconds)
         if error and self.best is None:
