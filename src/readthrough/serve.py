@@ -65,6 +65,7 @@ from readthrough.faults import ForgeError
 from readthrough.files import mtime, stamp, write_atomic
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
+from readthrough.study import Action, EntryKind, Writer
 from readthrough.web_setup import Conflict, SetupError, SetupService
 
 log = logging.getLogger(__name__)
@@ -394,24 +395,24 @@ class Dashboard:
             for k in ("text", "section", "severity", "summary", "path", "line")
             if body.get(k) not in (None, "")
         }
-        if kind == "reflection" and body.get("qid"):
+        if kind == EntryKind.REFLECTION and body.get("qid"):
             if not isinstance(body["qid"], str):
                 raise ValueError("qid must be a question id")
             fields["qid"] = body["qid"]
-        if kind == "prediction" and body.get("skipped") is True:
+        if kind == EntryKind.PREDICTION and body.get("skipped") is True:
             fields = {"text": "Skipped the prediction.", "skipped": True}
-        if kind == "note" and body.get("pinned") is not None:
+        if kind == EntryKind.NOTE and body.get("pinned") is not None:
             if not isinstance(body["pinned"], int):
                 raise ValueError("pinned must be an entry id")
             fields["pinned"] = body["pinned"]
-        entry = study.append(self.cfg, number, kind, by="you", **fields)
+        entry = study.append(self.cfg, number, kind, by=Writer.YOU, **fields)
         study.refresh_brief(self.cfg, number)
         summary = self._study_changed(number)
         self.broadcast("study", {"pr": number, "type": "entry", "entry": entry, "summary": summary})
         return entry
 
     def ask(self, number: int, body: dict[str, Any]) -> None:
-        self.engine.submit(number, str(body.get("action", "chat")), str(body.get("text") or ""), body.get("qid"))
+        self.engine.submit(number, str(body.get("action", Action.CHAT)), str(body.get("text") or ""), body.get("qid"))
 
     def brief(self, number: int) -> str:
         path = self.cfg.briefs_dir / f"pr-{number}.md"

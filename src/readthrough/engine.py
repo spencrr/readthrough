@@ -16,11 +16,11 @@ from typing import Any
 
 from readthrough import assistants, process, runtimes, study
 from readthrough.config import Config
+from readthrough.study import Action, EntryKind, Writer
 
 log = logging.getLogger(__name__)
 
 Broadcast = Callable[[str, Any], None]
-ACTIONS = ("chat", "quiz", "brief", "answer", "teachback", "hint")
 BUILT_FROM = (
     "assistant",
     "assistant_options",
@@ -139,8 +139,10 @@ class StudyEngine:
         resolved = self.resolved
         if not resolved.available:
             raise RuntimeError(resolved.reason)
-        if action not in ACTIONS:
-            raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
+        try:
+            action = Action(action)
+        except ValueError:
+            raise ValueError(f"action must be one of {', '.join(Action)}") from None
         if self.pr_info(number) is None:
             raise ValueError(f"#{number} isn't an open PR in the current data")
         # Handler threads call this concurrently (a double-click, two tabs), so claiming the PR must be atomic.
@@ -153,37 +155,41 @@ class StudyEngine:
         turn = assistants.Turn(number, action, text.strip(), qid, prompt)
         asyncio.run_coroutine_threadsafe(self._turn(turn), self._ensure_loop())
 
-    def _record_and_prompt(self, number: int, action: str, text: str, qid: str | None) -> str:
-        if action == "answer":
-            if not qid or not text:
-                raise ValueError("an answer needs the question id and your answer")
-            self.append(number, "answer", by="you", qid=qid, text=text)  # study.append tags it with any aids
-            return f"My answer to {qid}:\n\n{text}\n\nAssess it with assess_answer."
-        if action == "teachback":
-            if not text:
-                raise ValueError("write your teach-back first")
-            self.append(number, "teachback", by="you", text=text)
-            return (
-                "Here is my teach-back of the whole PR, as if I were briefing a teammate:\n\n"
-                f"{text}\n\nAssess it with assess_teachback: name the specific gaps or misunderstandings."
-            )
-        if action == "quiz":
-            self.append(number, "chat", by="you", role="user", text=text or "Quiz me.")
-            return (text + "\n\n" if text else "") + "Ask me the next quiz question."
-        if action == "brief":
-            self.append(number, "chat", by="you", role="user", text="Brief me.", action="brief")
-            return (
-                "Brief me on this PR before I dig in: what it changes and why, then the things most worth "
-                "paying attention to as a reviewer, each with path:line. No quiz question this turn."
-            )
-        if action == "hint":
-            text = f"Hint for {qid}" if qid else "Hint, please."
-            self.append(number, "chat", by="you", role="user", text=text, action="hint", qid=qid)
-            return f"Give me a hint for {qid}, without the answer." if qid else "Give me a hint, without the answer."
-        if not text:
-            raise ValueError("type a message first")
-        self.append(number, "chat", by="you", role="user", text=text)
-        return text
+    def _record_and_prompt(self, number: int, action: Action, text: str, qid: str | None) -> str:
+        match action:
+            case Action.ANSWER:
+                if not qid or not text:
+                    raise ValueError("an answer needs the question id and your answer")
+                self.append(number, EntryKind.ANSWER, by=Writer.YOU, qid=qid, text=text)  # study.append tags the aids
+                return f"My answer to {qid}:\n\n{text}\n\nAssess it with assess_answer."
+            case Action.TEACHBACK:
+                if not text:
+                    raise ValueError("write your teach-back first")
+                self.append(number, EntryKind.TEACHBACK, by=Writer.YOU, text=text)
+                return (
+                    "Here is my teach-back of the whole PR, as if I were briefing a teammate:\n\n"
+                    f"{text}\n\nAssess it with assess_teachback: name the specific gaps or misunderstandings."
+                )
+            case Action.QUIZ:
+                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text or "Quiz me.")
+                return (text + "\n\n" if text else "") + "Ask me the next quiz question."
+            case Action.BRIEF:
+                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text="Brief me.", action=action)
+                return (
+                    "Brief me on this PR before I dig in: what it changes and why, then the things most worth "
+                    "paying attention to as a reviewer, each with path:line. No quiz question this turn."
+                )
+            case Action.HINT:
+                text = f"Hint for {qid}" if qid else "Hint, please."
+                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text, action=action, qid=qid)
+                return (
+                    f"Give me a hint for {qid}, without the answer." if qid else "Give me a hint, without the answer."
+                )
+            case Action.CHAT:
+                if not text:
+                    raise ValueError("type a message first")
+                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text)
+                return text
 
     def append(self, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]:
         """Append to the log, refresh the brief, and tell open pages. Assistants write through here too."""
@@ -208,7 +214,9 @@ class StudyEngine:
             # Named by runtime, never by model: a model that never answered reached nothing.
             resolved = self.resolved
             runtime = {"runtime": resolved.runtime} if resolved.runtime else {}
-            self.append(turn.number, "failure", by=study.TOOL, assistant=resolved.name, text=message, **runtime)
+            self.append(
+                turn.number, EntryKind.FAILURE, by=Writer.TOOL, assistant=resolved.name, text=message, **runtime
+            )
             self.broadcast("study", {"pr": turn.number, "type": "error", "message": message})
         finally:
             with self._busy_lock:
@@ -220,9 +228,9 @@ class StudyEngine:
 
 def public_entry(entry: dict[str, Any], entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Hide a question's expected points until the learner has answered it."""
-    if entry["kind"] != "question":
+    if entry["kind"] != EntryKind.QUESTION:
         return entry
-    answered = any(e["kind"] == "answer" and e.get("qid") == entry["qid"] for e in entries)
+    answered = any(e["kind"] == EntryKind.ANSWER and e.get("qid") == entry["qid"] for e in entries)
     return entry if answered else {k: v for k, v in entry.items() if k != "expected_points"}
 
 

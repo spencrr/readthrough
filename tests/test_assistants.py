@@ -22,6 +22,7 @@ from readthrough.assistants import (
 from readthrough.config import Config
 from readthrough.registry import RegistryError
 from readthrough.rules import Contract
+from readthrough.study import Action
 
 DIFF = """\
 diff --git a/courier/transports/smtp.py b/courier/transports/smtp.py
@@ -154,7 +155,7 @@ def test_rules_quiz_asks_in_order_shows_reference_after_a_groups_last_question(h
     always, transports = [q for q in bank if q.group == "always"], [q for q in bank if q.group == "transports"]
 
     async def ask():
-        await rules.turn(Turn(7, "quiz", "", None, ""))
+        await rules.turn(Turn(7, Action.QUIZ, "", None, ""))
 
     for _ in range(len(always) + len(transports)):
         asyncio.run(ask())
@@ -166,7 +167,7 @@ def test_rules_quiz_asks_in_order_shows_reference_after_a_groups_last_question(h
     first, last = questions[len(always)], questions[-1]
     for q in (first, last):
         harness.append(7, "answer", by="you", qid=q["qid"], text="an answer")
-        asyncio.run(rules.turn(Turn(7, "answer", "an answer", q["qid"], "")))
+        asyncio.run(rules.turn(Turn(7, Action.ANSWER, "an answer", q["qid"], "")))
     chats = [e for e in study.load(harness.cfg, 7) if e["kind"] == "chat"]
     assert len(chats) == 1 and chats[0]["action"] == "reference" and chats[0]["group"] == "transports"
     assert "Deliver an envelope" in chats[0]["text"] and "Does not own" in chats[0]["text"]
@@ -178,7 +179,7 @@ def test_rules_runs_out_of_questions_gracefully(harness):
     rules = RulesAssistant(harness, None)
     bank = question_bank(harness.pr_info(7), harness.components(), PROFILE)
     for _ in range(len(bank) + 1):
-        asyncio.run(rules.turn(Turn(7, "quiz", "", None, "")))
+        asyncio.run(rules.turn(Turn(7, Action.QUIZ, "", None, "")))
     entries = study.load(harness.cfg, 7)
     assert sum(e["kind"] == "question" for e in entries) == len(bank)
     assert "every question" in entries[-1]["text"]
@@ -186,24 +187,24 @@ def test_rules_runs_out_of_questions_gracefully(harness):
 
 def test_rules_hint_brief_teachback_and_chat(harness):
     rules = RulesAssistant(harness, None)
-    asyncio.run(rules.turn(Turn(7, "hint", "", "Q9", "")))
+    asyncio.run(rules.turn(Turn(7, Action.HINT, "", "Q9", "")))
     assert "no open question" in study.load(harness.cfg, 7)[-1]["text"]
 
-    asyncio.run(rules.turn(Turn(7, "quiz", "", None, "")))
+    asyncio.run(rules.turn(Turn(7, Action.QUIZ, "", None, "")))
     qid = study.load(harness.cfg, 7)[-1]["qid"]
-    asyncio.run(rules.turn(Turn(7, "hint", "", qid, "")))
+    asyncio.run(rules.turn(Turn(7, Action.HINT, "", qid, "")))
     hint = study.load(harness.cfg, 7)[-1]
     assert hint["action"] == "hint" and hint["qid"] == qid and "Look at" in hint["text"]
 
-    asyncio.run(rules.turn(Turn(7, "brief", "", None, "")))
+    asyncio.run(rules.turn(Turn(7, Action.BRIEF, "", None, "")))
     brief = study.load(harness.cfg, 7)[-1]["text"]
     assert "Where it lands" in brief and "Transports" in brief and "Deliver an envelope" in brief
     assert "transport touching the store" in brief and "`courier/transports/smtp.py:11`" in brief
     assert brief.endswith("nothing here comes from reading the code._")
 
-    asyncio.run(rules.turn(Turn(7, "teachback", "It adds retries", None, "")))
+    asyncio.run(rules.turn(Turn(7, Action.TEACHBACK, "It adds retries", None, "")))
     assert "can't assess" in study.load(harness.cfg, 7)[-1]["text"]
-    asyncio.run(rules.turn(Turn(7, "chat", "why?", None, "why?")))
+    asyncio.run(rules.turn(Turn(7, Action.CHAT, "why?", None, "why?")))
     assert "[study]" in study.load(harness.cfg, 7)[-1]["text"]
     asyncio.run(rules.stop())
 
@@ -211,7 +212,7 @@ def test_rules_hint_brief_teachback_and_chat(harness):
 def test_rules_without_a_profile_has_no_questions(harness):
     harness.cfg.local_profile_path.unlink()
     rules = RulesAssistant(harness, None)
-    asyncio.run(rules.turn(Turn(7, "quiz", "", None, "")))
+    asyncio.run(rules.turn(Turn(7, Action.QUIZ, "", None, "")))
     assert "every question" in study.load(harness.cfg, 7)[-1]["text"]
 
 
@@ -308,7 +309,7 @@ def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runti
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     fake_runtime.script = [runtimes.Event("text", text="  A reply  "), runtimes.Event("done")]
     assistant = ModelAssistant(harness, None)
-    asyncio.run(assistant.turn(Turn(7, "chat", "original prompt", None, "original prompt")))
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "original prompt", None, "original prompt")))
     session = fake_runtime.sessions[next(iter(fake_runtime.sessions))]
     assert f"We're studying {REPO}#7" in session.sent[0] and session.sent[0].endswith("original prompt")
     assert "brief brief" in session.sent[0], "the brief rides along on the first turn"
@@ -319,7 +320,7 @@ def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runti
     assert "The learner maintains Courier" in conversation.system
     last = study.load(harness.cfg, 7)[-1]
     assert (last["kind"], last["by"], last["runtime"], last["text"]) == ("chat", "model", "fake", "A reply")
-    asyncio.run(assistant.turn(Turn(7, "chat", "again", None, "again")))
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "again", None, "again")))
     assert session.sent[1] == "again", "the second turn is the prompt alone"
 
 
@@ -331,7 +332,7 @@ def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, m
         runtimes.Event("done"),
     ]
     assistant = ModelAssistant(harness, None)
-    asyncio.run(assistant.turn(Turn(7, "quiz", "", None, "Ask me the next quiz question.")))
+    asyncio.run(assistant.turn(Turn(7, Action.QUIZ, "", None, "Ask me the next quiz question.")))
     kinds = [(e["kind"], e.get("text", e.get("question"))) for e in study.load(harness.cfg, 7)]
     assert kinds == [("chat", "Lead-in"), ("question", "Why?")], "the lead-in stays above the question card"
     assert ("study", {"pr": 7, "type": "tool", "name": "ask_quiz_question"}) in harness.events
@@ -343,7 +344,7 @@ def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkey
     fake_runtime.script = [runtimes.Event("error", text="boom")]
     assistant = ModelAssistant(harness, None)
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
+        asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
 
     class Hanging(FakeSession):
         async def send(self, prompt: str):
@@ -355,7 +356,7 @@ def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkey
     fake_runtime.sessions.clear()
     assistant._sessions[8] = hanging
     with pytest.raises(TimeoutError):
-        asyncio.run(assistant.turn(Turn(8, "chat", "x", None, "x")))
+        asyncio.run(assistant.turn(Turn(8, Action.CHAT, "x", None, "x")))
 
 
 def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
@@ -369,7 +370,7 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     fake_runtime.script = [runtimes.Event("usage", usage=copilot_call), runtimes.Event("usage", usage=copilot_call),
                            runtimes.Event("text", text="ok"), runtimes.Event("done")]  # fmt: skip
     assistant = ModelAssistant(harness, None)
-    asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
     entries = usage.load(harness.cfg)
     assert len(entries) == 1, "idempotent by call id"
     line = entries[0]
@@ -382,7 +383,7 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     fake_runtime.script = [runtimes.Event("usage", usage=_usage(call_id="call-2", input_tokens=10, output_tokens=5)),
                            runtimes.Event("done")]  # fmt: skip
     fake_runtime.sessions.clear()
-    asyncio.run(ModelAssistant(harness, None).turn(Turn(8, "chat", "x", None, "x")))
+    asyncio.run(ModelAssistant(harness, None).turn(Turn(8, Action.CHAT, "x", None, "x")))
     line = usage.load(harness.cfg)[1]
     assert line["billed_to"] == "anthropic:api.anthropic.com" and "nano_aiu" not in line and "multiplier" not in line
 
@@ -408,7 +409,7 @@ def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkey
         runtimes.Event("text", text="Right."),
         runtimes.Event("done"),
     ]
-    asyncio.run(ModelAssistant(harness, None).turn(Turn(7, "answer", "Because.", "Q1", "My answer")))
+    asyncio.run(ModelAssistant(harness, None).turn(Turn(7, Action.ANSWER, "Because.", "Q1", "My answer")))
     entries = study.load(harness.cfg, 7)
     assert entries[-1]["model"] == "gpt-4.1" and entries[-1]["kind"] == "chat"
     assert (entries[-2]["model"], entries[-2]["by"], entries[-2]["runtime"], entries[-2]["kind"]) == (
@@ -491,7 +492,7 @@ def test_the_worktree_follows_the_pr_head_and_the_current_clone(harness, monkeyp
 def test_stop_stops_the_runtime(harness, fake_runtime, monkeypatch):
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     assistant = ModelAssistant(harness, None)
-    asyncio.run(assistant.turn(Turn(7, "chat", "x", None, "x")))
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
     asyncio.run(assistant.stop())
     assert fake_runtime.stopped and assistant._sessions == {}
 

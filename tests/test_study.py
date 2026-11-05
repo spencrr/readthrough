@@ -10,6 +10,7 @@ from readthrough.assistants import study_session_id
 from readthrough.config import Config
 from readthrough.engine import StudyEngine, public_entries
 from readthrough.profile import DEFAULT_KINDS, Authors
+from readthrough.study import Action
 
 
 @pytest.fixture
@@ -164,18 +165,18 @@ def test_engine_records_learner_input_before_prompting(cfg):
     events = []
     engine = StudyEngine(cfg, lambda e, d: events.append((e, d)), lambda n: {"number": n})
     study.append(cfg, 5, "question", by="model", question="Why?")
-    prompt = engine._record_and_prompt(5, "answer", "My answer", "Q1")
+    prompt = engine._record_and_prompt(5, Action.ANSWER, "My answer", "Q1")
     assert "Q1" in prompt and "assess_answer" in prompt
     assert study.load(cfg, 5)[-1]["kind"] == "answer"
     assert events[-1][0] == "study" and events[-1][1]["type"] == "entry"
     with pytest.raises(ValueError):
-        engine._record_and_prompt(5, "chat", "", None)
+        engine._record_and_prompt(5, Action.CHAT, "", None)
 
 
 def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
     engine = StudyEngine(cfg, lambda e, d: None, lambda n: {"number": n})
     study.append(cfg, 5, "prediction", by="you", text="Skipped the prediction.", skipped=True)
-    prompt = engine._record_and_prompt(5, "brief", "", None)
+    prompt = engine._record_and_prompt(5, Action.BRIEF, "", None)
     assert "path:line" in prompt and "No quiz question" in prompt
     q = study.append(cfg, 5, "question", by="model", question="Why?")
     study.append(cfg, 5, "answer", by="you", qid=q["qid"], text="Because.")
