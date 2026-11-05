@@ -25,6 +25,35 @@ def test_ps_quote_and_handler_command(monkeypatch, tmp_path: Path):
     assert system.windowless_python() == python
 
 
+def _pe(subsystem: int) -> bytes:
+    """The least of a Windows executable: a DOS header pointing at a PE header whose Subsystem is ``subsystem``."""
+    dos = bytearray(64)
+    dos[0x3C:0x40] = (64).to_bytes(4, "little")
+    optional = bytearray(70)
+    optional[68:70] = subsystem.to_bytes(2, "little")
+    return bytes(dos) + b"PE\0\0" + bytes(20) + bytes(optional)
+
+
+def test_a_console_pythonw_is_reported(monkeypatch, tmp_path: Path):
+    pythonw = tmp_path / "pythonw.exe"
+    monkeypatch.setattr(system.sys, "platform", "win32")
+    monkeypatch.setattr(system, "windowless_python", lambda: pythonw)
+
+    pythonw.write_bytes(_pe(2))  # GUI: what pythonw.exe should be
+    assert not system.opens_a_console(pythonw)
+    assert system.console_note() == ""
+
+    pythonw.write_bytes(_pe(3))  # console: what uv before 0.13 wrote
+    assert system.opens_a_console(pythonw)
+    assert "console program" in system.console_note()
+
+    pythonw.write_bytes(b"MZ")  # not a PE file at all: no claim
+    assert not system.opens_a_console(pythonw)
+    assert not system.opens_a_console(tmp_path / "missing.exe")
+    monkeypatch.setattr(system.sys, "platform", "linux")
+    assert system.console_note() == ""
+
+
 def test_non_windows_branches(monkeypatch):
     monkeypatch.setattr(system.sys, "platform", "linux")
     assert system.registered_protocol_command() is None

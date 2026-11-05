@@ -766,6 +766,13 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
             check(p.state, p.label, p.detail, p.fix)
     if sum(p.state is False for p in machine) >= 2:
         _say("    `readthrough install` sets these up in one go.")
+    if note := system.console_note():
+        check(
+            False,
+            "launcher",
+            note,
+            "recreate the environment: remove .venv and `uv sync`, or `uv tool install --reinstall readthrough`",
+        )
     assistant = assistants.resolve(
         settings.assistant, runtime=settings.runtime, runtime_options=settings.runtime_options
     )
