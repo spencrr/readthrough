@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -8,6 +9,7 @@ from readthrough import study
 from readthrough.analyze import author_kind
 from readthrough.assistants import study_session_id
 from readthrough.config import Config
+from readthrough.contract import PullRequestItem
 from readthrough.engine import StudyEngine, public_entries
 from readthrough.profile import DEFAULT_KINDS, Authors
 from readthrough.study import Action
@@ -163,7 +165,7 @@ def test_torn_line_is_skipped(cfg):
 
 def test_engine_records_learner_input_before_prompting(cfg):
     events = []
-    engine = StudyEngine(cfg, lambda e, d: events.append((e, d)), lambda n: {"number": n})
+    engine = StudyEngine(cfg, lambda e, d: events.append((e, d)), lambda n: cast("PullRequestItem", {"number": n}))
     study.append(cfg, 5, "question", by="model", question="Why?")
     prompt = engine._record_and_prompt(5, Action.ANSWER, "My answer", "Q1")
     assert "Q1" in prompt and "assess_answer" in prompt
@@ -174,7 +176,7 @@ def test_engine_records_learner_input_before_prompting(cfg):
 
 
 def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
-    engine = StudyEngine(cfg, lambda e, d: None, lambda n: {"number": n})
+    engine = StudyEngine(cfg, lambda e, d: None, lambda n: cast("PullRequestItem", {"number": n}))
     study.append(cfg, 5, "prediction", by="you", text="Skipped the prediction.", skipped=True)
     prompt = engine._record_and_prompt(5, Action.BRIEF, "", None)
     assert "path:line" in prompt and "No quiz question" in prompt

@@ -12,6 +12,7 @@ from collections.abc import Set as AbstractSet
 from enum import StrEnum
 from typing import Any
 
+from readthrough.contract import CiChecks, FailingCheck
 from readthrough.model import Check
 
 FAILED = {"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "ERROR"}
@@ -76,7 +77,7 @@ def failing_names(checks: list[Check]) -> set[str]:
     return {c["name"] for c in latest_checks(checks).values() if c["outcome"] in FAILED}
 
 
-def unknown(reason: str) -> dict[str, Any]:
+def unknown(reason: str) -> CiChecks:
     """The summary for a PR whose checks the forge couldn't supply."""
     return {
         "state": State.UNKNOWN, "reason": reason, "failing": [], "pending": 0, "cancelled": 0, "passed": 0, "total": 0,
@@ -84,9 +85,7 @@ def unknown(reason: str) -> dict[str, Any]:
     }  # fmt: skip
 
 
-def classify(
-    contexts: list[Check], *, required: AbstractSet[str] | None, main_failing: AbstractSet[str]
-) -> dict[str, Any]:
+def classify(contexts: list[Check], *, required: AbstractSet[str] | None, main_failing: AbstractSet[str]) -> CiChecks:
     """Summarize one PR's checks into a state plus the details the dashboard shows."""
     checks = latest_checks(contexts)
     required = required or set()
@@ -95,14 +94,11 @@ def classify(
     cancelled = [c for c in checks.values() if c["outcome"] == "CANCELLED"]
     missing = sorted(required - set(checks))
 
-    failed_rows = sorted(
+    failed_rows: list[FailingCheck] = sorted(
         (
-            {
-                "name": c["name"],
-                "url": c["url"],
-                "required": c["name"] in required,
-                "on_main": c["name"] in main_failing,
-            }
+            FailingCheck(
+                name=c["name"], url=c["url"], required=c["name"] in required, on_main=c["name"] in main_failing
+            )
             for c in failing
         ),
         key=lambda r: (not r["required"], r["on_main"], r["name"]),

@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from readthrough import ci
+from readthrough.contract import FileRow, PullRequestItem
 from readthrough.profile import Profile
 from readthrough.rules import Contract, Instruction
 
 
-def reading_order(files: list[dict[str, Any]], profile: Profile) -> list[dict[str, Any]]:
+def reading_order(files: list[FileRow], profile: Profile) -> list[FileRow]:
     return sorted(files, key=lambda f: (profile.read_order.index(f["comp"]), -(f["add"] + f["del"])))
 
 
@@ -18,13 +19,13 @@ def quoted(text: str) -> str:
     return "\n".join(f"> {line}" if line.strip() else ">" for line in text.strip().splitlines()) + "\n"
 
 
-def _author_label(profile: Profile, it: dict[str, Any]) -> str:
+def _author_label(profile: Profile, it: PullRequestItem) -> str:
     kind = profile.authors.kinds.get(it.get("author_kind", ""))
     return kind.label if kind else "unknown"
 
 
 def build_brief(
-    it: dict[str, Any],
+    it: PullRequestItem,
     *,
     profile: Profile,
     contracts: dict[str, Contract],

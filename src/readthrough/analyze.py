@@ -8,16 +8,28 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any
 
 from readthrough import ci
+from readthrough.contract import (
+    CiChecks,
+    FailingCheck,
+    FileRow,
+    Flag,
+    Overlap,
+    PlanSession,
+    PullRequestItem,
+    Smell,
+    Thread,
+)
 from readthrough.model import Capability, Check, Kind, PullRequest
 from readthrough.profile import Authors, Profile
 from readthrough.rules import Instruction
 from readthrough.tuning import PayloadTuning, PlanningTuning, default_tuning
 
-PR = dict[str, Any]
+PR = PullRequestItem
 
 # What a gap in the forge's answer means for the PR, by field. Shown as a signal so nobody reads the
 # resulting default as a fact.
@@ -123,8 +135,8 @@ def strip_brackets(text: str) -> str:
 
 def find_smells(
     added: dict[str, list[tuple[int, str]]], profile: Profile, *, per_file_cap: int = 3, code_chars: int = 160
-) -> list[dict[str, Any]]:
-    hits: list[dict[str, Any]] = []
+) -> list[Smell]:
+    hits: list[Smell] = []
     counts: dict[tuple[str, str], int] = {}
     for path, lines in added.items():
         is_test = profile.is_test(path)
@@ -251,7 +263,7 @@ def analyze(
     planning = planning or default_tuning().planning
     payload = payload or default_tuning().payload
     by_comp: dict[str, int] = {}
-    file_rows = []
+    file_rows: list[FileRow] = []
     counted = pr.line_counts.known  # else every file weighs one line: the forge gave no counts
     for f in pr.files:
         comp = profile.component_of(f.path)
@@ -265,7 +277,7 @@ def analyze(
     primary = max(code_comps or set(by_comp) or {"other"}, key=lambda c: by_comp.get(c, 0))
     paths = [f.path for f in pr.files]
 
-    flags: list[dict[str, str]] = []
+    flags: list[Flag] = []
 
     def flag(fid: str, kind: str, msg: str) -> None:
         flags.append({"id": fid, "kind": kind, "msg": msg})
@@ -377,7 +389,7 @@ def analyze(
 
 def _ci_summary(
     pr: PullRequest, required_checks: dict[str, Capability[set[str]]], main_failing: AbstractSet[str]
-) -> dict[str, Any]:
+) -> CiChecks:
     if not pr.checks.known:
         return ci.unknown(pr.checks.reason)
     checks: list[Check] = pr.checks.get([])
@@ -387,11 +399,11 @@ def _ci_summary(
     return ci.classify(checks, required=required.get(set()) if required else None, main_failing=main_failing)
 
 
-def _check_names(rows: list[dict[str, Any]]) -> str:
+def _check_names(rows: list[FailingCheck]) -> str:
     return ", ".join(r["name"] for r in rows[:3]) + (f" and {len(rows) - 3} more" if len(rows) > 3 else "")
 
 
-def _ci_flags(ci_info: dict[str, Any], flag: Any) -> None:
+def _ci_flags(ci_info: CiChecks, flag: Any) -> None:
     state, failing = ci_info["state"], ci_info["failing"]
     names = _check_names
     own = [r for r in failing if not r["on_main"]]
@@ -413,7 +425,7 @@ def _ci_flags(ci_info: dict[str, Any], flag: Any) -> None:
         )
 
 
-def _unresolved_threads(pr: PullRequest, payload: PayloadTuning) -> list[dict[str, Any]]:
+def _unresolved_threads(pr: PullRequest, payload: PayloadTuning) -> list[Thread]:
     return [
         {
             "path": t.path,
@@ -428,7 +440,7 @@ def _unresolved_threads(pr: PullRequest, payload: PayloadTuning) -> list[dict[st
     ]
 
 
-def _lane(pr: PullRequest, *, decision: str, viewer: str, flags: list[dict[str, str]], pushed_since_cr: bool) -> str:
+def _lane(pr: PullRequest, *, decision: str, viewer: str, flags: list[Flag], pushed_since_cr: bool) -> str:
     if pr.author.login == viewer:
         return "mine"
     if pr.draft:
@@ -443,8 +455,8 @@ def _lane(pr: PullRequest, *, decision: str, viewer: str, flags: list[dict[str, 
 
 
 def _priority(
-    lane: str, *, age: float, minutes: int, ci_state: ci.State, requested: bool, pushed_since_cr: bool,
-    closes_issue: bool, planning: PlanningTuning,
+    lane: str, *, age: float, minutes: int, ci_state: str, requested: bool, pushed_since_cr: bool, closes_issue: bool,
+    planning: PlanningTuning,
 ) -> float:  # fmt: skip
     t = planning
     if lane == "approved":
@@ -467,7 +479,7 @@ def _priority(
     return round(score, 1)
 
 
-def compute_overlaps(items: list[PR], profile: Profile) -> list[dict[str, Any]]:
+def compute_overlaps(items: list[PR], profile: Profile) -> list[Overlap]:
     by_file: dict[str, list[int]] = {}
     for it in items:
         for f in it["files"]:
@@ -481,7 +493,7 @@ def compute_overlaps(items: list[PR], profile: Profile) -> list[dict[str, Any]]:
     return [{"a": a, "b": b, "files": files} for (a, b), files in sorted(pairs.items())]
 
 
-def plan_sessions(items: list[PR], profile: Profile, *, budget: int = 60) -> list[dict[str, Any]]:
+def plan_sessions(items: list[PR], profile: Profile, *, budget: int = 60) -> list[PlanSession]:
     """Pack ready PRs into ~budget-minute sessions, one component per session to limit context switching."""
     groups: dict[str, list[PR]] = {}
     for it in items:
@@ -512,7 +524,9 @@ def plan_sessions(items: list[PR], profile: Profile, *, budget: int = 60) -> lis
     ]
 
 
-def whats_new(previous: dict[str, Any] | None, items: list[PR], ledger: dict[str, Any], viewer: str) -> dict[str, Any]:
+def whats_new(
+    previous: dict[str, Any] | None, items: Sequence[Mapping[str, Any]], ledger: dict[str, Any], viewer: str
+) -> dict[str, Any]:
     """Summarize what changed since the previous build. Drives the dashboard banner and ``--open auto``."""
     if not previous:
         return {"since": None, "opened": [], "closed": [], "needs_you": [], "changed_after_review": []}

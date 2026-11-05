@@ -16,6 +16,7 @@ from typing import Any
 
 from readthrough import assistants, process, runtimes, study
 from readthrough.config import Config
+from readthrough.contract import PullRequestItem
 from readthrough.study import Action, EntryKind, Writer
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class StudyEngine:
         self,
         cfg: Config,
         broadcast: Broadcast,
-        pr_info: Callable[[int], dict[str, Any] | None],
+        pr_info: Callable[[int], PullRequestItem | None],
         components: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.cfg = cfg
