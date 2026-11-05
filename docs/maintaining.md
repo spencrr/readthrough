@@ -115,7 +115,7 @@ Make a value tunable when someone could reasonably want a different one: network
 
 ## The pages
 
-The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`, and `theme.css` holds the color tokens and base styles they share. `build.page_source(name)` inlines them, and `render_html` and `render_setup` fill in the nonce, the vendored scripts, and the data, so what's served is still one self-contained file that works offline as a snapshot.
+The UI lives in `assets/web/`. Each page has its own `.html`, `.css`, and `.js`, and `theme.css` holds the color tokens and base styles they share. `pages.page_source(name)` inlines them, and `render_html` and `render_setup` fill in the nonce, the vendored scripts, and the data, so what's served is still one self-contained file that works offline as a snapshot.
 
 - Every script carries a per-render nonce, and the content security policy runs nothing else. Don't add inline event handlers (`onclick=`); use the delegated listeners.
 - PR descriptions and comments are third-party HTML. They go through DOMPurify, and `test_browser.py` checks that an `onerror` attribute doesn't survive.
