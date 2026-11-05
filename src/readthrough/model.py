@@ -28,7 +28,7 @@ REPO_PATH_RE = re.compile(rf"{PATH_SEGMENT}(?:/{PATH_SEGMENT})+")
 PR_NUMBER = r"\d{1,9}"
 
 
-class Kind(StrEnum):
+class Availability(StrEnum):
     """Why a ``Capability`` has, or hasn't, a value."""
 
     KNOWN = "known"
@@ -40,29 +40,29 @@ class Kind(StrEnum):
 class Capability(Generic[T]):
     """A value the forge may or may not have been able to provide."""
 
-    kind: Kind
+    kind: Availability
     value: T | None = None
     reason: str = ""
 
     @property
     def known(self) -> bool:
-        return self.kind == Kind.KNOWN
+        return self.kind == Availability.KNOWN
 
     def get(self, default: T) -> T:
         """The value when known, otherwise ``default``. Callers must have reported the gap first."""
-        return self.value if self.kind == Kind.KNOWN and self.value is not None else default
+        return self.value if self.kind == Availability.KNOWN and self.value is not None else default
 
 
 def known(value: T) -> Capability[T]:
-    return Capability(Kind.KNOWN, value)
+    return Capability(Availability.KNOWN, value)
 
 
 def unsupported(reason: str) -> Capability[T]:
-    return Capability(Kind.UNSUPPORTED, reason=reason)
+    return Capability(Availability.UNSUPPORTED, reason=reason)
 
 
 def unavailable(reason: str) -> Capability[T]:
-    return Capability(Kind.UNAVAILABLE, reason=reason)
+    return Capability(Availability.UNAVAILABLE, reason=reason)
 
 
 @dataclass(frozen=True)

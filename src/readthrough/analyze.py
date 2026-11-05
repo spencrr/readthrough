@@ -24,7 +24,7 @@ from readthrough.contract import (
     Smell,
     Thread,
 )
-from readthrough.model import Capability, Check, Kind, PullRequest
+from readthrough.model import Availability, Capability, Check, PullRequest
 from readthrough.profile import Authors, Profile
 from readthrough.rules import Instruction
 from readthrough.tuning import PayloadTuning, PlanningTuning, default_tuning
@@ -285,7 +285,7 @@ def analyze(
     for name, cap in pr.gaps():
         how = (
             "not something this forge can tell us"
-            if cap.kind == Kind.UNSUPPORTED
+            if cap.kind == Availability.UNSUPPORTED
             else f"couldn't be read: {cap.reason}"
         )
         flag("gap", "info", f"{GAP_MESSAGES[name]}: {how}")

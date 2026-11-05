@@ -234,7 +234,7 @@ def test_send_times_out(cfg, facts):
     class Hanging(FakeSession):
         async def send(self, prompt):
             await asyncio.sleep(10)
-            yield runtimes.Done()
+            yield runtimes.Done("")
 
     with pytest.raises(TimeoutError):
         asyncio.run(drafter._send(Hanging([]), "prompt"))

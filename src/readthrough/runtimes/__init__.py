@@ -74,7 +74,7 @@ class Used:
 class Done:
     """The turn ended; ``text`` is the whole reply."""
 
-    text: str = ""
+    text: str
 
 
 @dataclass(frozen=True)
