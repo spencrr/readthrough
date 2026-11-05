@@ -17,7 +17,7 @@ LAYERS = (
     # what everything else may use, and which uses nothing of ours
     frozenset({"contract", "faults", "files", "limits", "model", "registry", "rules", "tuning"}),
     # the machine: processes, logs, the config file, the ledger, CI classification, terminal launchers
-    frozenset({"ci", "config", "ledger", "logs", "process", "terminals"}),
+    frozenset({"ci", "config", "ledger", "logs", "pages", "process", "terminals"}),
     # the plugins and the records they fill: forges, runtimes, agents, profiles, the study log, usage
     frozenset({"agents", "forges", "membership", "profile", "runtimes", "study", "usage"}),
     # reading a PR: analysis, the brief, onboarding, review sessions

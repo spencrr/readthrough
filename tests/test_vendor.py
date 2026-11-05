@@ -8,7 +8,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from readthrough.build import VENDOR_SCRIPTS
+from readthrough.pages import VENDOR_SCRIPTS
 
 VENDOR = Path(__file__).resolve().parents[1] / "src" / "readthrough" / "assets" / "vendor"
 ROW = re.compile(r"^\| `(?P<file>[^`]+)` \| .+ \| `(?P<sha>[0-9a-f]{64})` \|$", re.MULTILINE)
