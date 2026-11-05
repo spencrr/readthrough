@@ -240,12 +240,12 @@ class FakeSession:
         for item in self.script:
             if isinstance(item, tuple):
                 _, name, args = item
-                yield runtimes.Event("tool", name=name)
+                yield runtimes.ToolCall(name)
                 await self.tools[name].handler(args)
                 continue
-            if item.kind == "text":
+            if isinstance(item, runtimes.Text):
                 text.append(item.text)
-            yield runtimes.Event("done", text="".join(text)) if item.kind == "done" and not item.text else item
+            yield runtimes.Done("".join(text)) if isinstance(item, runtimes.Done) and not item.text else item
 
     async def close(self) -> None:
         self.closed = True
@@ -257,7 +257,7 @@ class FakeRuntime:
     def __init__(self, options: Any = None):
         self.sessions: dict[str, FakeSession] = {}
         self.opened: list[runtimes.Conversation] = []
-        self.script: list[Any] = [runtimes.Event("done")]
+        self.script: list[Any] = [runtimes.Done()]
         self.stopped = False
 
     def describe(self) -> str:
@@ -307,7 +307,7 @@ def test_system_message_adds_guidance_only_when_present():
 
 def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runtime, monkeypatch):
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
-    fake_runtime.script = [runtimes.Event("text", text="  A reply  "), runtimes.Event("done")]
+    fake_runtime.script = [runtimes.Text("  A reply  "), runtimes.Done()]
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "original prompt", None, "original prompt")))
     session = fake_runtime.sessions[next(iter(fake_runtime.sessions))]
@@ -327,9 +327,9 @@ def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runti
 def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, monkeypatch):
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     fake_runtime.script = [
-        runtimes.Event("text", text="Lead-in"),
+        runtimes.Text("Lead-in"),
         ("call", "ask_quiz_question", {"question": "Why?", "focus": "intent", "expected_points": ["x"]}),
-        runtimes.Event("done"),
+        runtimes.Done(),
     ]
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.QUIZ, "", None, "Ask me the next quiz question.")))
@@ -341,7 +341,7 @@ def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, m
 
 def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkeypatch):
     monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
-    fake_runtime.script = [runtimes.Event("error", text="boom")]
+    fake_runtime.script = [runtimes.Failed("boom")]
     assistant = ModelAssistant(harness, None)
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
@@ -349,7 +349,7 @@ def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkey
     class Hanging(FakeSession):
         async def send(self, prompt: str):
             await asyncio.sleep(10)
-            yield runtimes.Event("done")
+            yield runtimes.Done()
 
     harness.cfg.tuning = replace(harness.cfg.tuning, study=replace(harness.cfg.tuning.study, turn_timeout_seconds=0.05))
     hanging = Hanging([])
@@ -367,8 +367,8 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     harness.cfg.data_path.write_text('{"viewer": "spencrr"}', encoding="utf-8")
     copilot_call = _usage(call_id="call-1", model="gpt-5", input_tokens=1200, output_tokens=300, cache_read_tokens=800,
                           multiplier=1.0, nano_aiu=1.5e9, billed_to="copilot")  # fmt: skip
-    fake_runtime.script = [runtimes.Event("usage", usage=copilot_call), runtimes.Event("usage", usage=copilot_call),
-                           runtimes.Event("text", text="ok"), runtimes.Event("done")]  # fmt: skip
+    fake_runtime.script = [runtimes.Used(copilot_call), runtimes.Used(copilot_call),
+                           runtimes.Text("ok"), runtimes.Done()]  # fmt: skip
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
     entries = usage.load(harness.cfg)
@@ -380,8 +380,8 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     assert line["multiplier"] == 1.0 and line["nano_aiu"] == 1.5e9 and "usd" not in line
     assert sum(1 for e, d in harness.events if isinstance(d, dict) and d.get("type") == "usage") == 1
 
-    fake_runtime.script = [runtimes.Event("usage", usage=_usage(call_id="call-2", input_tokens=10, output_tokens=5)),
-                           runtimes.Event("done")]  # fmt: skip
+    fake_runtime.script = [runtimes.Used(_usage(call_id="call-2", input_tokens=10, output_tokens=5)),
+                           runtimes.Done()]  # fmt: skip
     fake_runtime.sessions.clear()
     asyncio.run(ModelAssistant(harness, None).turn(Turn(8, Action.CHAT, "x", None, "x")))
     line = usage.load(harness.cfg)[1]
@@ -404,10 +404,10 @@ def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkey
     study.append(harness.cfg, 7, "question", by="model", question="Why?")
     study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
     fake_runtime.script = [
-        runtimes.Event("usage", usage=_usage(model="gpt-4.1")),
+        runtimes.Used(_usage(model="gpt-4.1")),
         ("call", "assess_answer", {"qid": "Q1", "verdict": "correct", "feedback": "Yes."}),
-        runtimes.Event("text", text="Right."),
-        runtimes.Event("done"),
+        runtimes.Text("Right."),
+        runtimes.Done(),
     ]
     asyncio.run(ModelAssistant(harness, None).turn(Turn(7, Action.ANSWER, "Because.", "Q1", "My answer")))
     entries = study.load(harness.cfg, 7)

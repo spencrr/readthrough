@@ -46,21 +46,45 @@ class ToolSpec:
     terminal: bool = False
 
 
+# What a runtime reports while a prompt runs: one of these five, which a consumer tells apart with ``match``.
+
+
 @dataclass(frozen=True)
-class Event:
-    """What a runtime reports while a prompt runs. ``kind`` is one of:
+class Text:
+    """A delta of the reply."""
 
-    ``text``: ``text`` holds a delta of the reply.
-    ``tool``: ``name`` holds a tool the model is calling (reported before the handler runs).
-    ``usage``: ``usage`` holds one model call's accounting (see ``Usage``).
-    ``done``: the turn ended; ``text`` holds the whole reply.
-    ``error``: ``text`` holds why the turn failed.
-    """
+    text: str
 
-    kind: str
+
+@dataclass(frozen=True)
+class ToolCall:
+    """A tool the model is calling, reported before the handler runs."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class Used:
+    """One model call's accounting (see ``Usage``)."""
+
+    usage: Usage
+
+
+@dataclass(frozen=True)
+class Done:
+    """The turn ended; ``text`` is the whole reply."""
+
     text: str = ""
-    name: str = ""
-    usage: Usage | None = None
+
+
+@dataclass(frozen=True)
+class Failed:
+    """The turn failed, and this is why."""
+
+    reason: str
+
+
+Event = Text | ToolCall | Used | Done | Failed
 
 
 @dataclass(frozen=True)

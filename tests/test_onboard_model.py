@@ -74,7 +74,7 @@ class FakeSession:
         for item in self.script:
             if isinstance(item, tuple):
                 _, name, args = item
-                yield runtimes.Event("tool", name=name)
+                yield runtimes.ToolCall(name)
                 await self.tools[name].handler(args)
             else:
                 yield item
@@ -87,7 +87,7 @@ class FakeRuntime:
     name = "fake"
 
     def __init__(self, script=None):
-        self.script = script or [runtimes.Event("done", text="")]
+        self.script = script or [runtimes.Done("")]
         self.opened = []
         self.session = None
         self.stopped = False
@@ -165,7 +165,7 @@ def test_model_draft_raises_when_session_never_proposes(monkeypatch: pytest.Monk
 
 
 def test_run_opens_a_fresh_locked_down_conversation_and_closes_it(cfg, facts, monkeypatch: pytest.MonkeyPatch):
-    runtime = FakeRuntime([runtimes.Event("done", text="summary")])
+    runtime = FakeRuntime([runtimes.Done("summary")])
     _use(monkeypatch, runtime)
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     monkeypatch.setattr(drafter, "_first_prompt", lambda: "first prompt")
@@ -204,10 +204,10 @@ def test_send_records_progress_summary_and_usage(cfg, facts):
         billed_to="anthropic:api.anthropic.com",
     )
     session = FakeSession([
-        runtimes.Event("tool", name="read_file"),
-        runtimes.Event("tool", name="propose_profile"),
-        runtimes.Event("usage", usage=used),
-        runtimes.Event("done", text="Final notes"),
+        runtimes.ToolCall("read_file"),
+        runtimes.ToolCall("propose_profile"),
+        runtimes.Used(used),
+        runtimes.Done("Final notes"),
     ])  # fmt: skip
 
     result = asyncio.run(drafter._send(session, "prompt"))
@@ -221,10 +221,10 @@ def test_send_records_progress_summary_and_usage(cfg, facts):
 def test_send_raises_errors_only_when_no_best_proposal_exists(cfg, facts):
     drafter = _Drafter(cfg, forge=None, facts=facts, on_progress=lambda _m: None)
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(drafter._send(FakeSession([runtimes.Event("error", text="boom")]), "prompt"))
+        asyncio.run(drafter._send(FakeSession([runtimes.Failed("boom")]), "prompt"))
 
     drafter.best = (["remaining"], 0.5, "text")
-    assert asyncio.run(drafter._send(FakeSession([runtimes.Event("error", text="ignored")]), "prompt")) == ""
+    assert asyncio.run(drafter._send(FakeSession([runtimes.Failed("ignored")]), "prompt")) == ""
 
 
 def test_send_times_out(cfg, facts):
@@ -234,7 +234,7 @@ def test_send_times_out(cfg, facts):
     class Hanging(FakeSession):
         async def send(self, prompt):
             await asyncio.sleep(10)
-            yield runtimes.Event("done")
+            yield runtimes.Done()
 
     with pytest.raises(TimeoutError):
         asyncio.run(drafter._send(Hanging([]), "prompt"))

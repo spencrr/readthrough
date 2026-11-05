@@ -22,7 +22,7 @@ import pytest
 
 from readthrough import runtimes
 from readthrough.registry import RegistryError
-from readthrough.runtimes import Conversation, Event, ToolSpec
+from readthrough.runtimes import Conversation, Done, Failed, Text, ToolCall, ToolSpec, Used
 from readthrough.runtimes.anthropic import AnthropicOptions, AnthropicRuntime
 from readthrough.runtimes.copilot import CopilotOptions, CopilotRuntime
 from readthrough.runtimes.openai import OpenAIOptions, OpenAIRuntime
@@ -51,7 +51,7 @@ def _conversation(tools: list[ToolSpec], **kw: Any) -> Conversation:
     return Conversation(key="repo#7#study", system="Be Socratic.", tools=tools, working_directory="wt", **kw)
 
 
-async def _collect(session: Any, prompt: str) -> list[Event]:
+async def _collect(session: Any, prompt: str) -> list[runtimes.Event]:
     return [event async for event in session.send(prompt)]
 
 
@@ -263,17 +263,16 @@ def test_anthropic_runs_the_tool_loop_and_reports_usage_in_its_own_units(monkeyp
     events = asyncio.run(_collect(session, "Quiz me."))
 
     assert not session.fresh
-    kinds = [(e.kind, e.text or e.name) for e in events if e.kind != "usage"]
-    assert kinds == [
-        ("text", "Let me look."),
-        ("tool", "read_file"),
-        ("text", "Here is a question."),
-        ("tool", "ask_quiz_question"),
-        ("done", "Let me look.\n\nHere is a question."),
+    assert [e for e in events if not isinstance(e, Used)] == [
+        Text("Let me look."),
+        ToolCall("read_file"),
+        Text("Here is a question."),
+        ToolCall("ask_quiz_question"),
+        Done("Let me look.\n\nHere is a question."),
     ]
     assert calls == [("read_file", {"path": "a.py"}), ("ask_quiz_question", {"question": "Why?"})]
-    used = [e.usage for e in events if e.kind == "usage"]
-    assert len(used) == 2 and used[0] is not None and used[1] is not None
+    used = [e.usage for e in events if isinstance(e, Used)]
+    assert len(used) == 2
     assert (used[0].call_id, used[0].model, used[0].input_tokens, used[0].output_tokens, used[0].cache_read_tokens) == (
         "req_1",
         "claude-sonnet-5-5",
@@ -339,15 +338,15 @@ def test_anthropic_tool_failures_go_back_to_the_model_and_refusals_end_the_turn(
         results[0]["content"] == "Tool failed: outside the PR checkout"
         and results[1]["content"] == "Unknown tool 'nope'."
     )
-    assert events[-1] == Event("done", text="Fine.")
+    assert events[-1] == Done("Fine.")
 
     # A rate limit and an overload are retried, waiting what the provider asked for when it said; a bad key
     # is not: there is no point asking again, and the learner should see why at once.
     events = asyncio.run(_collect(session, "again"))
-    assert events[-1] == Event("done", text="Back.") and len(http.requests) == 5
+    assert events[-1] == Done("Back.") and len(http.requests) == 5
     assert slept[0] == 7.0 and 4.0 <= slept[1] <= 5.0
     events = asyncio.run(_collect(session, "once more"))
-    assert events == [Event("error", text="Anthropic refused the call: rate_limit_error: slow down")]
+    assert events == [Failed("Anthropic refused the call: rate_limit_error: slow down")]
     assert len(http.requests) == 6 and len(slept) == 2
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     assert AnthropicOptions().can_run() == (False, "the anthropic runtime needs an API key in ANTHROPIC_API_KEY")
@@ -373,12 +372,12 @@ def test_anthropic_call_cap_and_mid_stream_errors(monkeypatch: pytest.MonkeyPatc
     runtime = AnthropicRuntime(AnthropicOptions(max_calls_per_turn=2))
     session = asyncio.run(runtime.open(_conversation(_tools([]))))
     events = asyncio.run(_collect(session, "go"))
-    assert events[-1] == Event("error", text="the model made more than 2 calls in one turn")
+    assert events[-1] == Failed("the model made more than 2 calls in one turn")
     assert len(http.requests) == 2
     fresh = asyncio.run(AnthropicRuntime(AnthropicOptions()).open(_conversation(_tools([]), resume=False)))
     http.answers = [http.answers[-1]]
     events = asyncio.run(_collect(fresh, "go"))
-    assert events == [Event("error", text="Anthropic reported an error mid-stream: Overloaded")]
+    assert events == [Failed("Anthropic reported an error mid-stream: Overloaded")]
 
 
 # ---------------------------------------------------------------- openai
@@ -446,17 +445,16 @@ def test_openai_runs_the_tool_loop_through_previous_response_id(monkeypatch: pyt
 
     events = asyncio.run(_collect(session, "Quiz me."))
 
-    kinds = [(e.kind, e.text or e.name) for e in events if e.kind != "usage"]
-    assert kinds == [
-        ("text", "Looking."),
-        ("tool", "read_file"),
-        ("text", "Question time."),
-        ("tool", "ask_quiz_question"),
-        ("done", "Looking.\n\nQuestion time."),
+    assert [e for e in events if not isinstance(e, Used)] == [
+        Text("Looking."),
+        ToolCall("read_file"),
+        Text("Question time."),
+        ToolCall("ask_quiz_question"),
+        Done("Looking.\n\nQuestion time."),
     ]
     assert calls == [("read_file", {"path": "a.py"}), ("ask_quiz_question", {"question": "Why?"})]
-    used = [e.usage for e in events if e.kind == "usage"]
-    assert used[0] is not None and (
+    used = [e.usage for e in events if isinstance(e, Used)]
+    assert (
         used[0].call_id,
         used[0].model,
         used[0].cache_read_tokens,
@@ -505,7 +503,7 @@ def test_openai_on_azure_uses_the_deployment_and_entra_or_key(monkeypatch: pytes
     asyncio.run(_collect(session, "hi"))
     assert http.requests[1][1]["api-key"] == "k-secret" and "authorization" not in http.requests[1][1]
     events = asyncio.run(_collect(session, "again"))
-    assert events[0].kind == "error" and "refused the call" in events[0].text
+    assert isinstance(events[0], Failed) and "refused the call" in events[0].reason
     assert len(http.requests) == 3, "a 404 is not retried"
     with pytest.raises(ValueError, match="Azure endpoints only"):
         OpenAIOptions(entra=True)
@@ -627,15 +625,15 @@ def test_copilot_runtime_translates_tools_sessions_and_usage(monkeypatch: pytest
 
     events = asyncio.run(_collect(session, "hi"))
     assert sdk_session.sent == ["hi"] and sdk_session.callback is None, "unsubscribed afterwards"
-    assert [(e.kind, e.text or e.name) for e in events if e.kind != "usage"] == [
-        ("text", "Hello"),
-        ("tool", "read_file"),
-        ("text", "\n\n"),
-        ("text", "more"),
-        ("done", "Hello\n\nmore"),
+    assert [e for e in events if not isinstance(e, Used)] == [
+        Text("Hello"),
+        ToolCall("read_file"),
+        Text("\n\n"),
+        Text("more"),
+        Done("Hello\n\nmore"),
     ]
-    used = next(e.usage for e in events if e.kind == "usage")
-    assert used is not None and (used.call_id, used.model, used.multiplier, used.nano_aiu, used.billed_to) == (
+    used = next(e.usage for e in events if isinstance(e, Used))
+    assert (used.call_id, used.model, used.multiplier, used.nano_aiu, used.billed_to) == (
         "chatcmpl-1",
         "gpt-5",
         1.0,
@@ -667,7 +665,7 @@ def test_copilot_runtime_with_a_provider_of_your_own(monkeypatch: pytest.MonkeyP
     assert client.construction == {"use_logged_in_user": False}, "never the CLI's GitHub sign-in"
     assert client.resumed and not client.created and not session.fresh, "an existing conversation is resumed"
     events = asyncio.run(_collect(session, "hi"))
-    assert events == [Event("error", text="boom")]
+    assert events == [Failed("boom")]
 
     byok_usage = _sdk_event("assistant.usage", api_call_id="c", model="claude-sonnet-5-5", input_tokens=1, output_tokens=1, cache_read_tokens=None,
                             cache_write_tokens=None, reasoning_tokens=None, cost=0.0, is_byok=True, copilot_usage=None)  # fmt: skip

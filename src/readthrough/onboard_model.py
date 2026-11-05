@@ -139,14 +139,15 @@ class _Drafter:
         async def consume() -> None:
             nonlocal final, error
             async for event in session.send(prompt):
-                if event.kind == "usage" and event.usage is not None:
-                    self._record_usage(event.usage)
-                elif event.kind == "tool" and event.name != "propose_profile":
-                    self.say(f"model: {event.name.replace('_', ' ')}")
-                elif event.kind == "error":
-                    error = event.text
-                elif event.kind == "done":
-                    final = event.text
+                match event:
+                    case runtimes.Used(usage):
+                        self._record_usage(usage)
+                    case runtimes.ToolCall(name) if name != "propose_profile":
+                        self.say(f"model: {name.replace('_', ' ')}")
+                    case runtimes.Failed(reason):
+                        error = reason
+                    case runtimes.Done(text):
+                        final = text
 
         await asyncio.wait_for(consume(), timeout=self.cfg.tuning.study.onboarding_turn_timeout_seconds)
         if error and self.best is None:
