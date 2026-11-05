@@ -186,6 +186,17 @@ def test_rules_runs_out_of_questions_gracefully(harness):
     assert "every question" in entries[-1]["text"]
 
 
+def test_a_pr_that_vanished_before_the_turn_fails_it_rather_than_answering(harness):
+    """A refresh can drop the PR between the engine's check and the assistant's read. The turn must then fail
+    (the engine records that), not say "that's every question" or brief an empty item."""
+    rules = RulesAssistant(harness, None)
+    del harness.items[7]
+    for action in (Action.QUIZ, Action.BRIEF):
+        with pytest.raises(RuntimeError, match="isn't an open PR"):
+            asyncio.run(rules.turn(Turn(7, action, "", None, "")))
+    assert study.load(harness.cfg, 7) == []
+
+
 def test_rules_hint_brief_teachback_and_chat(harness):
     rules = RulesAssistant(harness, None)
     asyncio.run(rules.turn(Turn(7, Action.HINT, "", "Q9", "")))
@@ -355,6 +366,7 @@ def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkey
     harness.cfg.tuning = replace(harness.cfg.tuning, study=replace(harness.cfg.tuning.study, turn_timeout_seconds=0.05))
     hanging = Hanging([])
     fake_runtime.sessions.clear()
+    harness.items[8] = {**harness.items[7], "number": 8}
     assistant._sessions[8] = hanging
     with pytest.raises(TimeoutError):
         asyncio.run(assistant.turn(Turn(8, Action.CHAT, "x", None, "x")))
@@ -384,6 +396,7 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     fake_runtime.script = [runtimes.Used(_usage(call_id="call-2", input_tokens=10, output_tokens=5)),
                            runtimes.Done()]  # fmt: skip
     fake_runtime.sessions.clear()
+    harness.items[8] = {**harness.items[7], "number": 8}
     asyncio.run(ModelAssistant(harness, None).turn(Turn(8, Action.CHAT, "x", None, "x")))
     line = usage.load(harness.cfg)[1]
     assert line["billed_to"] == "anthropic:api.anthropic.com" and "nano_aiu" not in line and "multiplier" not in line

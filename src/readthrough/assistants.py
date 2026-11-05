@@ -55,6 +55,16 @@ class Harness(Protocol):
     def components(self) -> list[dict[str, Any]]: ...
 
 
+def pr_item(h: Harness, number: int) -> PullRequestItem:
+    """The PR an assistant is working on. The engine checked it was open when the turn was submitted, but a
+    refresh can drop it before the assistant reads it; that ends the turn as a failure the log records, never
+    as an answer about a PR that isn't there."""
+    item = h.pr_info(number)
+    if item is None:
+        raise RuntimeError(f"#{number} isn't an open PR in the current data")
+    return item
+
+
 @dataclass(frozen=True)
 class Turn:
     """One request from the learner. The engine has already recorded the learner's side."""
@@ -229,9 +239,7 @@ class RulesAssistant:
     def _bank(self, number: int) -> list[BankQuestion]:
         from readthrough.profile import ProfileError, resolve_profile
 
-        item = self.h.pr_info(number)
-        if item is None:
-            return []
+        item = pr_item(self.h, number)
         try:
             profile = resolve_profile(self.h.cfg)
         except ProfileError:
@@ -295,9 +303,7 @@ class RulesAssistant:
         )
 
     def _brief(self, turn: Turn) -> None:
-        item = self.h.pr_info(turn.number)
-        if item is None:
-            return
+        item = pr_item(self.h, turn.number)
         by_id = {c["id"]: c for c in self.h.components()}
         out = ["**What the author says it changes**", (item.get("body") or "_No description._").strip()[:1500], ""]
         out.append("**Where it lands**")
@@ -516,13 +522,11 @@ class ModelAssistant:
     async def _worktree(self, number: int) -> tuple[Path, str]:
         """The PR's checkout, moved along when the PR gets a new head between turns so the tools read what the
         learner sees. Nothing is cached before the clone exists, so a clone added after a failed turn is used."""
-        info = self.h.pr_info(number) or {}
-        head = str(info.get("head") or "")
+        info = pr_item(self.h, number)
+        head = info["head"]
         cached = self._worktrees.get(number)
         if cached is None or cached[0] != head:
-            path, merge_base, _ = await asyncio.to_thread(
-                review.ensure_worktree, self.cfg, number, base=info.get("base", "main")
-            )
+            path, merge_base, _ = await asyncio.to_thread(review.ensure_worktree, self.cfg, number, base=info["base"])
             self._worktrees[number] = (head, path, merge_base)
         _, path, merge_base = self._worktrees[number]
         return path, merge_base
@@ -536,11 +540,11 @@ class ModelAssistant:
             return ""
 
     def _first_turn_context(self, number: int) -> str:
-        info = self.h.pr_info(number) or {}
+        info = pr_item(self.h, number)
         brief = self.cfg.briefs_dir / f"pr-{number}.md"
         brief_text = brief.read_text(encoding="utf-8") if brief.exists() else "(no brief yet)"
         return (
-            f"We're studying {self.cfg.repo}#{number}: {info.get('title', '')}. The PR is checked out in your "
+            f"We're studying {self.cfg.repo}#{number}: {info['title']}. The PR is checked out in your "
             "working directory. Here is its study brief (architecture contracts, reading order, signals, "
             f"and any earlier study log):\n\n<brief>\n{brief_text[:40_000]}\n</brief>"
         )
