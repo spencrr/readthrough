@@ -40,6 +40,30 @@ def windowless_python() -> Path:
     return exe
 
 
+def opens_a_console(exe: Path) -> bool:
+    """Whether a Windows program is built for the console subsystem, so launching it opens a window.
+
+    A venv's pythonw.exe should be a GUI-subsystem launcher; uv before 0.13 wrote a console one, and a
+    server or link handler started through it shows a console window at every logon and click.
+    """
+    try:
+        with exe.open("rb") as f:
+            header_offset = int.from_bytes(f.read(0x40)[0x3C:0x40], "little")
+            f.seek(header_offset)
+            pe = f.read(24 + 70)  # signature, COFF header, then the optional header up to Subsystem
+    except (OSError, ValueError):
+        return False
+    return pe[:4] == b"PE\0\0" and int.from_bytes(pe[24 + 68 : 24 + 70], "little") == 3  # IMAGE_SUBSYSTEM_WINDOWS_CUI
+
+
+def console_note() -> str:
+    """Why a windowless launch would still show a window, for doctor; ``""`` when it wouldn't."""
+    exe = windowless_python()
+    if sys.platform != "win32" or exe.name != "pythonw.exe" or not opens_a_console(exe):
+        return ""
+    return f"{exe} is a console program (an older uv made this environment): the server and link handler open a window"
+
+
 def handler_command() -> str:
     return f'"{windowless_python()}" -m readthrough handle-url "%1"'
 
