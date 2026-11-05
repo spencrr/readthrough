@@ -206,8 +206,12 @@ def test_warnings_from_the_build_are_shown(page):
 
 def test_live_chip_has_space_and_tabs_keep_their_width(page):
     open_dashboard(page)
-    chip, refresh = page.locator(".live-status").bounding_box(), page.locator("[data-refresh]").bounding_box()
-    assert chip and refresh and refresh["x"] - chip["x"] - chip["width"] >= 8
+    # The header is redrawn as the event stream connects and its first status arrives, so a node located just
+    # before a redraw is gone by the time it is measured; measure both in one evaluation, retried until it holds.
+    page.wait_for_function(
+        "() => { const c = document.querySelector('.live-status'), r = document.querySelector('[data-refresh]');"
+        " return c && r && r.getBoundingClientRect().left - c.getBoundingClientRect().right >= 8; }"
+    )
     width = page.locator("#tabs").bounding_box()["width"]
     for tab in ("plan", "overlap", "table", "map"):
         page.click(f'[data-tab="{tab}"]')
