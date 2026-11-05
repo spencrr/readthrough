@@ -120,6 +120,9 @@ def test_study_adds_entries_and_shows_the_log(isolated, capsys):
     assert "swallows errors" in (repo_dir(isolated) / "briefs" / "pr-1.md").read_text(encoding="utf-8")
     assert dashboard(isolated, "study", "2") == 0
     assert "No study log for #2" in capsys.readouterr().out
+    assert dashboard(isolated, "study", "1", "--note", "x", "--by", "nobody") == 2
+    err = capsys.readouterr().err  # some Python releases quote argparse's choices and some don't
+    assert "you" in err and "model" in err and "Writer" not in err, "the choices read as values, not enum reprs"
 
 
 def test_config_shows_checks_and_explains_settings(isolated, capsys):

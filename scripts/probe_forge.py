@@ -31,7 +31,7 @@ from readthrough.tuning import load_tuning
 
 def _plain(value: Any) -> Any:
     if isinstance(value, Capability):
-        return {"kind": value.kind, "value": _plain(value.value), "reason": value.reason}
+        return {"kind": value.kind.value, "value": _plain(value.value), "reason": value.reason}
     if hasattr(value, "__dataclass_fields__"):
         return {k: _plain(v) for k, v in asdict(value).items()}
     if isinstance(value, dict):
@@ -119,8 +119,8 @@ def main() -> int:
     viewer, prs, total = forge.fetch_prs(args.limit)
     show("fetch_prs", {"viewer": viewer, "total": total, "prs": prs})
     for pr in prs:
-        gaps = [(name, cap.kind, cap.reason) for name, cap in pr.gaps()]
-        print(f"  #{pr.number} {pr.title[:50]!r}: {len(pr.files)} files, checks={pr.checks.kind} gaps={gaps}")
+        gaps = [(name, cap.kind.value, cap.reason) for name, cap in pr.gaps()]
+        print(f"  #{pr.number} {pr.title[:50]!r}: {len(pr.files)} files, checks={pr.checks.kind.value} gaps={gaps}")
     branch, merged = forge.merged_prs(args.limit)
     show("merged_prs", {"branch": branch, "merged": merged})
     tree, complete = forge.tree(branch)
