@@ -157,10 +157,7 @@ def test_the_server_emits_only_declared_events():
     assert names <= contract.EVENTS, sorted(names - contract.EVENTS)
     study_types = set(re.findall(r'"type": "(\w+)"', sources)) - {"object", "string", "integer", "array", "boolean"}
     assert study_types <= contract.STUDY_EVENT_TYPES, sorted(study_types - contract.STUDY_EVENT_TYPES)
-    assert set(study.Action) == contract.STUDY_ASK_ACTIONS
-    assert set(study.EntryKind) > contract.STUDY_ADD_KINDS, (
-        "the page adds some of the entry kinds, never one of its own"
-    )
-    assert "contract.STUDY_ADD_KINDS" in (SRC / "serve.py").read_text(encoding="utf-8"), (
-        "the server checks what the page may add against the contract, not a list of its own"
+    assert set(study.EntryKind) > study.LEARNER_KINDS, "the page adds some of the entry kinds, never one of its own"
+    assert "study.LEARNER_KINDS" in (SRC / "serve.py").read_text(encoding="utf-8"), (
+        "the server checks what the page may add against the one declaration, not a list of its own"
     )

@@ -58,14 +58,14 @@ from readthrough.build import (
     session_changes,
 )
 from readthrough.config import DEFAULT_HOME, Config, load_settings
-from readthrough.contract import PullRequestItem, StudySummary
+from readthrough.contract import Action, PullRequestItem, StudySummary
 from readthrough.engine import Busy, StudyEngine, public_entries
 from readthrough.faults import ForgeError
 from readthrough.files import mtime, stamp, write_atomic
 from readthrough.limits import MAX_DISCARD_BYTES, MAX_REQUEST_BYTES
 from readthrough.model import PR_NUMBER
 from readthrough.pages import render_html, render_setup
-from readthrough.study import Action, EntryKind, Writer
+from readthrough.study import EntryKind, Writer
 from readthrough.web_setup import Conflict, SetupError, SetupService
 
 log = logging.getLogger(__name__)
@@ -386,7 +386,7 @@ class Dashboard:
     def add_study(self, number: int, body: dict[str, Any]) -> dict[str, Any]:
         """Entries the learner writes directly, without asking the assistant anything."""
         kind = body.get("kind")
-        if kind not in contract.STUDY_ADD_KINDS:
+        if kind not in study.LEARNER_KINDS:
             raise ValueError("you can add a prediction, teachback, reflection, note, or finding")
         if self.pr_info(number) is None:
             raise ValueError(f"#{number} isn't an open PR in the current data")

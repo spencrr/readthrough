@@ -34,12 +34,12 @@ from typing import Any, Protocol, assert_never
 
 from readthrough import review, runtimes, study, usage
 from readthrough.config import AUTO, Config
-from readthrough.contract import PullRequestItem, Smell
+from readthrough.contract import Action, PullRequestItem, Smell
 from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
 from readthrough.registry import Registry
-from readthrough.study import Action, EntryKind, Severity, Verdict, Writer
+from readthrough.study import EntryKind, Severity, Verdict, Writer
 
 log = logging.getLogger(__name__)
 

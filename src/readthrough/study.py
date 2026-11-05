@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from readthrough.config import Config
-from readthrough.contract import StudySummary
+from readthrough.contract import Action, StudySummary
 from readthrough.files import locked
 from readthrough.limits import MAX_STUDY_TEXT
 
@@ -64,17 +64,12 @@ class EntryKind(StrEnum):
     FAILURE = "failure"  # a turn that ended in an error, so a request with no reply is never read as one you abandoned
 
 
-class Action(StrEnum):
-    """What the learner asks of the assistant in a turn; a ``chat`` entry records it as ``action``. (An assistant
-    may write its own ``action`` on a chat entry, such as the rules assistant's ``reference``; this is the
-    learner's vocabulary, and what the page may send.)"""
-
-    CHAT = "chat"
-    QUIZ = "quiz"
-    BRIEF = "brief"
-    ANSWER = "answer"
-    TEACHBACK = "teachback"
-    HINT = "hint"
+# What the learner writes directly (``POST /api/study/<n>`` body ``kind``), without asking the assistant anything;
+# the rest are the assistants' and the engine's. ``note`` with ``pinned`` keeps a message in the brief; ``prediction``
+# with ``skipped`` records skipping it.
+LEARNER_KINDS = frozenset({
+    EntryKind.PREDICTION, EntryKind.TEACHBACK, EntryKind.NOTE, EntryKind.REFLECTION, EntryKind.FINDING,
+})  # fmt: skip
 
 
 class Verdict(StrEnum):

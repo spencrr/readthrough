@@ -20,10 +20,9 @@ from readthrough.assistants import (
     system_message,
 )
 from readthrough.config import Config
-from readthrough.contract import PullRequestItem
+from readthrough.contract import Action, PullRequestItem
 from readthrough.registry import RegistryError
 from readthrough.rules import Contract
-from readthrough.study import Action
 
 DIFF = """\
 diff --git a/courier/transports/smtp.py b/courier/transports/smtp.py

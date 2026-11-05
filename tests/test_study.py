@@ -9,10 +9,9 @@ from readthrough import study
 from readthrough.analyze import author_kind
 from readthrough.assistants import study_session_id
 from readthrough.config import Config
-from readthrough.contract import PullRequestItem
+from readthrough.contract import Action, PullRequestItem
 from readthrough.engine import StudyEngine, public_entries
 from readthrough.profile import DEFAULT_KINDS, Authors
-from readthrough.study import Action
 
 
 @pytest.fixture
