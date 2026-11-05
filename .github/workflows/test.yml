@@ -52,7 +52,9 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python }}
       - run: uv sync
-      # The browser tests drive the runner's Edge or Chrome. On CI they fail, rather than skip, without one.
+      # Playwright's own Chromium, so every cell and every developer's machine drive the same engine; the runner's
+      # Edge or Chrome would otherwise do, and the tests fall back to them. On CI the tests fail, not skip, without one.
+      - run: uv run playwright install chromium
       - run: uv run pytest -q --cov --cov-report=term-missing:skip-covered --cov-report=xml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

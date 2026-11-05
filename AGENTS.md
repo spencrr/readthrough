@@ -23,8 +23,8 @@ CI (`ci.yml`) runs the same gate through the reusable `test.yml` on Linux, macOS
 in its matrix, and sums it up in `gate`; `gate`, `zizmor` (the workflow linter), and `commits` (Conventional Commits on the PR title and each commit) are the checks the branch
 ruleset requires, and a change reaches `main` through a pull request the maintainer (the code owner) has approved, up to date with `main` and rebased or squashed so the history stays linear. Work in progress lives on `dev/<your login>/<topic>` branches, the one namespace a collaborator can create on the repository; they take no checks and may be rewritten freely. The local gate is one cell of that matrix: CI adds the other platforms and Pythons, refuses a
 stale `uv.lock` (`UV_LOCKED`), and lints the workflows, so run `uv lock` after changing dependencies and
-`uvx zizmor` after touching `.github/`. The browser tests skip locally when no Chromium-family browser is
-installed; on CI they fail instead, since the hosted runners have one. A release is a `vX.Y.Z` tag on `main`:
+`uvx zizmor` after touching `.github/`. The browser tests run on Playwright's own Chromium (`uv run playwright install chromium`, once), the same
+engine CI uses, else an installed Edge or Chrome; they skip when there is none, and on CI they fail instead. A release is a `vX.Y.Z` tag on `main`:
 `release.yml` runs the gate again and, after the maintainer approves, publishes to PyPI and GitHub
 (`docs/maintaining.md`, "Releasing").
 

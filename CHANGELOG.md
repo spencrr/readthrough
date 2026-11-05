@@ -55,6 +55,9 @@
   from another workflow or branch no longer passes it.
 - The page picks its view with a switch on the tab's name, so a name from the URL never selects a function by
   lookup.
+- The browser tests prefer Playwright's own Chromium, which CI now installs, so a developer's run and every CI
+  cell drive the same engine; an installed Edge or Chrome remains the fallback, and the test report names which
+  one ran.
 
 ## 0.4.0 (2026-10-30)
 
