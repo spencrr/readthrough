@@ -77,9 +77,6 @@ class Action(StrEnum):
     HINT = "hint"
 
 
-AIDS = (Action.HINT, Action.BRIEF)  # what can come before an answer and inform it
-
-
 class Verdict(StrEnum):
     CORRECT = "correct"
     PARTIAL = "partial"
