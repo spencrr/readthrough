@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
@@ -27,33 +28,41 @@ REPO_PATH_RE = re.compile(rf"{PATH_SEGMENT}(?:/{PATH_SEGMENT})+")
 PR_NUMBER = r"\d{1,9}"
 
 
+class Kind(StrEnum):
+    """Why a ``Capability`` has, or hasn't, a value."""
+
+    KNOWN = "known"
+    UNSUPPORTED = "unsupported"  # this forge has no such concept, or no API for it
+    UNAVAILABLE = "unavailable"  # it has one, but the call failed this time
+
+
 @dataclass(frozen=True)
 class Capability(Generic[T]):
     """A value the forge may or may not have been able to provide."""
 
-    kind: str  # known | unsupported | unavailable
+    kind: Kind
     value: T | None = None
     reason: str = ""
 
     @property
     def known(self) -> bool:
-        return self.kind == "known"
+        return self.kind is Kind.KNOWN
 
     def get(self, default: T) -> T:
         """The value when known, otherwise ``default``. Callers must have reported the gap first."""
-        return self.value if self.kind == "known" and self.value is not None else default
+        return self.value if self.kind is Kind.KNOWN and self.value is not None else default
 
 
 def known(value: T) -> Capability[T]:
-    return Capability("known", value)
+    return Capability(Kind.KNOWN, value)
 
 
 def unsupported(reason: str) -> Capability[T]:
-    return Capability("unsupported", reason=reason)
+    return Capability(Kind.UNSUPPORTED, reason=reason)
 
 
 def unavailable(reason: str) -> Capability[T]:
-    return Capability("unavailable", reason=reason)
+    return Capability(Kind.UNAVAILABLE, reason=reason)
 
 
 @dataclass(frozen=True)

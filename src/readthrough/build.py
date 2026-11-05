@@ -21,7 +21,7 @@ from readthrough.files import write_atomic
 from readthrough.forges import Forge
 from readthrough.logs import pool_map
 from readthrough.membership import internal_members
-from readthrough.model import Capability, ChangedFile, PullRequest, known, unavailable
+from readthrough.model import Capability, ChangedFile, Kind, PullRequest, known, unavailable
 from readthrough.profile import Profile, resolve_profile
 from readthrough.rules import Contract, Instruction, contracts_for, parse_instruction
 from readthrough.system import registered_protocol_command
@@ -207,12 +207,12 @@ def count_from_diffs(prs: list[PullRequest], diffs: dict[int, str]) -> int:
 
 def _gap_warnings(warnings: Warnings, prs: list[PullRequest], forge: Forge) -> None:
     """One warning per kind of thing the forge couldn't tell us, so the gap is visible beyond the PR signals."""
-    gaps: dict[tuple[str, str], list[str]] = {}
+    gaps: dict[tuple[str, Kind], list[str]] = {}
     for pr in prs:
         for name, cap in pr.gaps():
             gaps.setdefault((name, cap.kind), []).append(f"#{pr.number}: {cap.reason}")
     for (name, kind), details in sorted(gaps.items()):
-        if kind == "unsupported":
+        if kind is Kind.UNSUPPORTED:
             warnings.add(
                 f"gap-{name}",
                 f"{forge.label} can't tell us the {name.replace('_', ' ')}; related signals and lanes use a neutral default",
