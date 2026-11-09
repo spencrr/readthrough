@@ -30,6 +30,10 @@
 
 ### Fixed
 
+- On Azure DevOps, the `az` access token was asked for once per process and kept for good, so the live server's
+  builds of every Azure DevOps repo failed about an hour after it started ("refuses both the az identity and
+  anonymous access") until it was restarted. The token is now asked for again before the expiry `az` reports,
+  and one the organization refuses early is replaced once before anonymous access is tried.
 - On Azure DevOps, `readthrough worktree` reported the synthetic merge commit as the PR's head, so the review
   skill told you the PR had moved when it hadn't, and what it recorded read as about an earlier commit. It now
   reports the PR's own head, the merge's second parent; the checkout and its diff are unchanged.

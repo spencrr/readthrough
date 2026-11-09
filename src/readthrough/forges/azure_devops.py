@@ -16,9 +16,11 @@ policies supply required build names, and the head commit's statuses are the che
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
@@ -26,6 +28,7 @@ from urllib.parse import quote, unquote
 from readthrough.faults import AuthError, ForgeError, NotFound, TooLarge
 from readthrough.forges import (
     FORGES,
+    TOKEN_LIFETIME_UNKNOWN_SECONDS,
     CiContext,
     Credential,
     FilePair,
@@ -34,6 +37,7 @@ from readthrough.forges import (
     assemble_diff,
     cached_cli_token,
     credential,
+    forget_cli_token,
 )
 from readthrough.logs import pool_map
 from readthrough.model import (
@@ -80,26 +84,48 @@ class AzureDevOpsOptions:
 _az_notes: dict[str, str] = {}
 
 
+def _az_key(tenant: str | None) -> str:
+    return f"az:{tenant or ''}"
+
+
 def _az_token(tenant: str | None) -> str | None:
     """An access token for Azure DevOps from a signed-in ``az``, for the organization's tenant when known.
 
     Asking for the tenant matters: an account signed in to several tenants holds a token for the default
     one, and an organization in another tenant refuses it. ``get-access-token`` never prompts; when it has
-    nothing it says so on stderr, and that note is kept for ``doctor``.
+    nothing it says so on stderr, and that note is kept for ``doctor``. The token expires (an hour or so);
+    ``az`` says when, and the cache asks again before then.
     """
-    cmd = ["az", "account", "get-access-token", "--resource", ADO_RESOURCE, "--query", "accessToken", "-o", "tsv"]
+    cmd = ["az", "account", "get-access-token", "--resource", ADO_RESOURCE, "-o", "json"]
     if tenant:
         cmd += ["--tenant", tenant]
 
-    def ask() -> str | None:
+    def ask() -> tuple[str | None, float | None]:
         out, complaint = quiet_output(cmd, with_failure=True)
-        if out:
+        token, valid_for = parse_az_token(out or "")
+        if token:
             _az_notes.pop(tenant or "", None)
-            return out.strip()
-        _az_notes[tenant or ""] = _az_complaint(complaint)
-        return None
+            return token, valid_for
+        _az_notes[tenant or ""] = _az_complaint(complaint) if complaint else "az printed no token"
+        return None, None
 
-    return cached_cli_token(f"az:{tenant or ''}", ask)
+    return cached_cli_token(_az_key(tenant), ask)
+
+
+def parse_az_token(out: str) -> tuple[str | None, float | None]:
+    """The token and the seconds it stays valid, from ``az account get-access-token -o json``; the seconds are
+    None when ``az`` didn't say (an old release), and the cache then uses its own idea of a token's lifetime."""
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None, None
+    token = data.get("accessToken") if isinstance(data, dict) else None
+    if not isinstance(token, str) or not token:
+        return None, None
+    expires_on = data.get("expires_on")  # epoch seconds, alongside the local-time string ``expiresOn``
+    if isinstance(expires_on, (int, float)) or (isinstance(expires_on, str) and expires_on.isdigit()):
+        return token, float(expires_on) - time.time()
+    return token, TOKEN_LIFETIME_UNKNOWN_SECONDS
 
 
 def _az_complaint(stderr: str) -> str:
@@ -214,9 +240,22 @@ class AzureDevOps(Forge):
         """
         try:
             return super().retrying(what, call)
-        except AuthError as refused:
+        except AuthError as first:
             if self.rest.cred.source != "az":
                 raise
+            refused = first
+            # A token refused before its time was up (revoked, or the clock lied) is asked for afresh, once.
+            forget_cli_token(_az_key(self.tenant()))
+            renewed = Rest(self.rest.base, self._find_credential, self.tuning, headers=self.headers)
+            if renewed.cred.source == "az" and renewed.cred.token != self.rest.cred.token:
+                self.rest, self.vssps = (
+                    renewed,
+                    Rest(self.vssps.base, lambda: renewed.cred, self.tuning, headers=self.headers),
+                )
+                try:
+                    return super().retrying(what, call)
+                except AuthError as again:
+                    refused = again
             signed_in, self.rest = (
                 self.rest,
                 Rest(self.rest.base, Credential("anonymous"), self.tuning, headers=self.headers),

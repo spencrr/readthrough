@@ -58,9 +58,9 @@ class GitLabOptions:
 def _glab_token(host: str) -> str | None:
     """The token glab holds for ``host``. glab prints its status report to stderr, one ``Token: ...`` line per host."""
 
-    def ask() -> str | None:
+    def ask() -> tuple[str | None, float | None]:
         out = quiet_output(["glab", "auth", "status", "--hostname", host, "--show-token"], with_stderr=True)
-        return parse_glab_token(out or "")
+        return parse_glab_token(out or ""), None  # a personal access token: no expiry to speak of
 
     return cached_cli_token(f"glab {host}", ask)
 
