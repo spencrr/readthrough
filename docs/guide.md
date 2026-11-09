@@ -440,7 +440,7 @@ host = "codeberg.org"
 
 gitlab.com throttles anonymous API use per IP address quite hard, so a token (or `glab auth login`) makes a real difference there.
 
-On Azure DevOps, readthrough first asks the organization which Entra tenant it belongs to (an anonymous call the organization refuses, naming the tenant), then asks `az` for a token *in that tenant*. That matters when you're signed in to several: `az` holds a token for your default tenant, and an organization elsewhere would refuse it. `az account get-access-token` never prompts; when `az` has no sign-in for the tenant, readthrough continues anonymously (enough for a public project), `doctor` repeats what `az` said, and its fix line is a sign-in scoped to that one tenant:
+On Azure DevOps, readthrough first asks the organization which Entra tenant it belongs to (an anonymous call the organization refuses, naming the tenant), then asks `az` for a token *in that tenant*, and asks again shortly before that token expires (an hour or so), so a server that runs for days stays signed in. That matters when you're signed in to several: `az` holds a token for your default tenant, and an organization elsewhere would refuse it. `az account get-access-token` never prompts; when `az` has no sign-in for the tenant, readthrough continues anonymously (enough for a public project), `doctor` repeats what `az` said, and its fix line is a sign-in scoped to that one tenant:
 
 ```sh
 az login --tenant <tenant id> --allow-no-subscriptions --scope 499b84ac-1321-427f-aa17-267ca6975798/.default

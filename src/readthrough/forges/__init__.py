@@ -124,22 +124,40 @@ def credential(*, env: str, cli: Callable[[], str | None] | None, cli_name: str,
     return Credential("anonymous", None, scheme)
 
 
-_cli_tokens: dict[str, tuple[str | None, float]] = {}
+_cli_tokens: dict[str, tuple[str | None, float]] = {}  # key -> (token, when to ask again, monotonic)
 _cli_tokens_lock = threading.Lock()
 RETRY_MISSING_TOKEN_SECONDS = 600.0
+TOKEN_REFRESH_MARGIN_SECONDS = 300.0  # ask again this long before an access token expires
+TOKEN_LIFETIME_UNKNOWN_SECONDS = 2700.0  # and after this long when the CLI didn't say (Entra tokens live an hour or so)
 
 
-def cached_cli_token(key: str, lookup: Callable[[], str | None]) -> str | None:
-    """Ask a CLI for a token once per process. Spawning ``az`` or ``glab`` costs seconds; the answer doesn't change.
+def cached_cli_token(key: str, lookup: Callable[[], tuple[str | None, float | None]]) -> str | None:
+    """Ask a CLI for a token and keep it. Spawning ``az`` or ``glab`` costs seconds, so one answer serves many calls.
 
-    Except from "none": someone who signs in after seeing `doctor`'s advice shouldn't have to restart the
-    server, so a lookup that found nothing is asked again after a while.
+    ``lookup`` returns the token and how many seconds it stays valid: ``None`` seconds for one that doesn't
+    expire (a PAT glab holds), a number for an access token (``az`` reports its expiry). The token is asked for
+    again shortly before it expires, so a server that runs for days keeps working; one found missing is asked
+    for again after a while, so someone who signs in after seeing `doctor`'s advice needn't restart the server.
     """
     with _cli_tokens_lock:
         found = _cli_tokens.get(key)
-        if found is None or (found[0] is None and time.monotonic() - found[1] > RETRY_MISSING_TOKEN_SECONDS):
-            found = _cli_tokens[key] = (lookup(), time.monotonic())
+        now = time.monotonic()
+        if found is None or now >= found[1]:
+            token, valid_for = lookup()
+            if token is None:
+                again = now + RETRY_MISSING_TOKEN_SECONDS
+            elif valid_for is None:
+                again = float("inf")
+            else:
+                again = now + max(0.0, valid_for - TOKEN_REFRESH_MARGIN_SECONDS)
+            found = _cli_tokens[key] = (token, again)
         return found[0]
+
+
+def forget_cli_token(key: str) -> None:
+    """Drop a kept token, so the next ask goes to the CLI: for one the forge refused before its time was up."""
+    with _cli_tokens_lock:
+        _cli_tokens.pop(key, None)
 
 
 # ---------------------------------------------------------------- REST over urllib

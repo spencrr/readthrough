@@ -585,6 +585,85 @@ def test_glab_token_is_read_from_its_status_report():
     assert parse_glab_token("No GitLab instance has been authenticated with glab.") is None
 
 
+def test_az_token_is_read_with_its_expiry(monkeypatch):
+    from readthrough.forges.azure_devops import parse_az_token
+
+    monkeypatch.setattr("readthrough.forges.azure_devops.time.time", lambda: 1_000.0)
+    out = json.dumps({"accessToken": "eyJ-token", "expiresOn": "2026-11-09 15:22:02.000000", "expires_on": 4600})
+    assert parse_az_token(out) == ("eyJ-token", 3600.0)
+    assert parse_az_token(json.dumps({"accessToken": "eyJ-token"})) == (
+        "eyJ-token",
+        forges.TOKEN_LIFETIME_UNKNOWN_SECONDS,
+    )
+    assert parse_az_token("ERROR: please run az login") == (None, None)
+    assert parse_az_token(json.dumps({"accessToken": ""})) == (None, None)
+
+
+def test_a_cli_token_is_asked_for_again_before_it_expires(monkeypatch):
+    """A server runs for days; an access token lives an hour. The cache asks again shortly before the expiry the
+    CLI reported, keeps a token with no expiry for good, and retries a missing one after a while."""
+    clock = {"now": 0.0}
+    monkeypatch.setattr("readthrough.forges.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("readthrough.forges._cli_tokens", {})
+    asked: list[str] = []
+
+    def az() -> tuple[str | None, float | None]:
+        asked.append("az")
+        return f"token-{len(asked)}", 3600.0
+
+    assert forges.cached_cli_token("az:t", az) == "token-1"
+    clock["now"] = 3600.0 - forges.TOKEN_REFRESH_MARGIN_SECONDS - 1
+    assert forges.cached_cli_token("az:t", az) == "token-1", "still good: not asked again"
+    clock["now"] += 2
+    assert forges.cached_cli_token("az:t", az) == "token-2", "asked again before the old one expires"
+    assert forges.cached_cli_token("glab h", lambda: ("pat", None)) == "pat"
+    clock["now"] = 10**9
+    assert forges.cached_cli_token("glab h", lambda: ("other", None)) == "pat", "a token with no expiry is kept"
+    missing: list[int] = []
+
+    def none() -> tuple[str | None, float | None]:
+        missing.append(1)
+        return None, None
+
+    assert forges.cached_cli_token("az:u", none) is None and forges.cached_cli_token("az:u", none) is None
+    assert len(missing) == 1
+    clock["now"] += forges.RETRY_MISSING_TOKEN_SECONDS + 1
+    assert forges.cached_cli_token("az:u", none) is None and len(missing) == 2, "a missing token is asked for again"
+    forges.forget_cli_token("az:t")
+    assert forges.cached_cli_token("az:t", az) == "token-3", "forgotten, so asked for at once"
+
+
+def test_azure_devops_renews_an_az_token_the_org_refuses_before_stepping_aside(monkeypatch):
+    """A token the organization refuses although it shouldn't have expired (revoked, say) is asked for afresh
+    once; if az hands over a different one that works, the build goes on signed in."""
+    from readthrough.faults import AuthError
+
+    monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
+    monkeypatch.setattr("readthrough.forges._cli_tokens", {})
+    monkeypatch.setattr("readthrough.forges.azure_devops._tenants", {"o": "t-1"})
+    issued: list[str] = []
+
+    def az_says(cmd: list[str], **kw: Any) -> tuple[str, str]:
+        issued.append(f"eyJ-token-{len(issued) + 1}")
+        return json.dumps({"accessToken": issued[-1], "expires_on": 4_000_000_000}), ""
+
+    monkeypatch.setattr("readthrough.forges.azure_devops.quiet_output", az_says)
+    forge = AzureDevOps("o/p/r", tuning=TUNING)
+    seen: list[str] = []
+
+    def call(self: Rest, method: str, path: str, **kw: Any) -> Response:
+        token = self.cred.token.reveal() if self.cred.token else "anonymous"
+        seen.append(token)
+        if token == "eyJ-token-1":
+            raise AuthError("GET x failed: HTTP 401", what=path, stderr="HTTP 401")
+        return Response(200, {}, json.dumps({"id": "1", "name": "r", "defaultBranch": "refs/heads/main"}))
+
+    monkeypatch.setattr(Rest, "call", call)
+    assert forge.repo_info()["default_branch"] == "main"
+    assert seen == ["eyJ-token-1", "eyJ-token-2"], "the refused token was replaced, and anonymous never tried"
+    assert forge.describe_auth() == "az (tenant t-1)" and forge.vssps.cred.token == forge.rest.cred.token
+
+
 def test_only_things_that_look_like_tokens_become_credentials(monkeypatch, caplog):
     """A CLI stand-in that prints a banner, or a variable set to prose, must not end up in an Authorization header."""
     monkeypatch.setenv("T", "glpat-abcdefghijklmnop")
