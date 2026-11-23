@@ -32,12 +32,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, assert_never
 
-from readthrough import review, runtimes, study, usage
+from readthrough import forges, review, runtimes, study, usage
 from readthrough.config import AUTO, Config
 from readthrough.contract import Action, PullRequestItem, Smell
 from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
+from readthrough.profile import Profile, ProfileError, resolve_profile
 from readthrough.registry import Registry
 from readthrough.study import EntryKind, Severity, Verdict, Writer
 
@@ -53,6 +54,16 @@ class Harness(Protocol):
 
     def append(self, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]: ...
     def components(self) -> list[dict[str, Any]]: ...
+
+
+def repo_profile(cfg: Config) -> Profile | None:
+    """The profile the build uses, from wherever it comes: the repo's own file is read from the forge, so this may
+    make a network call (run it off the event loop). None when the repo has none; a forge that can't be reached
+    raises, so the turn fails rather than reading as "the profile has no questions"."""
+    try:
+        return resolve_profile(cfg, forges.make(cfg))
+    except ProfileError:
+        return None
 
 
 def pr_item(h: Harness, number: int) -> PullRequestItem:
@@ -229,9 +240,9 @@ class RulesAssistant:
     async def turn(self, turn: Turn) -> None:
         match turn.action:
             case Action.QUIZ:
-                self._quiz(turn)
+                self._quiz(turn, await asyncio.to_thread(repo_profile, self.h.cfg))
             case Action.ANSWER:
-                self._after_answer(turn)
+                self._after_answer(turn, await asyncio.to_thread(repo_profile, self.h.cfg))
             case Action.HINT:
                 self._hint(turn)
             case Action.BRIEF:
@@ -245,15 +256,9 @@ class RulesAssistant:
 
     # ---- the bank for one PR
 
-    def _bank(self, number: int) -> list[BankQuestion]:
-        from readthrough.profile import ProfileError, resolve_profile
-
+    def _bank(self, number: int, profile: Profile | None) -> list[BankQuestion]:
         item = pr_item(self.h, number)
-        try:
-            profile = resolve_profile(self.h.cfg)
-        except ProfileError:
-            return []
-        return question_bank(item, self.h.components(), profile)
+        return question_bank(item, self.h.components(), profile) if profile else []
 
     def _asked(self, number: int) -> dict[str, dict[str, Any]]:
         """Asked questions by text, so the bank's position survives a reload."""
@@ -264,9 +269,9 @@ class RulesAssistant:
 
     # ---- actions
 
-    def _quiz(self, turn: Turn) -> None:
+    def _quiz(self, turn: Turn, profile: Profile | None) -> None:
         asked = self._asked(turn.number)
-        nxt = next((q for q in self._bank(turn.number) if q.question not in asked), None)
+        nxt = next((q for q in self._bank(turn.number, profile) if q.question not in asked), None)
         if nxt is None:
             self._say(
                 turn.number, "That's every question the profile has for this PR. Teach it back when you're ready."
@@ -277,10 +282,10 @@ class RulesAssistant:
             group=nxt.group, expected_points=[],
         )  # fmt: skip
 
-    def _after_answer(self, turn: Turn) -> None:
+    def _after_answer(self, turn: Turn, profile: Profile | None) -> None:
         """Once every question about a component has been answered, show its contract once, so the reference
         can't leak into the answers that follow."""
-        bank = self._bank(turn.number)
+        bank = self._bank(turn.number, profile)
         entries = study.load(self.h.cfg, turn.number)
         asked = {e["question"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
         answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
@@ -411,8 +416,6 @@ def system_message(repo: str, guidance: str) -> str:
 
 def study_conversation_key(cfg: Config, number: int) -> str:
     """Stable per PR, derived from its URL like the review session's id, but never the same one."""
-    from readthrough import forges
-
     return forges.make(cfg).pr_url(number) + "#study"
 
 
@@ -514,7 +517,7 @@ class ModelAssistant:
         worktree, _ = await self._worktree(number)
         conversation = runtimes.Conversation(
             key=study_conversation_key(self.cfg, number),
-            system=system_message(self.cfg.repo, self._study_guidance()),
+            system=system_message(self.cfg.repo, await self._study_guidance()),
             tools=self._tools(number),
             working_directory=str(worktree),
             model=self.cfg.study_model,
@@ -545,13 +548,9 @@ class ModelAssistant:
         _, path, merge_base = self._worktrees[number]
         return path, merge_base
 
-    def _study_guidance(self) -> str:
-        from readthrough.profile import ProfileError, resolve_profile
-
-        try:
-            return resolve_profile(self.cfg).study_guidance
-        except ProfileError:
-            return ""
+    async def _study_guidance(self) -> str:
+        profile = await asyncio.to_thread(repo_profile, self.cfg)
+        return profile.study_guidance if profile else ""
 
     def _first_turn_context(self, number: int) -> str:
         info = pr_item(self.h, number)
