@@ -513,7 +513,7 @@ Every command except `onboard`, `repos`, `default`, `remove`, `install`, `uninst
 | `review N [--fresh] [--here] [--vscode] [--print]` | Start or resume the deep-review session |
 | `worktree N [--remove]` | Check out a PR in its own worktree and print the diff command |
 | `ledger N [--status S] [--note T] [--clear]` | Record, show, or clear what you did with a PR |
-| `study N [--prediction T] [--teachback T] [--note T] [--finding S:T --at P:L] [--head SHA]` | Show or add to a PR's study log |
+| `study N [--prediction T] [--question T] [--hint Q T] [--answer Q T] [--assess Q V F] [--reflection [Q:]T] [--teachback T] [--assess-teachback V F] [--note T] [--finding S:T --at P:L] [--by model] [--head SHA]` | Show or add to a PR's study log; `--help` lists the rest |
 | (browser) `/setup` | Onboard a repo, or change a repo's settings |
 | `install [skill\|server\|schedule\|protocol\|canvas] [--all]` | Set up the integrations: all that are missing, asking about each, or one |
 | `uninstall skill\|server\|schedule\|protocol\|canvas` | Undo one |

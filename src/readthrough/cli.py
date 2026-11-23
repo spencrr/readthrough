@@ -20,6 +20,7 @@ from readthrough.analyze import is_newsworthy
 from readthrough.config import Config, ConfigError, Settings, guess_clone, load_settings, remote_for
 from readthrough.faults import ForgeError
 from readthrough.forges.github import signed_in_accounts
+from readthrough.limits import MODEL_RE
 from readthrough.model import PR_NUMBER
 from readthrough.process import run
 from readthrough.profile import ProfileError
@@ -246,12 +247,48 @@ def cmd_ledger(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
+    """Show a PR's study log, or add to it: a terminal review records the same evidence the Study tab does. What's
+    given is written in the order a session goes (predict, ask, hint, answer, grade, reflect, teach back, note)."""
     cfg = settings.config_for(args.repo)
-    adds: list[tuple[EntryKind, Any]] = [
-        (k, getattr(args, k.value))
-        for k in (EntryKind.PREDICTION, EntryKind.TEACHBACK, EntryKind.NOTE)
-        if getattr(args, k.value)
-    ]
+    you, by = Writer.YOU, args.by
+    adds: list[tuple[EntryKind, str, dict[str, Any]]] = []
+    if args.prediction:
+        adds.append((EntryKind.PREDICTION, you, {"text": args.prediction}))
+    if args.question:
+        q = {"question": args.question, "focus": args.focus or "", "refs": args.ref, "expected_points": args.expect}
+        adds.append((EntryKind.QUESTION, by, q))
+    if args.hint:
+        if by != Writer.MODEL:
+            raise ConfigError("--hint records the review agent's hint: add --by model")
+        adds.append(
+            (
+                EntryKind.CHAT,
+                by,
+                {"role": "assistant", "action": contract.Action.HINT, "qid": args.hint[0], "text": args.hint[1]},
+            )
+        )
+    if args.answer:
+        adds.append((EntryKind.ANSWER, you, {"qid": args.answer[0], "text": args.answer[1]}))
+    if args.assess:
+        qid, verdict, feedback = args.assess
+        adds.append(
+            (
+                EntryKind.ASSESSMENT,
+                by,
+                {"qid": qid, "verdict": verdict, "feedback": feedback, "evidence": args.evidence},
+            )
+        )
+    if args.reflection:
+        qid, sep, text = args.reflection.partition(":")
+        about = {"qid": qid, "text": text.strip()} if sep and re.fullmatch(r"Q\d+", qid) else {"text": args.reflection}
+        adds.append((EntryKind.REFLECTION, you, about))
+    if args.teachback:
+        adds.append((EntryKind.TEACHBACK, you, {"text": args.teachback}))
+    if args.assess_teachback:
+        verdict, feedback = args.assess_teachback
+        adds.append((EntryKind.TEACHBACK_ASSESSMENT, by, {"verdict": verdict, "feedback": feedback, "gaps": args.gap}))
+    if args.note:
+        adds.append((EntryKind.NOTE, by, {"text": args.note}))
     if args.finding:
         severity, _, summary = args.finding.partition(":")
         path, _, line = (args.at or "").partition(":")
@@ -260,16 +297,18 @@ def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
             fields["path"] = path
         if line.isdigit():
             fields["line"] = int(line)
-        adds.append((EntryKind.FINDING, fields))
+        adds.append((EntryKind.FINDING, by, fields))
     if adds and args.head and not study.COMMIT_RE.fullmatch(args.head):
         raise ConfigError(f"--head {args.head} isn't a full commit SHA (`readthrough worktree {args.pr}` prints it)")
+    if args.model and not MODEL_RE.fullmatch(args.model):
+        raise ConfigError(f"--model {args.model!r} isn't a model name")
     head, source = (args.head, "from --head") if args.head else (_head_for(cfg, args.pr) or None, "from the last build")
-    for kind, value in adds:
-        entry_fields = value if isinstance(value, dict) else {"text": value}
-        by = Writer.YOU if kind in (EntryKind.PREDICTION, EntryKind.TEACHBACK) else args.by
-        entry = study.append(cfg, args.pr, kind, by=by, head=head, **entry_fields)
+    for kind, writer, fields in adds:
+        model = {"model": args.model} if args.model and writer == Writer.MODEL else {}
+        entry = study.append(cfg, args.pr, kind, by=writer, head=head, **model, **fields)
         at = f"at {head[:7]}, {source}" if head else "without a commit: the last build has no head for it (pass --head)"
-        _say(f"#{args.pr}: added {kind} #{entry['id']} {at}")
+        what = f"question {entry['qid']}" if kind == EntryKind.QUESTION else str(kind)
+        _say(f"#{args.pr}: added {what} #{entry['id']} {at}")
     if adds:
         study.refresh_brief(cfg, args.pr)
         return 0
@@ -1044,7 +1083,20 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
     p = sub.add_parser("study", help="show or add to a PR's study log (evidence of understanding)")
     p.add_argument("pr", type=int)
     p.add_argument("--prediction", help="what you expect the PR to do, written before reading it")
+    p.add_argument("--question", help="a check question, asked by the review agent (--by model); prints its id")
+    p.add_argument("--focus", help="what --question tests: intent, control-flow, responsibility, unhappy-path, ...")
+    p.add_argument("--ref", action="append", default=[], metavar="PATH:LINE", help="where --question's answer lies")
+    p.add_argument("--expect", action="append", default=[], metavar="POINT", help="what a good answer covers")
+    p.add_argument("--hint", nargs=2, metavar=("QID", "TEXT"), help="a hint given before the answer (--by model)")
+    p.add_argument("--answer", nargs=2, metavar=("QID", "TEXT"), help="your answer, in your own words")
+    p.add_argument("--assess", nargs=3, metavar=("QID", "VERDICT", "FEEDBACK"), help="a grade (--by model)")
+    p.add_argument("--evidence", action="append", default=[], metavar="PATH:LINE", help="what supports --assess")
+    p.add_argument("--reflection", metavar="[QID:]TEXT", help="what you missed, on a question or the teach-back")
     p.add_argument("--teachback", help="your summary of the whole PR, as if briefing a teammate")
+    p.add_argument(
+        "--assess-teachback", nargs=2, metavar=("VERDICT", "FEEDBACK"), help="a grade of the teach-back (--by model)"
+    )
+    p.add_argument("--gap", action="append", default=[], help="a gap in the teach-back, for --assess-teachback")
     p.add_argument("--note", help="a short insight to keep with the brief")
     p.add_argument("--finding", metavar="SEVERITY:SUMMARY", help="e.g. 'major: retries swallow the original error'")
     p.add_argument("--at", metavar="PATH:LINE", help="location for --finding")
@@ -1052,8 +1104,9 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
         "--by",
         choices=(Writer.YOU.value, Writer.MODEL.value),  # by value: argparse lists choices by repr in its error
         default=Writer.YOU.value,
-        help="who wrote a --note or --finding: you, or a model (a review agent)",
+        help="who wrote a question, hint, grade, note, or finding: you, or a model (a review agent)",
     )
+    p.add_argument("--model", help="the model a --by model entry came from, when the agent knows it")
     p.add_argument("--head", metavar="SHA", help="the commit the entry is about (default: the last build's head)")
     p.set_defaults(func=cmd_study)
 

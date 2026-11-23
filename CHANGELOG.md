@@ -15,6 +15,10 @@
 - The Study tab says when the PR got new commits while you were studying it, and keeps what you write recorded
   against the commit you were reading until you say you've looked; evidence about an earlier commit is tagged
   as such.
+- `readthrough study N` records a quiz from a terminal: `--question` (with `--focus`, `--ref`, `--expect`),
+  `--hint`, `--answer`, `--assess` (with `--evidence`), `--reflection`, and `--assess-teachback` (with `--gap`).
+  Questions, hints, and grades take `--by model`, and `--model` names the model when the agent knows it; an
+  answer after a recorded hint is tagged as aided, as it is on the page.
 - `readthrough install` keeps a receipt of what it puts on the machine, and the live server, when a new version
   starts it, brings those pieces up to date and removes what that version no longer installs. Only what the same
   installation put there: another checkout's or a tool install's pieces are left alone, and `doctor` says when the
