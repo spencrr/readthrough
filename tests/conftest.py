@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 from fakes import FakeForge
 
+from readthrough import system
 from readthrough.forges.github import normalize
 from readthrough.model import PullRequest
 from readthrough.profile import load_profile
@@ -32,6 +34,21 @@ REPO = PROFILE.repo
 SLUG = f"github/{REPO}"
 
 
+class EmptyRegistry:
+    """``winreg`` with nothing in it, that refuses to be written."""
+
+    HKEY_CURRENT_USER = object()
+    REG_SZ = 1
+
+    def OpenKey(self, root: object, path: str) -> Any:
+        raise OSError(path)
+
+    def CreateKey(self, root: object, path: str) -> Any:
+        raise AssertionError(f"tests must not write the registry ({path}); fake system.winreg")
+
+    DeleteKey = CreateKey
+
+
 @pytest.fixture(autouse=True)
 def no_real_programs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point `gh`, `git`, and the other CLIs at programs that don't exist, so a test that forgets to fake them fails
@@ -47,6 +64,17 @@ def no_real_programs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Path.home(), where the shared skills directory lives: a developer's own installed skill must not show.
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "user"))
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.delenv("READTHROUGH_HOME", raising=False)  # the install receipt lives in the default home
+
+    # The OS pieces: no test reads or writes the real registry or Task Scheduler. Tests that exercise them
+    # install their own fakes over these; everyone else sees a machine with nothing registered.
+    def no_task_scheduler(script: str) -> subprocess.CompletedProcess[str]:
+        if "Get-ScheduledTask " in script and "Register-" not in script:
+            return subprocess.CompletedProcess(["powershell"], 3, stdout="", stderr="")  # no such task
+        raise AssertionError("tests must not run PowerShell against Task Scheduler; fake system._powershell")
+
+    monkeypatch.setattr(system, "_powershell", no_task_scheduler)
+    monkeypatch.setattr(system, "winreg", EmptyRegistry(), raising=False)
 
     # The REST adapters speak urllib; a test that forgets to script `Rest.call` must fail, not reach a forge.
     # The live server's tests talk to 127.0.0.1 the same way, which is fine.
