@@ -43,8 +43,8 @@ class Harness:
         self._components = components
         self.events: list[tuple[str, object]] = []
 
-    def append(self, number: int, kind: str, *, by: str, **fields):
-        entry = study.append(self.cfg, number, kind, by=by, **fields)
+    def append(self, number: int, kind: str, *, by: str, head: str | None, **fields):
+        entry = study.append(self.cfg, number, kind, by=by, head=head, **fields)
         self.events.append(("entry", entry))
         return entry
 
@@ -166,7 +166,7 @@ def test_rules_quiz_asks_in_order_shows_reference_after_a_groups_last_question(h
     # Answering the first transports question adds nothing; answering the last shows the contract once.
     first, last = questions[len(always)], questions[-1]
     for q in (first, last):
-        harness.append(7, "answer", by="you", qid=q["qid"], text="an answer")
+        harness.append(7, "answer", by="you", head=None, qid=q["qid"], text="an answer")
         asyncio.run(rules.turn(Turn(7, Action.ANSWER, "an answer", q["qid"], "")))
     chats = [e for e in study.load(harness.cfg, 7) if e["kind"] == "chat"]
     assert len(chats) == 1 and chats[0]["action"] == "reference" and chats[0]["group"] == "transports"
@@ -232,8 +232,10 @@ def test_rules_reads_a_profile_that_lives_only_in_the_repo(harness, fake_forge):
     It used to look without a forge, find nothing, and say there were no questions."""
     fake_forge.files = {".github/readthrough.toml": harness.cfg.local_profile_path.read_text(encoding="utf-8")}
     harness.cfg.local_profile_path.unlink()
-    asyncio.run(RulesAssistant(harness, None).turn(Turn(7, Action.QUIZ, "", None, "")))
-    assert study.load(harness.cfg, 7)[-1]["kind"] == "question"
+    harness.items[7]["head"] = A  # a build landed after the ask, which was about B
+    asyncio.run(RulesAssistant(harness, None).turn(Turn(7, Action.QUIZ, "", None, "", head=B)))
+    question = study.load(harness.cfg, 7)[-1]
+    assert question["kind"] == "question" and question["head"] == A, "about the data the question was drawn from"
 
 
 # ---------------------------------------------------------------- the model assistant, on a fake runtime
@@ -435,8 +437,8 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
 def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkeypatch):
     """The runtime reports the model with each call; what the assistant writes afterwards carries it and the
     runtime, and the brief says which model graded, through what, from the entries alone."""
-    study.append(harness.cfg, 7, "question", by="model", question="Why?")
-    study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
+    study.append(harness.cfg, 7, "question", by="model", head=None, question="Why?")
+    study.append(harness.cfg, 7, "answer", by="you", head=None, qid="Q1", text="Because.")
     fake_runtime.script = [
         runtimes.Used(_usage(model="gpt-4.1")),
         ("call", "assess_answer", {"qid": "Q1", "verdict": "correct", "feedback": "Yes."}),
@@ -516,16 +518,23 @@ def test_a_turn_reads_one_commit_however_the_pr_moves(harness, fake_runtime, clo
         return "blob" if cmd[3:5] == ["cat-file", "-t"] else ""
 
     monkeypatch.setattr(assistants, "run", git)
-    fake_runtime.script = [("call", "get_diff", {}), ("call", "read_file", {"path": "a.py"}), runtimes.Done("")]
+    fake_runtime.script = [
+        ("call", "get_diff", {}),
+        ("call", "read_file", {"path": "a.py"}),
+        ("call", "append_to_brief", {"text": "insight"}),
+        runtimes.Done(""),
+    ]
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x", head=A)))
     assert reads == [A, f"{A}:a.py", f"{A}:a.py"] and clone["kept"] == [A]
+    assert study.load(harness.cfg, 7)[-1]["head"] == A, "what it wrote is about what it read, not the new head"
 
     clone["have"].add(B)
     session = fake_runtime.sessions[next(iter(fake_runtime.sessions))]
     session.script = []
-    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "y", None, "y", head=B)))
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "y", None, "y", head=B, seen=A)))
     assert session.sent[-1].startswith(f"The PR has new commits since your last turn ({A[:7]} -> {B[:7]})")
+    assert f"The learner's page shows commit {A[:7]}; you are reading {B[:7]}." in session.sent[-1]
 
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "z", None, "z", head="c" * 40)))
     assert assistant._reading[7][0] == B and clone["kept"][-1] == B, "not in the clone: read what was fetched"

@@ -790,14 +790,16 @@ function studyTab(n){
     </div>`;
 }
 const pendingTools = pend => pend.tools.length ? "used " + [...new Set(pend.tools)].map(t => `<code>${esc(t)}</code>`).join(", ") : (pend.text ? "" : "thinking…");
+// The commit the learner is looking at, which what they write is recorded against; null when the build has none.
+const shownHead = n => byNum[n]?.head || null;
 async function studyPost(n, body){
-  try { await api(`/api/study/${n}`, body); loadStudy(n); } catch (err) { toast(err.message); }
+  try { await api(`/api/study/${n}`, {...body, head: shownHead(n)}); loadStudy(n); } catch (err) { toast(err.message); }
 }
 async function studyAdd(n, kind, qid){
   // A reflection is written in the chat box; the other kinds each have a box of their own.
   const key = `${n}:${kind === "reflection" ? "chat" : kind}`, text = (state.drafts[key] || "").trim();
   if (!text) return toast("Write something first");
-  try { await api(`/api/study/${n}`, {kind, text, ...(qid ? {qid} : {})}); state.drafts[key] = ""; saveDrafts(); renderDrawer({follow: true}); }
+  try { await api(`/api/study/${n}`, {kind, text, ...(qid ? {qid} : {}), head: shownHead(n)}); state.drafts[key] = ""; saveDrafts(); renderDrawer({follow: true}); }
   catch (err) { toast(err.message); }
 }
 async function studyAsk(n, action, qid){
@@ -805,7 +807,7 @@ async function studyAsk(n, action, qid){
   const text = ["chat", "answer", "teachback"].includes(action) ? (state.drafts[key] || "").trim() : "";
   if (["chat", "answer", "teachback"].includes(action) && !text) return toast("Write something first");
   try {
-    await api(`/api/study/${n}/ask`, {action, text, qid});
+    await api(`/api/study/${n}/ask`, {action, text, qid, head: shownHead(n)});
     if (text) { state.drafts[key] = ""; saveDrafts(); }
     study[n].pending = {text: "", tools: []};
     renderDrawer({follow: true});

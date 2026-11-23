@@ -71,6 +71,14 @@ from readthrough.web_setup import Conflict, SetupError, SetupService
 log = logging.getLogger(__name__)
 
 
+def _seen_head(body: dict[str, Any]) -> str | None:
+    """The commit the learner's page showed when they wrote: what their entry is about, even if a build has moved
+    the data since. Required, so a page from an older readthrough can't record entries that say nothing."""
+    if "head" not in body:
+        raise ValueError("reload the page: it's from an older readthrough")
+    return body["head"]
+
+
 class BodyTooLarge(ValueError):
     pass
 
@@ -405,14 +413,15 @@ class Dashboard:
             if not isinstance(body["pinned"], int):
                 raise ValueError("pinned must be an entry id")
             fields["pinned"] = body["pinned"]
-        entry = study.append(self.cfg, number, kind, by=Writer.YOU, **fields)
+        entry = study.append(self.cfg, number, kind, by=Writer.YOU, head=_seen_head(body), **fields)
         study.refresh_brief(self.cfg, number)
         summary = self._study_changed(number)
         self.broadcast("study", {"pr": number, "type": "entry", "entry": entry, "summary": summary})
         return entry
 
     def ask(self, number: int, body: dict[str, Any]) -> None:
-        self.engine.submit(number, str(body.get("action", Action.CHAT)), str(body.get("text") or ""), body.get("qid"))
+        action, text = str(body.get("action", Action.CHAT)), str(body.get("text") or "")
+        self.engine.submit(number, action, text, body.get("qid"), head=_seen_head(body))
 
     def brief(self, number: int) -> str:
         path = self.cfg.briefs_dir / f"pr-{number}.md"

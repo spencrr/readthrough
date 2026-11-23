@@ -12,6 +12,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 from readthrough import assistants, process, runtimes, study
@@ -135,8 +136,10 @@ class StudyEngine:
 
     # ---- public entry point
 
-    def submit(self, number: int, action: str, text: str = "", qid: str | None = None) -> None:
-        """Record what the learner did, then start the assistant's turn about it. Returns immediately."""
+    def submit(self, number: int, action: str, text: str = "", qid: str | None = None, *, head: str | None) -> None:
+        """Record what the learner did, then start the assistant's turn about it. Returns immediately. ``head`` is
+        the commit the learner's page showed (None when it showed none): their side is recorded against it, which
+        may be older than the data by now."""
         resolved = self.resolved
         if not resolved.available:
             raise RuntimeError(resolved.reason)
@@ -151,51 +154,52 @@ class StudyEngine:
         with self._busy_lock:
             if number in self._busy:
                 raise Busy(f"The assistant is still working on #{number}")
-            prompt = self._record_and_prompt(number, action, text.strip(), qid)
+            prompt = self._record_and_prompt(number, action, text.strip(), qid, head)
             self._busy.add(number)
         self.broadcast("study", {"pr": number, "type": "start", "action": action, "assistant": resolved.name})
-        turn = assistants.Turn(number, action, text.strip(), qid, prompt, head=item["head"] or None)
+        turn = assistants.Turn(number, action, text.strip(), qid, prompt, head=item["head"] or None, seen=head)
         asyncio.run_coroutine_threadsafe(self._turn(turn), self._ensure_loop())
 
-    def _record_and_prompt(self, number: int, action: Action, text: str, qid: str | None) -> str:
+    def _record_and_prompt(self, number: int, action: Action, text: str, qid: str | None, head: str | None) -> str:
+        append = partial(self.append, number, by=Writer.YOU, head=head)
         match action:
             case Action.ANSWER:
                 if not qid or not text:
                     raise ValueError("an answer needs the question id and your answer")
-                self.append(number, EntryKind.ANSWER, by=Writer.YOU, qid=qid, text=text)  # study.append tags the aids
+                append(EntryKind.ANSWER, qid=qid, text=text)  # study.append tags the aids
                 return f"My answer to {qid}:\n\n{text}\n\nAssess it with assess_answer."
             case Action.TEACHBACK:
                 if not text:
                     raise ValueError("write your teach-back first")
-                self.append(number, EntryKind.TEACHBACK, by=Writer.YOU, text=text)
+                append(EntryKind.TEACHBACK, text=text)
                 return (
                     "Here is my teach-back of the whole PR, as if I were briefing a teammate:\n\n"
                     f"{text}\n\nAssess it with assess_teachback: name the specific gaps or misunderstandings."
                 )
             case Action.QUIZ:
-                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text or "Quiz me.")
+                append(EntryKind.CHAT, role="user", text=text or "Quiz me.")
                 return (text + "\n\n" if text else "") + "Ask me the next quiz question."
             case Action.BRIEF:
-                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text="Brief me.", action=action)
+                append(EntryKind.CHAT, role="user", text="Brief me.", action=action)
                 return (
                     "Brief me on this PR before I dig in: what it changes and why, then the things most worth "
                     "paying attention to as a reviewer, each with path:line. No quiz question this turn."
                 )
             case Action.HINT:
                 text = f"Hint for {qid}" if qid else "Hint, please."
-                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text, action=action, qid=qid)
+                append(EntryKind.CHAT, role="user", text=text, action=action, qid=qid)
                 return (
                     f"Give me a hint for {qid}, without the answer." if qid else "Give me a hint, without the answer."
                 )
             case Action.CHAT:
                 if not text:
                     raise ValueError("type a message first")
-                self.append(number, EntryKind.CHAT, by=Writer.YOU, role="user", text=text)
+                append(EntryKind.CHAT, role="user", text=text)
                 return text
 
-    def append(self, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]:
+    def append(self, number: int, kind: str, *, by: str, head: str | None, **fields: Any) -> dict[str, Any]:
         """Append to the log, refresh the brief, and tell open pages. Assistants write through here too."""
-        entry = study.append(self.cfg, number, kind, by=by, **fields)
+        entry = study.append(self.cfg, number, kind, by=by, head=head, **fields)
         study.refresh_brief(self.cfg, number)
         entries = study.load(self.cfg, number)
         self.broadcast(
@@ -217,7 +221,13 @@ class StudyEngine:
             resolved = self.resolved
             runtime = {"runtime": resolved.runtime} if resolved.runtime else {}
             self.append(
-                turn.number, EntryKind.FAILURE, by=Writer.TOOL, assistant=resolved.name, text=message, **runtime
+                turn.number,
+                EntryKind.FAILURE,
+                by=Writer.TOOL,
+                head=turn.head,
+                assistant=resolved.name,
+                text=message,
+                **runtime,
             )
             self.broadcast("study", {"pr": turn.number, "type": "error", "message": message})
         finally:

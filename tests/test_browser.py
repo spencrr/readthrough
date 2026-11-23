@@ -93,27 +93,36 @@ server_fixture = SimpleNamespace(cfg=None)  # what the server fixture built, for
 
 def _seed_study_log(cfg: Config) -> None:
     """#2 has been studied a little: a prediction, a turn that failed, and a question answered only partly."""
-    study.append(cfg, 2, "prediction", by="you", text="Touches the transport only.")
-    study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
+    study.append(cfg, 2, "prediction", by="you", head=None, text="Touches the transport only.")
+    study.append(cfg, 2, "chat", by="you", head=None, role="user", text="Quiz me.")
     study.append(
         cfg,
         2,
         "failure",
         by=study.Writer.TOOL,
+        head=None,
         assistant="model",
         runtime="openai",
         text="git merge-base failed: shallow clone",
     )
-    study.append(cfg, 2, "chat", by="you", role="user", text="Quiz me.")
+    study.append(cfg, 2, "chat", by="you", head=None, role="user", text="Quiz me.")
     study.append(
-        cfg, 2, "question", by="model", runtime="openai", question="Why does the retry **stop** at 3?", focus="intent"
+        cfg,
+        2,
+        "question",
+        by="model",
+        head=None,
+        runtime="openai",
+        question="Why does the retry **stop** at 3?",
+        focus="intent",
     )
-    study.append(cfg, 2, "answer", by="you", qid="Q1", text="Because the limit says so.")
+    study.append(cfg, 2, "answer", by="you", head=None, qid="Q1", text="Because the limit says so.")
     study.append(
         cfg,
         2,
         "assessment",
         by="model",
+        head=None,
         runtime="openai",
         model="gpt-4.1",
         qid="Q1",
@@ -735,7 +744,7 @@ def test_after_a_gap_the_page_fetches_what_it_holds_again(page, server):
     _open_study(page, 2)
     cfg = page.cfg  # type: ignore[attr-defined]
     # Written behind the page's back, as a terminal would; and a bubble left over from an interrupted stream.
-    study.append(cfg, 2, "note", by="you", text="Appended while the stream was down.")
+    study.append(cfg, 2, "note", by="you", head=None, text="Appended while the stream was down.")
     page.evaluate("study[2].pending = {text: 'half a reply', tools: []}; renderDrawer();")
     assert page.is_disabled('[data-ask="quiz"]'), "a pending reply disables the composer"
     page.evaluate("resync()")

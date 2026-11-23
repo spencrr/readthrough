@@ -51,7 +51,7 @@ class Harness(Protocol):
     broadcast: Callable[[str, Any], None]
     pr_info: Callable[[int], PullRequestItem | None]
 
-    def append(self, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]: ...
+    def append(self, number: int, kind: str, *, by: str, head: str | None, **fields: Any) -> dict[str, Any]: ...
     def components(self) -> list[dict[str, Any]]: ...
 
 
@@ -85,6 +85,7 @@ class Turn:
     qid: str | None
     prompt: str  # what to say to a model, if there is one
     head: str | None = None  # the PR's head in the data when the turn was asked for; None when unknown
+    seen: str | None = None  # the head the learner's page showed, which their side of the turn is recorded against
 
 
 class Assistant(Protocol):
@@ -256,36 +257,37 @@ class RulesAssistant:
 
     # ---- the bank for one PR
 
-    def _bank(self, number: int, profile: Profile | None) -> list[BankQuestion]:
-        item = pr_item(self.h, number)
+    def _bank(self, item: PullRequestItem, profile: Profile | None) -> list[BankQuestion]:
         return question_bank(item, self.h.components(), profile) if profile else []
 
     def _asked(self, number: int) -> dict[str, dict[str, Any]]:
         """Asked questions by text, so the bank's position survives a reload."""
         return {e["question"]: e for e in study.load(self.h.cfg, number) if e["kind"] == EntryKind.QUESTION}
 
-    def _say(self, number: int, text: str, **fields: Any) -> None:
-        self.h.append(number, EntryKind.CHAT, by=Writer.RULES, role="assistant", text=text, **fields)
+    def _say(self, turn: Turn, text: str, **fields: Any) -> None:
+        """Rules reason from the build's metadata, so what they say is about the head the data had at the ask."""
+        self.h.append(
+            turn.number, EntryKind.CHAT, by=Writer.RULES, head=turn.head, role="assistant", text=text, **fields
+        )
 
     # ---- actions
 
     def _quiz(self, turn: Turn, profile: Profile | None) -> None:
-        asked = self._asked(turn.number)
-        nxt = next((q for q in self._bank(turn.number, profile) if q.question not in asked), None)
+        asked, item = self._asked(turn.number), pr_item(self.h, turn.number)
+        nxt = next((q for q in self._bank(item, profile) if q.question not in asked), None)
         if nxt is None:
-            self._say(
-                turn.number, "That's every question the profile has for this PR. Teach it back when you're ready."
-            )
+            self._say(turn, "That's every question the profile has for this PR. Teach it back when you're ready.")
             return
         self.h.append(
-            turn.number, EntryKind.QUESTION, by=Writer.RULES, question=nxt.question, focus=nxt.focus, refs=nxt.refs,
-            group=nxt.group, expected_points=[],
+            # About the data the question was drawn from, which a build may have moved since the ask.
+            turn.number, EntryKind.QUESTION, by=Writer.RULES, head=item["head"] or None, question=nxt.question,
+            focus=nxt.focus, refs=nxt.refs, group=nxt.group, expected_points=[],
         )  # fmt: skip
 
     def _after_answer(self, turn: Turn, profile: Profile | None) -> None:
         """Once every question about a component has been answered, show its contract once, so the reference
         can't leak into the answers that follow."""
-        bank = self._bank(turn.number, profile)
+        bank = self._bank(pr_item(self.h, turn.number), profile)
         entries = study.load(self.h.cfg, turn.number)
         asked = {e["question"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
         answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
@@ -299,7 +301,7 @@ class RulesAssistant:
         if unanswered or not reference or group in shown:
             return  # nothing to add; the page offers a "what I missed" note on its own
         self._say(
-            turn.number,
+            turn,
             "That was the last question about this component. Check your answers against its contract, and "
             f"note anything you missed:\n\n{reference}",
             action="reference", group=group,
@@ -308,12 +310,12 @@ class RulesAssistant:
     def _hint(self, turn: Turn) -> None:
         entry = next((e for e in self._asked(turn.number).values() if e.get("qid") == turn.qid), None)
         if entry is None:
-            self._say(turn.number, "There's no open question to hint at. Ask for the next one.")
+            self._say(turn, "There's no open question to hint at. Ask for the next one.")
             return
         refs = entry.get("refs") or []
         where = ", ".join(f"`{r}`" for r in refs) if refs else "the author's description and the tests"
         self._say(
-            turn.number,
+            turn,
             f"Look at {where}. I can't say more without reading the code.",
             action=Action.HINT,
             qid=turn.qid,
@@ -350,17 +352,17 @@ class RulesAssistant:
             "",
             "_Assembled by rules from the profile and the PR's metadata; nothing here comes from reading the code._",
         ]
-        self._say(turn.number, "\n".join(out))
+        self._say(turn, "\n".join(out))
 
     def _after_teachback(self, turn: Turn) -> None:
         self._say(
-            turn.number,
+            turn,
             "Recorded. I can't assess it, so compare it yourself with the brief's architecture and signals "
             "sections, and note what you missed.",
         )
 
     def _chat(self, turn: Turn) -> None:
-        self._say(turn.number, CANT_DISCUSS)
+        self._say(turn, CANT_DISCUSS)
 
 
 ASSISTANTS.add("rules", "the profile's own questions, hints, and briefing; no model, nothing to install")(
@@ -457,6 +459,8 @@ class ModelAssistant:
         session = await self._session_for(turn.number)
         prompt = turn.prompt
         # shortcut: remembered per process, so the first turn after a restart isn't told; the log's heads could say
+        if turn.seen and turn.seen != pinned[0]:
+            prompt = f"The learner's page shows commit {turn.seen[:7]}; you are reading {pinned[0][:7]}.\n\n{prompt}"
         if before and before[0] != pinned[0]:
             prompt = (
                 f"The PR has new commits since your last turn ({before[0][:7]} -> {pinned[0][:7]}). What you read "
@@ -474,8 +478,9 @@ class ModelAssistant:
         says which runtime carried the conversation."""
         model = self._model_in_use.get(number)
         return self.h.append(
-            number, kind, by=Writer.MODEL, runtime=self.runtime.name, **({"model": model} if model else {}), **fields
-        )
+            number, kind, by=Writer.MODEL, head=self._reading[number][0], runtime=self.runtime.name,
+            **({"model": model} if model else {}), **fields,
+        )  # fmt: skip
 
     async def _send(self, number: int, session: runtimes.Session, prompt: str) -> str:
         parts = self._pending[number] = []
@@ -557,6 +562,7 @@ class ModelAssistant:
             return before
         base = pr_item(self.h, turn.number)["base"]
         fetched = review.fetch_pr(self.cfg, turn.number, base=base)
+        # shortcut: a newer fetched head is recorded truly but reads as "earlier" against the build until the next one
         sha = turn.head if turn.head and review.has_commit(self.cfg, turn.head) else fetched
         review.keep_commit(self.cfg, turn.number, sha)
         return sha, review.merge_base(self.cfg, sha, base)

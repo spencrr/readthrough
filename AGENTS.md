@@ -82,7 +82,8 @@ engine CI uses, else an installed Edge or Chrome; they skip when there is none, 
   the entry, never from the current config. No brand names in `by` or in the UI: the engine is named by what
   it is. Older logs say `by: copilot`, the assistant's former name; `study.load` reads it as `model` and claims
   no runtime for it, and the file is never rewritten. Answers are tagged with the aids that preceded them
-  (`hint`, `brief`) from the log itself, never asserted.
+  (`hint`, `brief`) from the log itself, never asserted. Every entry carries the `head` it was about, set by the
+  log from what its writer saw (never from a tool's arguments); none means not recorded.
 - **Model usage goes to the ledger (`usage.py`), in the provider's units.** One line per call, idempotent
   by call id; tokens, Copilot's multiplier, and AI credits stay separate, a dollar figure must name its price
   table, and nothing unreported is written as zero. `billed_to` says whose account paid.

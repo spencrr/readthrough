@@ -113,7 +113,12 @@ def test_study_adds_entries_and_shows_the_log(isolated, capsys):
     assert dashboard(isolated, "study", "1", "--prediction", "touches scoring",
                  "--finding", "major: swallows errors", "--at", "courier/transports/smtp.py:12") == 0  # fmt: skip
     out = capsys.readouterr().out
-    assert "added prediction" in out and "added finding" in out
+    assert "added prediction #1 at aaaaaaa, from the last build" in out and "added finding" in out
+    assert dashboard(isolated, "study", "1", "--note", "n", "--head", "c" * 40) == 0
+    assert "at ccccccc, from --head" in capsys.readouterr().out
+    assert dashboard(isolated, "study", "1", "--note", "n", "--head", "abc1234") != 0
+    assert dashboard(isolated, "study", "99", "--note", "kept anyway") == 0
+    assert "without a commit" in capsys.readouterr().out, "a person's words are never dropped for want of a SHA"
     assert dashboard(isolated, "study", "1") == 0
     out = capsys.readouterr().out
     assert "touches scoring" in out and "swallows errors" in out
