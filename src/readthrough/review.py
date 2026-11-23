@@ -359,15 +359,48 @@ def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Pa
     One at a time per worktree: the study assistant's tools and a deep review launched from the page can ask
     for the same PR within a second of each other, and two `git worktree add`s of one path can't both win.
     """
-    if cfg.clone is None:
-        raise RuntimeError(f"No local clone of {cfg.repo} configured.")
     with _worktree_lock(worktree_path(cfg, number)):
         return _ensure_worktree(cfg, number, base)
 
 
+def fetch_pr(cfg: Config, number: int, *, base: str = "main") -> str:
+    """Fetch the PR's head and its base branch into the clone, without touching any checkout. Returns the head."""
+    with _worktree_lock(worktree_path(cfg, number)):
+        return run(["git", "-C", _clone(cfg), "rev-parse", _fetch(cfg, number, base)]).strip()
+
+
+def has_commit(cfg: Config, sha: str) -> bool:
+    return bool(run(["git", "-C", _clone(cfg), "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], check=False))
+
+
+def merge_base(cfg: Config, sha: str, base: str) -> str:
+    return run(["git", "-C", _clone(cfg), "merge-base", sha, f"{repo_remote(cfg)}/{base}"]).strip()
+
+
+def keep_commit(cfg: Config, number: int, sha: str) -> None:
+    """Keep a commit the study log talks about reachable after a force-push, until the PR's worktree goes."""
+    run(["git", "-C", _clone(cfg), "update-ref", f"{STUDIED_REFS}pr-{number}/{sha}", sha])
+
+
+STUDIED_REFS = "refs/readthrough/studied/"
+
+
+def _clone(cfg: Config) -> str:
+    if cfg.clone is None:
+        raise RuntimeError(f"No local clone of {cfg.repo} configured.")
+    return str(cfg.clone)
+
+
+def _fetch(cfg: Config, number: int, base: str) -> str:
+    """Fetch the PR's head and its base branch; returns the ref the head is under."""
+    ref = f"refs/remotes/readthrough/pr-{number}"
+    pr_ref = forges.make(cfg).pr_ref(number)
+    run(["git", "-C", _clone(cfg), "fetch", "--quiet", repo_remote(cfg), f"+{pr_ref}:{ref}", base])
+    return ref
+
+
 def _ensure_worktree(cfg: Config, number: int, base: str) -> tuple[Path, str, str]:
-    clone, ref, remote = str(cfg.clone), f"refs/remotes/readthrough/pr-{number}", repo_remote(cfg)
-    run(["git", "-C", clone, "fetch", "--quiet", remote, f"+{forges.make(cfg).pr_ref(number)}:{ref}", base])
+    clone, ref = _clone(cfg), _fetch(cfg, number, base)
     path = worktree_path(cfg, number)
     if (path / ".git").exists() and not _worktree_attached(clone, path):
         # The clone or the data directory moved since this was made, so its `.git` file points nowhere.
@@ -382,8 +415,7 @@ def _ensure_worktree(cfg: Config, number: int, base: str) -> tuple[Path, str, st
         path.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "-C", clone, "worktree", "add", "--quiet", "--detach", str(path), ref])
     head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
-    merge_base = run(["git", "-C", clone, "merge-base", ref, f"{remote}/{base}"]).strip()
-    return path, merge_base, head
+    return path, merge_base(cfg, head, base), head
 
 
 def _worktree_attached(clone: str, path: Path) -> bool:
@@ -402,4 +434,7 @@ def remove_worktree(cfg: Config, number: int) -> bool:
         return False
     run(["git", "-C", str(cfg.clone), "worktree", "remove", "--force", str(path)])
     run(["git", "-C", str(cfg.clone), "update-ref", "-d", f"refs/remotes/readthrough/pr-{number}"], check=False)
+    kept = run(["git", "-C", str(cfg.clone), "for-each-ref", "--format=%(refname)", f"{STUDIED_REFS}pr-{number}/"])
+    for ref in kept.split():
+        run(["git", "-C", str(cfg.clone), "update-ref", "-d", ref], check=False)
     return True

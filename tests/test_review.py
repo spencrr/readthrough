@@ -289,3 +289,19 @@ def test_ensure_worktree_replaces_one_whose_clone_moved(tmp_path: Path, monkeypa
     calls.clear()
     review.ensure_worktree(cfg, 7)
     assert [c[3] for c in calls] == ["fetch", "worktree", "rev-parse", "checkout", "rev-parse", "merge-base"]
+
+
+def test_a_worktree_takes_the_commits_kept_for_its_study_log_with_it(tmp_path: Path, monkeypatch):
+    """A study turn keeps the commit it read reachable past a force-push; removing the worktree lets them go."""
+    cfg = _cfg(tmp_path, clone=tmp_path / "clone")
+    review.worktree_path(cfg, 7).mkdir(parents=True)
+    kept, calls = f"refs/readthrough/studied/pr-7/{'a' * 40}", []
+
+    def fake_run(cmd: list[str], *, check: bool = True, **_kw) -> str:
+        calls.append(cmd[3:])
+        return kept + "\n" if cmd[3] == "for-each-ref" else ""
+
+    monkeypatch.setattr(review, "run", fake_run)
+    review.keep_commit(cfg, 7, "a" * 40)
+    assert review.remove_worktree(cfg, 7)
+    assert calls[0] == ["update-ref", kept, "a" * 40] and calls[-1] == ["update-ref", "-d", kept]

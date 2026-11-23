@@ -308,6 +308,22 @@ def fake_runtime(monkeypatch: pytest.MonkeyPatch) -> FakeRuntime:
     return runtime
 
 
+A, B = "a" * 40, "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def clone(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The clone, at the process boundary of `review`: fetching the PR gives `fetched`, and the clone has the
+    commits in `have`. What the assistant keeps reachable lands in `kept`."""
+    state: dict[str, Any] = {"fetched": A, "have": {A}, "kept": []}
+    monkeypatch.setattr(assistants.review, "fetch_pr", lambda cfg, number, base: state["fetched"])
+    monkeypatch.setattr(assistants.review, "has_commit", lambda cfg, sha: sha in state["have"])
+    monkeypatch.setattr(assistants.review, "merge_base", lambda cfg, sha, base: "base")
+    monkeypatch.setattr(assistants.review, "keep_commit", lambda cfg, number, sha: state["kept"].append(sha))
+    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
+    return state
+
+
 def _usage(**kw: Any) -> runtimes.Usage:
     base: dict[str, Any] = {
         "call_id": "call-1",
@@ -327,7 +343,6 @@ def test_system_message_adds_guidance_only_when_present():
 
 
 def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runtime, monkeypatch):
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     fake_runtime.script = [runtimes.Text("  A reply  "), runtimes.Done("")]
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "original prompt", None, "original prompt")))
@@ -346,7 +361,6 @@ def test_a_fresh_conversation_gets_the_brief_then_the_prompt(harness, fake_runti
 
 
 def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, monkeypatch):
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     fake_runtime.script = [
         runtimes.Text("Lead-in"),
         ("call", "ask_quiz_question", {"question": "Why?", "focus": "intent", "expected_points": ["x"]}),
@@ -361,7 +375,6 @@ def test_streaming_text_tool_calls_and_the_quiz_lead_in(harness, fake_runtime, m
 
 
 def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkeypatch):
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     fake_runtime.script = [runtimes.Failed("boom")]
     assistant = ModelAssistant(harness, None)
     with pytest.raises(RuntimeError, match="boom"):
@@ -384,7 +397,6 @@ def test_runtime_errors_and_timeouts_fail_the_turn(harness, fake_runtime, monkey
 def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
     """Each usage event is one ledger line in the provider's own units, idempotent by call id, billed to whoever
     the runtime says; GitHub Copilot's lines name the dashboard's viewer."""
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     harness.cfg.data_path.parent.mkdir(parents=True, exist_ok=True)
     harness.cfg.data_path.write_text('{"viewer": "spencrr"}', encoding="utf-8")
     copilot_call = _usage(call_id="call-1", model="gpt-5", input_tokens=1200, output_tokens=300, cache_read_tokens=800,
@@ -423,7 +435,6 @@ def test_usage_events_become_ledger_lines(harness, fake_runtime, monkeypatch):
 def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkeypatch):
     """The runtime reports the model with each call; what the assistant writes afterwards carries it and the
     runtime, and the brief says which model graded, through what, from the entries alone."""
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     study.append(harness.cfg, 7, "question", by="model", question="Why?")
     study.append(harness.cfg, 7, "answer", by="you", qid="Q1", text="Because.")
     fake_runtime.script = [
@@ -445,26 +456,31 @@ def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkey
     assert study.graders([]) == "nobody"
 
 
-def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkeypatch):
-    worktree = tmp_path / "worktree"
-    (worktree / "src").mkdir(parents=True)
-    (worktree / "src" / "a.py").write_text("\n".join(f"line {i}" for i in range(1, 11)), encoding="utf-8")
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (worktree, "base", None))
+def test_tool_handlers_read_search_truncate_and_append(harness, monkeypatch):
     monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
     calls = []
 
-    def fake_run(cmd, *, check=True, **kw):
-        calls.append(cmd)
-        return "x" * 100 if "diff" in cmd else "src/a.py:1:line 1\n"
+    def fake_git(cmd, *, check=True, **kw):
+        calls.append(cmd[3:])
+        match cmd[3:5]:
+            case ["diff", _]:
+                return "x" * 100
+            case ["cat-file", "-t"]:
+                return "blob\n" if cmd[-1] == f"{A}:src/a.py" else ""
+            case ["cat-file", "blob"]:
+                return "\n".join(f"line {i}" for i in range(1, 11))
+            case _:
+                return f"{A}:src/a.py:1:line 1\n"
 
-    monkeypatch.setattr(assistants, "run", fake_run)
+    monkeypatch.setattr(assistants, "run", fake_git)
     assistant = ModelAssistant(harness, None)
+    assistant._reading[7] = (A, "base")
     tools = {t.name: t for t in assistant._tools(7)}
 
     diff = asyncio.run(tools["get_diff"].handler({"path": "src/a.py"}))
     assert diff.startswith("x" * 32) and "truncated 68 characters" in diff
-    assert calls[-1][-3:] == ["base..HEAD", "--", "src/a.py"]
-    with pytest.raises(ValueError, match="outside the PR checkout"):
+    assert calls[-1] == ["diff", "base", A, "--", "src/a.py"]
+    with pytest.raises(ValueError, match="inside the repo"):
         asyncio.run(tools["get_diff"].handler({"path": "../escape.py"}))
 
     text = asyncio.run(tools["read_file"].handler({"path": "src/a.py", "start_line": 2, "end_line": 3}))
@@ -472,7 +488,8 @@ def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkey
     assert asyncio.run(tools["read_file"].handler({"path": "nope.py"})).startswith("No such file")
 
     found = asyncio.run(tools["search_code"].handler({"pattern": "line", "path_glob": "src/**"}))
-    assert found.startswith("src/a.py:1:line 1") and calls[-1][-2:] == ["--", "src/**"]
+    assert found == "src/a.py:1:line 1", "the commit git grep prefixes is the tool's business, not the model's"
+    assert calls[-1][-3:] == [A, "--", "src/**"]
 
     asked = asyncio.run(
         tools["ask_quiz_question"].handler({"question": "Why?", "focus": "intent", "expected_points": ["p"]})
@@ -488,32 +505,33 @@ def test_tool_handlers_read_search_truncate_and_append(harness, tmp_path, monkey
     assert tools["ask_quiz_question"].terminal and not tools["assess_answer"].terminal
 
 
-def test_the_worktree_follows_the_pr_head_and_the_current_clone(harness, monkeypatch):
-    """The checkout is made once per head, not once per process: a push to the PR between turns must reach
-    the tools, and a clone configured after a failed first turn must be the one used."""
-    made = []
+def test_a_turn_reads_one_commit_however_the_pr_moves(harness, fake_runtime, clone, monkeypatch):
+    """Every read in a turn is of the commit the turn started on, even when a push lands between two tool calls;
+    the next turn is told the PR moved, and a head the clone lacks is read as the forge has it now."""
+    reads: list[str] = []
 
-    def fake_ensure(cfg, number, base):
-        made.append((cfg.clone, number))
-        return Path(f"wt-{len(made)}"), "base", None
+    def git(cmd, *, check=True, **kw):
+        reads.append(next(arg for arg in cmd if arg.startswith(("a" * 7, "b" * 7, "c" * 7))))
+        harness.items[7]["head"] = clone["fetched"] = B  # a push lands mid-turn
+        return "blob" if cmd[3:5] == ["cat-file", "-t"] else ""
 
-    monkeypatch.setattr(assistants.review, "ensure_worktree", fake_ensure)
-    monkeypatch.setattr(runtimes, "make", lambda name, options=None: FakeRuntime())
+    monkeypatch.setattr(assistants, "run", git)
+    fake_runtime.script = [("call", "get_diff", {}), ("call", "read_file", {"path": "a.py"}), runtimes.Done("")]
     assistant = ModelAssistant(harness, None)
-    harness.items[7]["head"] = "aaa"
-    assert asyncio.run(assistant._worktree(7)) == (Path("wt-1"), "base")
-    assert asyncio.run(assistant._worktree(7)) == (Path("wt-1"), "base"), "same head: no second checkout"
-    harness.items[7]["head"] = "bbb"
-    assert asyncio.run(assistant._worktree(7)) == (Path("wt-2"), "base"), "new head: checked out again"
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x", head=A)))
+    assert reads == [A, f"{A}:a.py", f"{A}:a.py"] and clone["kept"] == [A]
 
-    harness.cfg = replace(harness.cfg, clone=Path("new-clone"))
-    harness.items[7]["head"] = "ccc"
-    asyncio.run(assistant._worktree(7))
-    assert made[-1] == (Path("new-clone"), 7), "the assistant reads the clone through the harness, not a copy"
+    clone["have"].add(B)
+    session = fake_runtime.sessions[next(iter(fake_runtime.sessions))]
+    session.script = []
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "y", None, "y", head=B)))
+    assert session.sent[-1].startswith(f"The PR has new commits since your last turn ({A[:7]} -> {B[:7]})")
+
+    asyncio.run(assistant.turn(Turn(7, Action.CHAT, "z", None, "z", head="c" * 40)))
+    assert assistant._reading[7][0] == B and clone["kept"][-1] == B, "not in the clone: read what was fetched"
 
 
 def test_stop_stops_the_runtime(harness, fake_runtime, monkeypatch):
-    monkeypatch.setattr(assistants.review, "ensure_worktree", lambda cfg, number, base: (Path("wt"), "base", None))
     assistant = ModelAssistant(harness, None)
     asyncio.run(assistant.turn(Turn(7, Action.CHAT, "x", None, "x")))
     asyncio.run(assistant.stop())
