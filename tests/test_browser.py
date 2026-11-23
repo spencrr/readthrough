@@ -82,13 +82,15 @@ def server(tmp_path: Path, monkeypatch, make_pr, fake_forge):
     httpd = DashboardServer([dashboard], 0)
     dashboard.token = httpd.token
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    server_fixture.cfg = cfg  # for tests that write behind the page's back
+    server_fixture.cfg, server_fixture.dashboard = cfg, dashboard  # for tests that write behind the page's back
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
     httpd.server_close()
 
 
-server_fixture = SimpleNamespace(cfg=None)  # what the server fixture built, for the page fixture to hand on
+server_fixture = SimpleNamespace(
+    cfg=None, dashboard=None
+)  # what the server fixture built, for the page fixture to hand on
 
 
 def _seed_study_log(cfg: Config) -> None:
@@ -735,6 +737,32 @@ def _open_study(page, number: int) -> None:
     page.wait_for_selector("body.drawer-open")
     page.click('[data-dtab="study"]')
     page.wait_for_selector(".transcript")
+
+
+def test_new_commits_while_studying_are_announced_and_writing_stays_about_what_you_saw(page):
+    """A build moves the PR's head while the Study tab is open: the page says so, what the learner writes is still
+    about the commit they were reading until they say they've looked, and evidence about it is marked earlier."""
+    _open_study(page, 2)
+    old, new = page.evaluate("byNum[2].head"), "b" * 40
+    assert old and old != new
+    data = json.loads(page.cfg.data_path.read_text(encoding="utf-8"))
+    next(p for p in data["prs"] if p["number"] == 2)["head"] = new
+    page.cfg.data_path.write_text(json.dumps(data), encoding="utf-8")
+    assert server_fixture.dashboard.load()
+    page.evaluate("reloadData()")
+    page.wait_for_selector("#new-commits")
+    assert f"{old[:7]} → {new[:7]}" in page.inner_text("#new-commits")
+
+    page.evaluate("studyPost(2, {kind: 'note', text: 'still on the old one'})")
+    assert study.load(page.cfg, 2)[-1]["head"] == old, "recorded against what was on screen, not the new build"
+    page.wait_for_selector(".tag.earlier")
+    assert "earlier commit " + old[:7] in page.inner_text(".transcript")
+
+    page.click("[data-seen-head]")
+    assert page.query_selector("#new-commits") is None
+    page.evaluate("studyPost(2, {kind: 'note', text: 'looked'})")
+    assert study.load(page.cfg, 2)[-1]["head"] == new
+    assert page.errors == []
 
 
 def test_after_a_gap_the_page_fetches_what_it_holds_again(page, server):

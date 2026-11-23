@@ -38,6 +38,9 @@ const state = {
   drafts: JSON.parse(sessionStorage.getItem(STORE + ":drafts") || "{}"),
 };
 const saveDrafts = () => sessionStorage.setItem(STORE + ":drafts", JSON.stringify(state.drafts));
+// Per PR, the head the learner has looked at: what they write is about it until they say they've seen a newer one.
+const seen = JSON.parse(sessionStorage.getItem(STORE + ":seen") || "{}");
+const saveSeen = () => sessionStorage.setItem(STORE + ":seen", JSON.stringify(seen));
 const study = {};  // pr -> {entries, summary, engine, pending}
 let byNum, comps, LINKS, progress;
 const $ = id => document.getElementById(id);
@@ -167,7 +170,8 @@ const scoreBadge = p => {
   const s = p.study;
   if (!s || !(s.assessed || s.predictions || s.teachback)) return "";
   const q = s.assessed ? `quiz ${s.correct}/${s.assessed}` : "studying";
-  return `<span class="score" title="Study log: ${s.correct} correct, ${s.partial} partial, ${s.incorrect} incorrect; ${s.predictions} predictions; teach-back ${s.teachback || "not yet"}">${q}</span>`;
+  const earlier = s.earlier ? `; ${s.earlier} before the latest commits` : "";
+  return `<span class="score${s.earlier ? " earlier" : ""}" title="Study log: ${s.correct} correct, ${s.partial} partial, ${s.incorrect} incorrect; ${s.predictions} predictions; teach-back ${s.teachback || "not yet"}${earlier}">${q}</span>`;
 };
 function reviewButton(n, cls = "btn small"){
   const resume = byNum[n].session && byNum[n].session.exists;
@@ -680,13 +684,17 @@ function briefTab(n){
 
 // ---- study tab: predictions, Socratic quiz, teach-back, evidence. All of it appends to the study log.
 function loadStudy(n){
-  if (!LIVE || study[n]?.loading) return;
+  if (!LIVE) return;
+  if (study[n]?.loading) { study[n].again = true; return; }  // its answer may predate what asked for this one
   study[n] = {...(study[n] || {}), loading: true};
   api(`/api/study/${n}`, null, "GET").then(r => {
     // The server says whether a turn is running. A reply bubble kept from before the fetch is only kept when it
     // is: a `done` missed during a reconnect would otherwise leave the composer disabled for good.
+    const again = study[n]?.again;
     study[n] = {...r, pending: r.engine.busy ? (study[n]?.pending || {text: "", tools: []}) : null};
     if (byNum[n]) byNum[n].study = r.summary;
+    if (!(n in seen) && r.head) { seen[n] = r.head; saveSeen(); }
+    if (again) return loadStudy(n);
     if (state.sel === n && state.dtab === "study") renderDrawer();
   }).catch(err => { study[n] = {error: err.message}; renderDrawer(); });
 }
@@ -728,8 +736,13 @@ function studyTab(n){
   const pin = e => pinned.has(e.id) ? `<span class="pin on" title="Kept in the brief">${icon("pin", "ico sm")}pinned</span>`
     : `<button class="pin" data-pin="${esc(e.id)}" title="Keep this in the brief's study log">${icon("pin", "ico sm")}pin</button>`;
   const who = author;
+  // Evidence about another commit than the PR's head now says so; it's never hidden or recounted. An entry that
+  // doesn't record its commit gets no chip (one line above the log says so), and a prediction is "before reading"
+  // whatever the commit.
+  const older = e => e?.head && st.head && e.head !== st.head;
+  const chip = e => older(e) ? `<span class="tag earlier" title="Written about ${esc(e.head.slice(0, 7))}; the ${FORGE.pr_noun} is now at ${esc(st.head.slice(0, 7))}">earlier commit ${esc(e.head.slice(0, 7))}</span>` : "";
   const qcard = q => { const a = answers[q.qid], v = assessments[q.qid];
-    return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${esc(v.verdict)}">${esc(v.verdict)}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}</div>
+    return `<div class="qcard ${q === openQ ? "open" : ""}"><div class="qhead"><b>${esc(q.qid)}</b><span>${esc(q.focus || "")}</span>${v ? `<span class="verdict ${esc(v.verdict)}">${esc(v.verdict)}</span>` : q === openQ ? `<span class="tag">answer below</span>` : ""}${chip([a, v].find(older) || (a ? null : q))}</div>
       <div class="md">${mdModel(q.question)}</div>
       ${a ? `<div class="answer md">${mdModel(a.text)}</div>` : ""}
       ${v ? `<div class="md">${mdModel(v.feedback)}</div>${v.evidence?.length ? `<div class="hint">Evidence: ${v.evidence.map(x => `<code>${esc(x)}</code>`).join(" ")}</div>` : ""}` : ""}
@@ -740,22 +753,26 @@ function studyTab(n){
         : `<div class="bubble you"><div class="who-line">You <span class="tag">prediction</span></div><div class="md">${mdModel(e.text)}</div></div>`;
       case "chat":
         if (e.action === "brief") return `<div class="event">${icon("lightbulb", "ico sm")}You asked for a briefing.</div>`;
-        return `<div class="bubble ${esc(e.by)}"><div class="who-line">${who(e)} ${pin(e)}</div><div class="md">${mdModel(e.text)}</div></div>`;
+        return `<div class="bubble ${esc(e.by)}"><div class="who-line">${who(e)} ${pin(e)}${e.by === "you" ? "" : chip(e)}</div><div class="md">${mdModel(e.text)}</div></div>`;
       case "question": return qcard(e);
-      case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span></div><div class="md">${mdModel(e.text)}</div></div>`;
-      case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span></div><div class="md">${mdModel(e.text)}</div></div>`;
-      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${esc(e.verdict)}">${esc(e.verdict)}</span></div><div class="md">${mdModel(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
-      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${mdModel(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span></div>`;
+      case "teachback": return `<div class="bubble you"><div class="who-line">You <span class="tag">teach-back</span>${chip(e)}</div><div class="md">${mdModel(e.text)}</div></div>`;
+      case "reflection": return `<div class="bubble you"><div class="who-line">You <span class="tag">what I missed${e.qid ? ` on ${esc(e.qid)}` : ""}</span>${chip(e)}</div><div class="md">${mdModel(e.text)}</div></div>`;
+      case "teachback_assessment": return `<div class="qcard"><div class="qhead"><b>Teach-back</b><span class="verdict ${esc(e.verdict)}">${esc(e.verdict)}</span>${chip(e)}</div><div class="md">${mdModel(e.feedback)}</div>${e.gaps?.length ? `<ul>${e.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}<div class="who-line">${pin({...e, text: e.feedback})}</div></div>`;
+      case "note": return `<div class="event">${icon("pin", "ico sm")}${e.pinned ? "Pinned" : e.by === "you" ? "Note" : `${esc(e.model || e.runtime || e.by)} added to the brief`}: <span class="md">${mdModel(e.text.length > 160 ? e.text.slice(0, 160) + "…" : e.text)}</span>${chip(e)}</div>`;
       // A failure is named by the runtime, never a model: a model that never answered reached nothing.
       case "failure": return `<div class="event warn">${icon("triangle-alert", "ico sm")}${esc(e.runtime ? `The ${e.runtime} runtime` : e.assistant === "rules" ? "The rules assistant" : "The assistant")} didn't answer: <code>${esc(e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text)}</code></div>`;
-      case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${esc(e.line ?? "?")}</code> ` : ""}${esc(e.summary)} <span class="muted">(${esc(e.by)})</span></div>`;
+      case "finding": return `<div class="event"><span class="flag ${e.severity === "blocker" ? "blocker" : "risk"}">${esc(e.severity)}</span> ${e.path ? `<code>${esc(e.path)}:${esc(e.line ?? "?")}</code>${chip(e)} ` : ""}${esc(e.summary)} <span class="muted">(${esc(e.by)})</span>${e.path ? "" : chip(e)}</div>`;
       default: return "";
     }
   }).join("");
   const pending = st.pending ? `<div class="bubble model" id="pending"><div class="who-line">${engineLabel(st.engine)}</div><div class="md typing" id="pending-text">${mdModel(st.pending.text || "")}</div><div class="tools" id="pending-tools">${pendingTools(st.pending)}</div></div>` : "";
   const step = (label, done, detail) => `<span class="step ${done ? "done" : ""}">${icon(done ? "circle-check" : "circle", "ico sm")}${label}${detail ? ` <span class="muted">${detail}</span>` : ""}</span>`;
   const stepper = `<div class="stepper">${step("Predict", s.predictions || s.prediction_skipped, s.prediction_skipped && !s.predictions ? "skipped" : "")}<span class="line"></span>
-    ${step("Quiz", s.assessed, s.assessed ? `${s.correct}/${s.assessed} correct` : "")}<span class="line"></span>${step("Teach back", s.teachback, s.teachback || "")}</div>`;
+    ${step("Quiz", s.assessed, s.assessed ? `${s.correct}/${s.assessed} correct` : "")}<span class="line"></span>${step("Teach back", s.teachback, s.teachback || "")}${s.earlier ? `<span class="muted">· ${s.earlier} before the latest commits</span>` : ""}</div>`;
+  const was = seen[n], moved = was && st.head && was !== st.head;
+  const newCommits = moved ? `<div class="banner" id="new-commits">New commits since you started (${esc(was.slice(0, 7))} → ${esc(st.head.slice(0, 7))}). What you write now is recorded against ${esc(was.slice(0, 7))} until you've looked.${CANVAS ? "" : ` <button class="btn small" data-seen-head>I've looked at the new commits</button>`}</div>` : "";
+  const firstPinned = entries.find(e => e.head);
+  const unrecorded = st.head && entries.some(e => !e.head) ? `<p class="hint">${firstPinned ? `Entries before ${esc(firstPinned.ts.slice(0, 10))}` : "These entries"} don't record which commit they were about.</p>` : "";
 
   const draft = mode === "answer" ? `answer:${openQ.qid}` : mode === "predict" ? "prediction" : "chat";
   const placeholder = {predict: "Before reading the diff: which components will it touch, what's the riskiest part, and what test would you want to see?",
@@ -775,23 +792,23 @@ function studyTab(n){
       : `Questions and grades come from <b title="${esc(st.engine.describe || "")}">${esc(st.engine.model || `the ${st.engine.runtime} runtime`)}</b>; each reply names the model that wrote it.`) : "";
   // Beside an agent session, that session is the tutor: the log is shown as evidence, and nothing here talks to a
   // second model.
-  if (CANVAS) return `${stepper}
-    ${mode === "predict" ? "" : watchList(p)}
+  if (CANVAS) return `${stepper}${newCommits}
+    ${mode === "predict" ? "" : watchList(p)}${unrecorded}
     <div class="transcript">${timeline || `<p class="hint">Nothing recorded for this ${FORGE.pr_noun} yet.</p>`}</div>
     <p class="hint">This is the study log the deep-review session in the chat writes to; what you say there is recorded here, and the brief carries it. ${icon("sparkles", "ico sm")}marks what a model wrote.</p>`;
   return `${stepper}
     ${ai ? "" : `<div class="banner warn">${esc(st.engine.reason)}</div>`}
-    ${mode === "predict" ? "" : watchList(p)}
+    ${mode === "predict" ? "" : watchList(p)}${unrecorded}
     <div class="transcript">${timeline || `<p class="hint">Write your prediction first: it's the cheapest way to find out what you don't know. Then ask for a question, or for a briefing.</p>`}${pending}</div>
     <p class="hint">Everything here is appended to this PR's study log, which the brief and the terminal deep review read. ${engineNote} ${icon("sparkles", "ico sm")}marks what a model wrote; it can read the PR's code but can't change anything.</p>
-    <div class="composer">
+    ${newCommits}<div class="composer">
       <textarea data-draft="${esc(draft)}" placeholder="${esc(placeholder)}"></textarea>
       <div class="actions">${buttons}<span class="hint">Ctrl+Enter ${mode === "predict" ? "saves" : mode === "answer" ? "submits" : "sends"}</span></div>
     </div>`;
 }
 const pendingTools = pend => pend.tools.length ? "used " + [...new Set(pend.tools)].map(t => `<code>${esc(t)}</code>`).join(", ") : (pend.text ? "" : "thinking…");
 // The commit the learner is looking at, which what they write is recorded against; null when the build has none.
-const shownHead = n => byNum[n]?.head || null;
+const shownHead = n => (n in seen ? seen[n] : byNum[n]?.head) || null;
 async function studyPost(n, body){
   try { await api(`/api/study/${n}`, {...body, head: shownHead(n)}); loadStudy(n); } catch (err) { toast(err.message); }
 }
@@ -869,7 +886,7 @@ document.addEventListener("click", e => {
     menu.open = false;
     if (menu.contains(e.target)) menu.querySelector("summary").focus();
   }
-  const t = e.target.closest("[data-tab],[data-lane],[data-author],[data-ci],[data-clear],[data-open],[data-deep],[data-copy],[data-sort],[data-review],[data-refresh],[data-dtab],[data-ask],[data-study-add],[data-skip-predict],[data-pin],[data-set-status],[data-comp],.chip,#close,#fit,#theme");
+  const t = e.target.closest("[data-tab],[data-lane],[data-author],[data-ci],[data-clear],[data-open],[data-deep],[data-copy],[data-sort],[data-review],[data-refresh],[data-dtab],[data-ask],[data-study-add],[data-skip-predict],[data-seen-head],[data-pin],[data-set-status],[data-comp],.chip,#close,#fit,#theme");
   if (!t) return;
   if (t.id === "close") return closeDrawer();
   if (t.id === "theme") { themePref = THEMES[(THEMES.indexOf(themePref) + 1) % THEMES.length]; localStorage.setItem("readthrough:theme", themePref); return applyTheme(); }
@@ -880,6 +897,7 @@ document.addEventListener("click", e => {
   if (t.dataset.ask) return studyAsk(state.sel, t.dataset.ask, t.dataset.qid);
   if (t.dataset.studyAdd) return studyAdd(state.sel, t.dataset.studyAdd, t.dataset.qid || null);
   if (t.hasAttribute("data-skip-predict")) return studyPost(state.sel, {kind: "prediction", skipped: true});
+  if (t.hasAttribute("data-seen-head")) { seen[state.sel] = study[state.sel]?.head ?? null; saveSeen(); return renderDrawer(); }
   if (t.dataset.pin) { const e = study[state.sel]?.entries.find(x => x.id === +t.dataset.pin); if (e) return studyPost(state.sel, {kind: "note", text: e.text || e.feedback, pinned: e.id}); return; }
   if (t.dataset.tab) { state.tab = t.dataset.tab; return render(); }
   if (t.dataset.lane) return pick("lanes", t.dataset.lane, e);
@@ -965,9 +983,11 @@ async function resync(){
 async function reloadData(announce){
   const resp = await fetch((LIVE.base || "") + "/api/data", {cache: "no-store"});
   if (!resp.ok) return;
-  const before = new Set(DATA.prs.map(p => p.number));
+  const before = new Set(DATA.prs.map(p => p.number)), heads = Object.fromEntries(DATA.prs.map(p => [p.number, p.head]));
   setData(await resp.json());
   for (const k of Object.keys(briefs)) delete briefs[k];
+  // A study log measured against the old head is re-fetched, so its head and summary come from the server.
+  for (const n of Object.keys(study).map(Number)) if (byNum[n] && byNum[n].head !== heads[n]) loadStudy(n);
   render();
   const added = DATA.prs.filter(p => !before.has(p.number)).length;
   if (announce) toast(added ? `Updated: ${added} new PR${added > 1 ? "s" : ""}` : "Updated");

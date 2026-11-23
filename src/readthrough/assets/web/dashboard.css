@@ -73,6 +73,7 @@ main{padding:18px 20px}body.drawer-open main{margin-right:var(--drawer-w,560px)}
 .sess.live{background:var(--ready);animation:pulse 1.6s infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ready) 60%,transparent)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
 .score{font-size:11.5px;padding:0 7px;border-radius:999px;background:var(--subtle);border:1px solid var(--line);color:var(--mut);margin-left:4px}
+.score.earlier,.tag.earlier{border-style:dashed;opacity:.8}
 .cib{display:inline-block;min-width:18px;text-align:center;font-size:12px;font-weight:700;border-radius:999px;padding:0 6px;margin-left:4px;border:1px solid var(--line);color:var(--mut)}
 .cib.failing{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,transparent)}
 .cib.failing-optional,.cib.not-run{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 50%,transparent)}
