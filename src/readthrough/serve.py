@@ -384,10 +384,11 @@ class Dashboard:
         return next((p for p in self.snapshot().get("prs", []) if p["number"] == number), None)
 
     def study_state(self, number: int) -> dict[str, Any]:
-        entries = study.load(self.cfg, number)
+        entries, head = study.load(self.cfg, number), (self.pr_info(number) or {}).get("head") or None
         return {
             "entries": public_entries(entries),
-            "summary": study.summarize(entries, now=(self.pr_info(number) or {}).get("head") or None),
+            "head": head,
+            "summary": study.summarize(entries, now=head),
             "engine": {**self.engine.engine_info(), "busy": self.engine.busy(number)},
         }
 

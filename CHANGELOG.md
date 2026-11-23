@@ -12,6 +12,9 @@
 - The brief's study section and its Handoff line set apart evidence about an earlier commit of the PR, and
   evidence whose commit wasn't recorded, and an earlier finding names its commit beside its `path:line`. The
   counts don't change: earlier evidence is labelled, never hidden.
+- The Study tab says when the PR got new commits while you were studying it, and keeps what you write recorded
+  against the commit you were reading until you say you've looked; evidence about an earlier commit is tagged
+  as such.
 - `readthrough install` keeps a receipt of what it puts on the machine, and the live server, when a new version
   starts it, brings those pieces up to date and removes what that version no longer installs. Only what the same
   installation put there: another checkout's or a tool install's pieces are left alone, and `doctor` says when the

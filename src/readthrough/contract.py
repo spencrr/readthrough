@@ -384,7 +384,8 @@ class EngineInfo(TypedDict):
 class StudyState(TypedDict):
     """``GET /api/study/<n>``."""
 
-    entries: list[dict[str, Any]]  # study log entries, public form (``engine.public_entries``)
+    entries: list[dict[str, Any]]  # study log entries, public form; each may carry ``head`` (absent: not recorded)
+    head: str | None  # the PR's head now, which the summary was measured against; None when unknown
     summary: dict[str, Any]  # StudySummary
     engine: EngineInfo
 
