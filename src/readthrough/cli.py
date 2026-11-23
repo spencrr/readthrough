@@ -273,7 +273,7 @@ def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
     if adds:
         study.refresh_brief(cfg, args.pr)
         return 0
-    appendix = study.render_appendix(study.load(cfg, args.pr))
+    appendix = study.render_appendix(study.load(cfg, args.pr), now=_head_for(cfg, args.pr) or None)
     _say(appendix.replace(study.MARKER, "").strip() if appendix else f"No study log for #{args.pr} yet.")
     return 0
 

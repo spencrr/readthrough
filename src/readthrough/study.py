@@ -30,6 +30,7 @@ import datetime as dt
 import json
 import re
 import threading
+from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from readthrough.limits import MAX_STUDY_TEXT
 MARKER = "<!-- readthrough:study-log -->"
 RESERVED = frozenset({"id", "ts", "kind", "by", "head"})
 COMMIT_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")  # a full SHA-1 or SHA-256 object name
+HEAD_MARKER_RE = re.compile(r"<!-- readthrough:head ([0-9a-f]+) -->")  # in a brief: the head it was written for
 
 
 class Writer(StrEnum):
@@ -107,6 +109,26 @@ KINDS: dict[EntryKind, tuple[set[Writer], tuple[str, ...]]] = {
     EntryKind.FAILURE: ({Writer.TOOL}, ("assistant", "text")),
 }
 GRADES = (EntryKind.ASSESSMENT, EntryKind.TEACHBACK_ASSESSMENT)  # the entries that carry a verdict
+TEACHBACK = "teachback"  # the teach-back's key among the threads, beside the question ids
+
+
+class Currency(StrEnum):
+    """Whether evidence is about the PR's head now. A fact about commits, never a judgement of whether the
+    understanding still holds: earlier evidence is labelled, never hidden or recounted."""
+
+    CURRENT = "current"
+    EARLIER = "earlier"  # at least one part is about another commit
+    UNKNOWN = "unknown"  # a part doesn't record its commit, or the PR's head now isn't known
+
+
+def currency(heads: Iterable[str | None], now: str | None) -> Currency:
+    heads = list(heads)
+    if not now:
+        return Currency.UNKNOWN
+    if any(h and h != now for h in heads):
+        return Currency.EARLIER
+    return Currency.CURRENT if all(heads) else Currency.UNKNOWN
+
 
 _lock = threading.Lock()
 
@@ -225,7 +247,38 @@ def aids_before(entries: list[dict[str, Any]], qid: str) -> list[str]:
     return aids
 
 
-def summarize(entries: list[dict[str, Any]]) -> StudySummary:
+def threads(entries: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The entries each piece of evidence rests on, by question id and ``TEACHBACK``: a question's answer and its
+    latest grade (the question itself while it's open); the latest teach-back with its grade, or the teach-back
+    that grade was about."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for q in (e for e in entries if e["kind"] == EntryKind.QUESTION):
+        answer = next(
+            (e for e in reversed(entries) if e["kind"] == EntryKind.ANSWER and e.get("qid") == q["qid"]), None
+        )
+        grade = next((e for e in reversed(entries) if e["kind"] == EntryKind.ASSESSMENT and e["qid"] == q["qid"]), None)
+        out[q["qid"]] = [e for e in (answer, grade) if e] or [q]
+    written = [e for e in entries if e["kind"] == EntryKind.TEACHBACK]
+    if written:
+        grade = next((e for e in reversed(entries) if e["kind"] == EntryKind.TEACHBACK_ASSESSMENT), None)
+        graded = [e for e in written if grade is None or e["id"] < grade["id"]] or written
+        out[TEACHBACK] = [e for e in (graded[-1], grade) if e]
+    return out
+
+
+def thread_currency(entries: list[dict[str, Any]], now: str | None) -> dict[str, Currency]:
+    return {key: currency((e.get("head") for e in parts), now) for key, parts in threads(entries).items()}
+
+
+def _evidence(entries: list[dict[str, Any]], now: str | None) -> list[Currency]:
+    """The currency of each piece of evidence of understanding: every answered question, and the teach-back."""
+    answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
+    return [c for key, c in thread_currency(entries, now).items() if key in answered or key == TEACHBACK]
+
+
+def summarize(entries: list[dict[str, Any]], *, now: str | None) -> StudySummary:
+    """The log's counts, all-time, measured against ``now`` (the PR's head, None when unknown) only in ``earlier``
+    and ``unpinned``: evidence about another commit, and evidence whose commit isn't recorded."""
     questions = {e["qid"]: e for e in entries if e["kind"] == EntryKind.QUESTION}
     latest_assessment: dict[str, str] = {}
     for e in entries:
@@ -254,6 +307,9 @@ def summarize(entries: list[dict[str, Any]]) -> StudySummary:
         "reflections": sum(e["kind"] == EntryKind.REFLECTION for e in entries),
         "findings": sum(e["kind"] == EntryKind.FINDING for e in entries),
         "notes": sum(e["kind"] == EntryKind.NOTE for e in entries),
+        "head": now,
+        "earlier": _evidence(entries, now).count(Currency.EARLIER),
+        "unpinned": _evidence(entries, now).count(Currency.UNKNOWN),
     }
 
 
@@ -272,40 +328,67 @@ def graders(entries: list[dict[str, Any]]) -> str:
     return who + via
 
 
-def _handoff(entries: list[dict[str, Any]]) -> str:
-    """One line for whoever picks this up next (a deep review): where understanding is solid and where it isn't."""
+def _handoff(entries: list[dict[str, Any]], now: str | None) -> str:
+    """One line for whoever picks this up next (a deep review): where understanding is solid and where it isn't,
+    with what's about an earlier commit, or an unrecorded one, set apart."""
     focus = {e["qid"]: e.get("focus") or "" for e in entries if e["kind"] == EntryKind.QUESTION}
     verdict = {e["qid"]: e["verdict"] for e in entries if e["kind"] == EntryKind.ASSESSMENT}
     answered = {e["qid"] for e in entries if e["kind"] == EntryKind.ANSWER}
-
-    def names(qids: list[str]) -> str:
-        return ", ".join(f"{q} ({focus[q]})" if focus.get(q) else q for q in qids)
-
-    right = [q for q, v in verdict.items() if v == Verdict.CORRECT]
-    shaky = [q for q, v in verdict.items() if v != Verdict.CORRECT]
-    open_ = [q for q in focus if q not in answered]
-    parts = []
-    if right:
-        parts.append(f"solid on {names(right)}")
-    if shaky:
-        parts.append(f"revisit {names(shaky)}")
-    if open_:
-        parts.append(f"unanswered {names(open_)}")
+    parts_of, current = threads(entries), thread_currency(entries, now)
     teach = [e for e in entries if e["kind"] == EntryKind.TEACHBACK_ASSESSMENT]
-    if teach and teach[-1].get("gaps"):
-        parts.append("teach-back gaps: " + "; ".join(teach[-1]["gaps"]))
-    return "; ".join(parts) + "." if parts else ""
+
+    def at(key: str) -> str:
+        older = [e["head"] for e in parts_of.get(key, []) if e.get("head") and e["head"] != now]
+        return f" at {older[0][:7]}" if older else ""
+
+    def line(group: Currency | None) -> str:
+        def names(qids: list[str]) -> str:
+            return ", ".join((f"{q} ({focus[q]})" if focus.get(q) else q) + at(q) for q in qids)
+
+        def keep(key: str) -> bool:
+            return group is None or current.get(key) == group
+
+        right = [q for q, v in verdict.items() if v == Verdict.CORRECT and keep(q)]
+        shaky = [q for q, v in verdict.items() if v != Verdict.CORRECT and keep(q)]
+        open_ = [q for q in focus if q not in answered and keep(q)]
+        parts = []
+        if right:
+            parts.append(f"solid on {names(right)}")
+        if shaky:
+            parts.append(f"revisit {names(shaky)}")
+        if open_:
+            parts.append(f"unanswered {names(open_)}")
+        if teach and teach[-1].get("gaps") and keep(TEACHBACK):
+            parts.append(f"teach-back gaps{at(TEACHBACK)}: " + "; ".join(teach[-1]["gaps"]))
+        return "; ".join(parts) + "." if parts else ""
+
+    if now is None:
+        whole = line(None)
+        return (
+            whole
+            and f"{whole} readthrough couldn't tell which commit the PR is at now, so it can't say whether these still apply."
+        )
+    labels = {Currency.CURRENT: "", Currency.EARLIER: f"Before the latest commits (now {now[:7]}): ",
+              Currency.UNKNOWN: "Commit not recorded: "}  # fmt: skip
+    return " ".join(labels[group] + text for group in Currency if (text := line(group)))
 
 
 def _quote(text: str) -> str:
     return "\n".join("> " + line for line in text.strip().splitlines())
 
 
-def render_appendix(entries: list[dict[str, Any]]) -> str:
-    """Markdown for the end of the brief. Unanswered questions don't show their expected points."""
+def render_appendix(entries: list[dict[str, Any]], *, now: str | None) -> str:
+    """Markdown for the end of the brief. Unanswered questions don't show their expected points. ``now`` is the
+    head the brief was written for: evidence about an earlier commit says so beside it."""
     if not entries:
         return ""
-    s = summarize(entries)
+    s = summarize(entries, now=now)
+    parts_of = threads(entries)
+
+    def earlier(heads: Iterable[str | None]) -> str:
+        older = [h for h in heads if h and now and h != now]
+        return f" _(at {older[0][:7]}, before the latest commits)_" if older else ""
+
     out = [MARKER, "", "## 9. Study log (evidence of understanding)", ""]
     if s["assessed"]:
         score = f"{s['correct']} correct, {s['partial']} partial, {s['incorrect']} incorrect of {s['assessed']} assessed by {graders(entries)}"
@@ -316,7 +399,13 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
         score = "no answers yet"
     teach = s["teachback"] or ("written, not graded" if s["teachbacks"] else "not yet")
     out.append(f"Quiz: {score}. Predictions: {s['predictions']}. Teach-back: {teach}. Findings: {s['findings']}.\n")
-    handoff = _handoff(entries)
+    if now and (s["earlier"] or s["unpinned"]):
+        evidence = len(_evidence(entries, now))
+        out.append(
+            f"Evidence: {evidence - s['earlier'] - s['unpinned']} at the current commit, {s['earlier']} at earlier "
+            f"commits, {s['unpinned']} with no commit recorded.\n"
+        )
+    handoff = _handoff(entries, now)
     if handoff:
         out.append(f"**Handoff:** {handoff}\n")
     if s["briefed"]:
@@ -352,6 +441,7 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
             f"**{q['qid']}.** {q['question'].strip()}"
             + (f" _(refs: {', '.join(q.get('refs') or [])})_" if q.get("refs") else "")
             + (f" _(asked by {q['by']})_" if q["by"] != Writer.MODEL else "")
+            + earlier(e.get("head") for e in parts_of[q["qid"]])
         )
         if q["qid"] in answers:
             a = answers[q["qid"]]
@@ -365,18 +455,24 @@ def render_appendix(entries: list[dict[str, Any]]) -> str:
         out.append("")
     for e in section("Teach-back", (EntryKind.TEACHBACK, EntryKind.TEACHBACK_ASSESSMENT)):
         out.append(
-            _quote(e["text"])
+            _quote(e["text"]) + earlier([e.get("head")])
             if e["kind"] == EntryKind.TEACHBACK
-            else f"**{e['verdict'].capitalize()}.** {e['feedback'].strip()}"
+            else f"**{e['verdict'].capitalize()}.** {e['feedback'].strip()}{earlier([e.get('head')])}"
         )
         out.append("")
     out.extend(f"_What I missed:_ {r['text'].strip()}\n" for r in reflections.get(None, []))
     for e in section("Findings", (EntryKind.FINDING,)):
-        where = f"`{e['path']}:{e.get('line') or '?'}` " if e.get("path") else ""
-        out.append(f"- [{e['severity']}] {where}{e['summary'].strip()} _({e['by']})_")
+        # A line number means nothing without its commit, so an earlier one says so right beside it.
+        where = f"`{e['path']}:{e.get('line') or '?'}`{earlier([e.get('head')])} " if e.get("path") else ""
+        out.append(
+            f"- [{e['severity']}] {where}{e['summary'].strip()} _({e['by']})_"
+            + ("" if where else earlier([e.get("head")]))
+        )
     for e in section("Pinned notes", (EntryKind.NOTE,)):
         who = "pinned from the conversation" if e.get("pinned") else e["by"]
-        out.append(f"- {e['text'].strip()} _({who}{', ' + e['section'] if e.get('section') else ''})_")
+        out.append(
+            f"- {e['text'].strip()} _({who}{', ' + e['section'] if e.get('section') else ''})_{earlier([e.get('head')])}"
+        )
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -386,5 +482,7 @@ def refresh_brief(cfg: Config, number: int) -> None:
     if not path.exists():
         return
     base = path.read_text(encoding="utf-8").split(MARKER, 1)[0].rstrip() + "\n"
-    appendix = render_appendix(load(cfg, number))
+    # The head comes from the brief itself, so the appendix always agrees with the brief it's appended to.
+    marker = HEAD_MARKER_RE.search(base)
+    appendix = render_appendix(load(cfg, number), now=marker.group(1) if marker else None)
     path.write_text(base + ("\n" + appendix if appendix else ""), encoding="utf-8")

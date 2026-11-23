@@ -201,10 +201,10 @@ class StudyEngine:
         """Append to the log, refresh the brief, and tell open pages. Assistants write through here too."""
         entry = study.append(self.cfg, number, kind, by=by, head=head, **fields)
         study.refresh_brief(self.cfg, number)
-        entries = study.load(self.cfg, number)
+        entries, item = study.load(self.cfg, number), self.pr_info(number)
+        summary = study.summarize(entries, now=(item or {}).get("head") or None)
         self.broadcast(
-            "study",
-            {"pr": number, "type": "entry", "entry": public_entry(entry, entries), "summary": study.summarize(entries)},
+            "study", {"pr": number, "type": "entry", "entry": public_entry(entry, entries), "summary": summary}
         )
         return entry
 

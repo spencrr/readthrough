@@ -138,7 +138,7 @@ def test_answers_are_tagged_with_the_aids_that_came_first(cfg):
 
     answers = {e["qid"]: e["aided"] for e in study.load(cfg, 7) if e["kind"] == "answer"}
     assert answers == {"Q1": [], "Q2": ["hint"], "Q3": ["brief"]}
-    summary = study.summarize(study.load(cfg, 7))
+    summary = study.summarize(study.load(cfg, 7), now=None)
     assert (summary["answered"], summary["unaided"], summary["after_hint"], summary["after_brief"]) == (3, 1, 1, 1)
 
 

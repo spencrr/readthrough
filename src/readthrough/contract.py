@@ -134,6 +134,9 @@ class StudySummary(TypedDict):
     reflections: int
     findings: int
     notes: int
+    head: str | None  # the PR's head the evidence was measured against; None when unknown
+    earlier: int  # answered questions and the teach-back whose evidence is about another commit
+    unpinned: int  # the same, where an entry doesn't record its commit (or the head now isn't known)
 
 
 class PullRequestItem(TypedDict):
