@@ -195,32 +195,15 @@ def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
     assert "pinned from the conversation" in study.render_appendix(study.load(cfg, 5))
 
 
-def test_model_tools_refuse_paths_outside_the_worktree(tmp_path: Path):
-    from readthrough.assistants import _safe_rel
+def test_model_tools_read_only_paths_inside_the_repo():
+    """The tools read the commit by tree path, so nothing on disk is followed; what's refused is a path that
+    could only mean somewhere else."""
+    from readthrough.assistants import _repo_path
 
-    (tmp_path / "pkg").mkdir()
-    assert _safe_rel(tmp_path, "pkg/../pkg/x.py") == "pkg/x.py"
-    escapes = ["../secret.txt", "../../x", str(tmp_path.parent / "x")]
-    if sys.platform == "win32":
-        escapes.append("..\\..\\x")  # a separator on Windows; on POSIX a backslash is just a character in a name
-    for bad in escapes:
-        with pytest.raises(ValueError):
-            _safe_rel(tmp_path, bad)
-    # A name that is in the repo's tree can still point elsewhere: the onboarding drafter follows the same rule.
-    if sys.platform != "win32" or _can_symlink(tmp_path):
-        (tmp_path / "pkg" / "link.md").symlink_to(tmp_path.parent / "outside.txt")
-        with pytest.raises(ValueError):
-            _safe_rel(tmp_path, "pkg/link.md")
-
-
-def _can_symlink(where: Path) -> bool:
-    probe = where / "probe-link"
-    try:
-        probe.symlink_to(where)
-    except OSError:  # Windows without developer mode or privilege
-        return False
-    probe.unlink()
-    return True
+    assert _repo_path("pkg/x.py") == "pkg/x.py" and _repo_path("pkg\\x.py") == "pkg/x.py"
+    for bad in ["../secret.txt", "pkg/../../x", "/etc/passwd", "C:/x", "C:\\x", "\\\\server\\share\\x", ""]:
+        with pytest.raises(ValueError, match="inside the repo"):
+            _repo_path(bad)
 
 
 def test_study_session_id_is_stable_and_distinct_from_review(tmp_path: Path):

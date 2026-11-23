@@ -144,7 +144,8 @@ class StudyEngine:
             action = Action(action)
         except ValueError:
             raise ValueError(f"action must be one of {', '.join(Action)}") from None
-        if self.pr_info(number) is None:
+        item = self.pr_info(number)
+        if item is None:
             raise ValueError(f"#{number} isn't an open PR in the current data")
         # Handler threads call this concurrently (a double-click, two tabs), so claiming the PR must be atomic.
         with self._busy_lock:
@@ -153,7 +154,7 @@ class StudyEngine:
             prompt = self._record_and_prompt(number, action, text.strip(), qid)
             self._busy.add(number)
         self.broadcast("study", {"pr": number, "type": "start", "action": action, "assistant": resolved.name})
-        turn = assistants.Turn(number, action, text.strip(), qid, prompt)
+        turn = assistants.Turn(number, action, text.strip(), qid, prompt, head=item["head"] or None)
         asyncio.run_coroutine_threadsafe(self._turn(turn), self._ensure_loop())
 
     def _record_and_prompt(self, number: int, action: Action, text: str, qid: str | None) -> str:

@@ -46,7 +46,7 @@ class RecordingAssistant:
 
 def _engine(cfg, events=None, assistant=None, pr_info=None) -> StudyEngine:
     engine = StudyEngine(cfg, (lambda e, d: events.append((e, d))) if events is not None else (lambda _e, _d: None),
-                         pr_info or (lambda n: cast("PullRequestItem", {"number": n, "title": "A title"})))  # fmt: skip
+                         pr_info or (lambda n: cast("PullRequestItem", {"number": n, "title": "A title", "head": ""})))  # fmt: skip
     if assistant is not None:
         assistant.harness = engine
         engine._assistant = assistant
@@ -55,7 +55,9 @@ def _engine(cfg, events=None, assistant=None, pr_info=None) -> StudyEngine:
 
 def test_submit_validates_inputs_and_schedules_a_turn(cfg, monkeypatch: pytest.MonkeyPatch):
     events = []
-    engine = _engine(cfg, events, RecordingAssistant(), pr_info=lambda n: {"number": n} if n == 7 else None)
+    engine = _engine(
+        cfg, events, RecordingAssistant(), pr_info=lambda n: {"number": n, "head": "abc"} if n == 7 else None
+    )
     scheduled = []
 
     def fake_run_coroutine_threadsafe(coro, loop):
@@ -71,7 +73,10 @@ def test_submit_validates_inputs_and_schedules_a_turn(cfg, monkeypatch: pytest.M
     with pytest.raises(ValueError, match="open PR"):
         engine.submit(8, "quiz")
 
+    turns = []
+    monkeypatch.setattr(engine, "_turn", lambda turn: turns.append(turn) or asyncio.sleep(0))
     engine.submit(7, "quiz", "Focus on tests")
+    assert turns[0].head == "abc", "the turn is about the head the data showed when it was asked for"
     assert 7 in engine._busy
     assert scheduled and scheduled[0][1] == "loop"
     assert events[-1] == ("study", {"pr": 7, "type": "start", "action": "quiz", "assistant": "rules"})
@@ -230,7 +235,7 @@ def test_submit_claims_a_pr_atomically(cfg, monkeypatch: pytest.MonkeyPatch):
     """Two handler threads (a double-click, two tabs) must not both start a turn on one PR."""
     import threading
 
-    engine = _engine(cfg, [], RecordingAssistant(), pr_info=lambda n: {"number": n})
+    engine = _engine(cfg, [], RecordingAssistant(), pr_info=lambda n: {"number": n, "head": ""})
     monkeypatch.setattr(engine_mod.asyncio, "run_coroutine_threadsafe", lambda coro, loop: coro.close())
     monkeypatch.setattr(engine, "_ensure_loop", lambda: None)
     gate = threading.Barrier(2)

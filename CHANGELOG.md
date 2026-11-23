@@ -14,6 +14,9 @@
 
 ### Fixed
 
+- The study assistant could read two versions of a PR in one turn: each tool call checked out whatever head the
+  latest build had, in the worktree a deep review also uses. A turn now reads one commit throughout, by commit
+  rather than checkout, and is told when the PR moved since its last turn.
 - On Windows, `install` registered the server and the link handler through a `pythonw.exe` that a uv before 0.13
   had made a console program, so a terminal window opened at every logon and every link click. It now refuses,
   and says how to recreate the environment.

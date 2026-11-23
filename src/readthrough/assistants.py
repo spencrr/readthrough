@@ -29,13 +29,12 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Protocol, assert_never
 
 from readthrough import forges, review, runtimes, study, usage
 from readthrough.config import AUTO, Config
 from readthrough.contract import Action, PullRequestItem, Smell
-from readthrough.files import inside
 from readthrough.limits import MAX_SEARCH_OUTPUT
 from readthrough.process import run
 from readthrough.profile import Profile, ProfileError, resolve_profile
@@ -85,6 +84,7 @@ class Turn:
     text: str
     qid: str | None
     prompt: str  # what to say to a model, if there is one
+    head: str | None = None  # the PR's head in the data when the turn was asked for; None when unknown
 
 
 class Assistant(Protocol):
@@ -438,7 +438,7 @@ class ModelAssistant:
         self.h = harness
         self.runtime: runtimes.Runtime = runtimes.make(harness.cfg.runtime, harness.cfg.runtime_options)
         self._sessions: dict[int, runtimes.Session] = {}
-        self._worktrees: dict[int, tuple[str, Path, str]] = {}  # per PR: (head it was made for, path, merge base)
+        self._reading: dict[int, tuple[str, str]] = {}  # per PR: (the commit the current turn reads, its merge base)
         self._model_in_use: dict[int, str] = {}  # per PR, the model the runtime last reported using
         self._pending: dict[int, list[str]] = {}  # per PR, reply text not yet written to the log
 
@@ -452,8 +452,16 @@ class ModelAssistant:
         self._sessions.clear()
 
     async def turn(self, turn: Turn) -> None:
+        before = self._reading.get(turn.number)
+        self._reading[turn.number] = pinned = await asyncio.to_thread(self._pin, turn, before)
         session = await self._session_for(turn.number)
         prompt = turn.prompt
+        # shortcut: remembered per process, so the first turn after a restart isn't told; the log's heads could say
+        if before and before[0] != pinned[0]:
+            prompt = (
+                f"The PR has new commits since your last turn ({before[0][:7]} -> {pinned[0][:7]}). What you read "
+                f"earlier may be out of date; re-read before relying on it.\n\n{prompt}"
+            )
         if session.fresh:
             prompt = self._first_turn_context(turn.number) + "\n\n" + prompt
         text = await self._send(turn.number, session, prompt)
@@ -514,7 +522,12 @@ class ModelAssistant:
     async def _session_for(self, number: int) -> runtimes.Session:
         if number in self._sessions:
             return self._sessions[number]
-        worktree, _ = await self._worktree(number)
+        # Only the runtime's working directory: the tools read commits, and a deep review owns the checkout.
+        worktree = review.worktree_path(self.cfg, number)
+        if not (worktree / ".git").exists():
+            worktree, _, _ = await asyncio.to_thread(
+                review.ensure_worktree, self.cfg, number, base=pr_item(self.h, number)["base"]
+            )
         conversation = runtimes.Conversation(
             key=study_conversation_key(self.cfg, number),
             system=system_message(self.cfg.repo, await self._study_guidance()),
@@ -536,17 +549,20 @@ class ModelAssistant:
         if entry is not None:
             self.h.broadcast("study", {"pr": number, "type": "usage", "entry": entry})
 
-    async def _worktree(self, number: int) -> tuple[Path, str]:
-        """The PR's checkout, moved along when the PR gets a new head between turns so the tools read what the
-        learner sees. Nothing is cached before the clone exists, so a clone added after a failed turn is used."""
-        info = pr_item(self.h, number)
-        head = info["head"]
-        cached = self._worktrees.get(number)
-        if cached is None or cached[0] != head:
-            path, merge_base, _ = await asyncio.to_thread(review.ensure_worktree, self.cfg, number, base=info["base"])
-            self._worktrees[number] = (head, path, merge_base)
-        _, path, merge_base = self._worktrees[number]
-        return path, merge_base
+    def _pin(self, turn: Turn, before: tuple[str, str] | None) -> tuple[str, str]:
+        """The commit every tool call in this turn reads, and its merge base: the head the learner's data showed
+        when the clone has it, else whatever the forge has now. Pinned once, so a push or a deep review moving the
+        worktree mid-turn can't mix two commits into one answer."""
+        if before and turn.head == before[0]:
+            return before
+        base = pr_item(self.h, turn.number)["base"]
+        fetched = review.fetch_pr(self.cfg, turn.number, base=base)
+        sha = turn.head if turn.head and review.has_commit(self.cfg, turn.head) else fetched
+        review.keep_commit(self.cfg, turn.number, sha)
+        return sha, review.merge_base(self.cfg, sha, base)
+
+    def _git(self, *args: str) -> list[str]:
+        return ["git", "-C", str(self.cfg.clone), *args]
 
     async def _study_guidance(self) -> str:
         profile = await asyncio.to_thread(repo_profile, self.cfg)
@@ -557,8 +573,8 @@ class ModelAssistant:
         brief = self.cfg.briefs_dir / f"pr-{number}.md"
         brief_text = brief.read_text(encoding="utf-8") if brief.exists() else "(no brief yet)"
         return (
-            f"We're studying {self.cfg.repo}#{number}: {info['title']}. The PR is checked out in your "
-            "working directory. Here is its study brief (architecture contracts, reading order, signals, "
+            f"We're studying {self.cfg.repo}#{number}: {info['title']}. Your tools read the PR at commit "
+            f"{self._reading[number][0]}. Here is its study brief (architecture contracts, reading order, signals, "
             f"and any earlier study log):\n\n<brief>\n{brief_text[:40_000]}\n</brief>"
         )
 
@@ -568,29 +584,29 @@ class ModelAssistant:
         limit = self.cfg.tuning.study.max_tool_output_chars
 
         async def get_diff(args: dict[str, Any]) -> str:
-            worktree, merge_base = await self._worktree(number)
-            cmd = ["git", "-C", str(worktree), "diff", f"{merge_base}..HEAD"]
+            sha, merge_base = self._reading[number]
+            cmd = self._git("diff", merge_base, sha)
             if args.get("path"):
-                cmd += ["--", _safe_rel(worktree, args["path"])]
+                cmd += ["--", _repo_path(args["path"])]
             return _clip(await asyncio.to_thread(run, cmd, check=False), limit=limit)
 
         async def read_file(args: dict[str, Any]) -> str:
-            worktree, _ = await self._worktree(number)
-            path = worktree / _safe_rel(worktree, args["path"])
-            if not path.is_file():
+            blob = f"{self._reading[number][0]}:{_repo_path(args['path'])}"
+            if (await asyncio.to_thread(run, self._git("cat-file", "-t", blob), check=False)).strip() != "blob":
                 return f"No such file: {args['path']}"
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = (await asyncio.to_thread(run, self._git("cat-file", "blob", blob))).splitlines()
             start = max(1, int(args.get("start_line") or 1))
             end = min(int(args.get("end_line") or 200), start + 399, len(lines))
             body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(start, end + 1))
             return f"{args['path']} lines {start}-{end} of {len(lines)}\n{body}"
 
         async def search_code(args: dict[str, Any]) -> str:
-            worktree, _ = await self._worktree(number)
-            cmd = ["git", "-C", str(worktree), "grep", "-n", "-I", "-E", "--max-count=50", "-e", args["pattern"]]
+            sha = self._reading[number][0]
+            cmd = self._git("grep", "-n", "-I", "-E", "--max-count=50", "-e", args["pattern"], sha)
             if args.get("path_glob"):
                 cmd += ["--", args["path_glob"]]
             out = await asyncio.to_thread(run, cmd, check=False)
+            out = "\n".join(line.removeprefix(f"{sha}:") for line in out.splitlines())
             return _clip(out, limit=min(MAX_SEARCH_OUTPUT, limit)) or "No matches."
 
         async def ask_quiz_question(args: dict[str, Any]) -> str:
@@ -679,13 +695,13 @@ class ModelAssistant:
         ]  # fmt: skip
 
 
-def _safe_rel(worktree: Path, rel: str) -> str:
-    """Resolve a model-supplied path and refuse anything outside the worktree."""
-    try:
-        target = inside(worktree, rel)
-    except ValueError:
-        raise ValueError(f"{rel} is outside the PR checkout") from None
-    return target.relative_to(worktree.resolve()).as_posix()
+def _repo_path(rel: str) -> str:
+    """A model-supplied path as a path in the commit's tree. Git reads it from the commit, so a symlink comes
+    back as the name it points to and is never followed; what's refused is anything that isn't such a path."""
+    path = PurePosixPath(rel.replace("\\", "/"))
+    if path.is_absolute() or PureWindowsPath(rel).drive or ".." in path.parts or not path.parts:
+        raise ValueError(f"{rel} isn't a path inside the repo")
+    return path.as_posix()
 
 
 def record_usage(cfg: Config, used: runtimes.Usage, *, purpose: str, ref: str, by: str) -> dict[str, Any] | None:
