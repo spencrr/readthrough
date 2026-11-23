@@ -770,9 +770,9 @@ def cmd_doctor(settings: Settings, args: argparse.Namespace) -> int:
     for p in machine:
         if p.name == "server":
             # Whether it's running now matters more than how it was started; a server that isn't is only optional.
-            detail = (f"running at {base_url(settings.port)}" if live else "not running") + (
-                " (starts at logon)" if p.state else ""
-            )
+            # A task that runs another readthrough, or an out-of-date command, is worth saying either way.
+            how = " (starts at logon)" if p.state else (f"; task {p.detail}" if p.detail != "not installed" else "")
+            detail = (f"running at {base_url(settings.port)}" if live else "not running") + how
             check(True if live else None, p.label, detail, p.fix)
         elif p.name == "schedule":
             check(True if p.state else None, p.label, p.detail, p.fix)  # a nudge is a choice, not a problem
