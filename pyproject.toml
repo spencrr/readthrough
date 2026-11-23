@@ -121,6 +121,7 @@ ignore = [
 ]
 # A fake winreg has to spell its functions the way the real one does.
 "tests/test_system.py" = ["N802"]
+"tests/conftest.py" = ["N802"]
 # The fake gh is a program: its output is its stdout.
 "tests/fake_gh.py" = ["T201"]
 # scripts/ and examples/ are standalone programs, not packages; printing is their output. An example plugin
