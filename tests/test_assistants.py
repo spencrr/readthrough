@@ -451,7 +451,7 @@ def test_verdicts_name_the_model_that_reached_them(harness, fake_runtime, monkey
     assert (entries[-2]["model"], entries[-2]["by"], entries[-2]["runtime"], entries[-2]["kind"]) == (
         "gpt-4.1", "model", "fake", "assessment"
     )  # fmt: skip
-    assert "assessed by gpt-4.1 via fake" in study.render_appendix(entries)
+    assert "assessed by gpt-4.1 via fake" in study.render_appendix(entries, now=None)
     assert study.graders([{"kind": "assessment", "by": "model", "runtime": "openai"}]) == (
         "a model not named in the log via openai"
     ), "a runtime that reported no model: say so rather than guess"

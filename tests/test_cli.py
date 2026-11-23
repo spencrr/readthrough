@@ -122,7 +122,8 @@ def test_study_adds_entries_and_shows_the_log(isolated, capsys):
     assert dashboard(isolated, "study", "1") == 0
     out = capsys.readouterr().out
     assert "touches scoring" in out and "swallows errors" in out
-    assert "swallows errors" in (repo_dir(isolated) / "briefs" / "pr-1.md").read_text(encoding="utf-8")
+    brief = (repo_dir(isolated) / "briefs" / "pr-1.md").read_text(encoding="utf-8")
+    assert "swallows errors" in brief and f"<!-- readthrough:head {'a' * 40} -->" in brief
     assert dashboard(isolated, "study", "2") == 0
     assert "No study log for #2" in capsys.readouterr().out
     assert dashboard(isolated, "study", "1", "--note", "x", "--by", "nobody") == 2

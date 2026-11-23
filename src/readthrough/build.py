@@ -427,8 +427,8 @@ def _build(
         it["session"] = review.session_info(cfg, primary, known=known)
         it["sessions"] = review.pr_sessions(cfg, it["number"], primary, known=known)
         log_entries = study.load(cfg, it["number"])
-        it["study"] = study.summarize(log_entries)
-        appendix = study.render_appendix(log_entries)
+        it["study"] = study.summarize(log_entries, now=it["head"] or None)
+        appendix = study.render_appendix(log_entries, now=it["head"] or None)
         brief = result["briefs"][it["number"]]
         if write:
             (cfg.briefs_dir / f"pr-{it['number']}.md").write_text(

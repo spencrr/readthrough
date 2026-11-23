@@ -45,6 +45,8 @@ def build_brief(
         f"idle {int(it['idle_days'])}d · CI **{ci.label(it.get('ci_state'))}** · review **{it['review_decision']}** · est. **{it['minutes']} min**\n"
     )
     w(f"Head SHA: `{it['head']}`\n")
+    if it["head"]:
+        w(f"<!-- readthrough:head {it['head']} -->\n")  # what the study log's evidence is measured against
     if ledger_entry:
         stale = " (new commits since then)" if ledger_entry.get("head") and ledger_entry["head"] != it["head"] else ""
         w(

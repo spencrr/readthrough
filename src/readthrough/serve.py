@@ -356,8 +356,8 @@ class Dashboard:
                 self._study_changed(int(path.stem.split("-")[1]), reload=True)
 
     def _study_changed(self, number: int, *, reload: bool = False) -> StudySummary:
-        summary = study.summarize(study.load(self.cfg, number))
         info = self.pr_info(number)
+        summary = study.summarize(study.load(self.cfg, number), now=(info or {}).get("head") or None)
         if info is not None:
             info["study"] = summary
         if reload:
@@ -387,7 +387,7 @@ class Dashboard:
         entries = study.load(self.cfg, number)
         return {
             "entries": public_entries(entries),
-            "summary": study.summarize(entries),
+            "summary": study.summarize(entries, now=(self.pr_info(number) or {}).get("head") or None),
             "engine": {**self.engine.engine_info(), "busy": self.engine.busy(number)},
         }
 

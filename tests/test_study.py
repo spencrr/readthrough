@@ -120,7 +120,7 @@ def test_older_logs_read_as_the_model_without_a_guessed_runtime(cfg):
     assert not any("runtime" in e for e in entries), "no runtime was recorded, so none is claimed"
     assert entries[-1]["assistant"] == "model"
     assert study.graders(entries) == "claude-sonnet-5"
-    assert "assessed by claude-sonnet-5." in study.render_appendix(entries)
+    assert "assessed by claude-sonnet-5." in study.render_appendix(entries, now=None)
     assert '"by": "copilot"' in path.read_text(encoding="utf-8"), "the log is append-only; reading normalizes"
     with pytest.raises(ValueError, match="can't write"):
         study.append(cfg, 5, "chat", by="copilot", head=None, role="assistant", text="x")
@@ -136,10 +136,10 @@ def test_rules_mode_log_counts_answers_without_grading_them(cfg):
     study.append(cfg, 5, "reflection", by="you", head=None, text="Missed the migration.")
 
     entries = study.load(cfg, 5)
-    s = study.summarize(entries)
+    s = study.summarize(entries, now=None)
     assert (s["answered"], s["unaided"], s["after_hint"], s["assessed"], s["score"]) == (1, 0, 1, 0, None)
     assert (s["teachbacks"], s["teachback"], s["reflections"]) == (1, None, 2)
-    appendix = study.render_appendix(entries)
+    appendix = study.render_appendix(entries, now=None)
     assert "Quiz: 1 answered, not graded (1 after a hint or briefing)" in appendix
     assert "Teach-back: written, not graded" in appendix
     assert "_(asked by rules)_" in appendix and "_(after a hint)_" in appendix
@@ -167,11 +167,11 @@ def test_question_ids_summary_and_appendix(cfg):
     study.append(cfg, 5, "assessment", by="model", head=None, qid="Q1", verdict="correct", feedback="Now yes.")
 
     entries = study.load(cfg, 5)
-    s = study.summarize(entries)
+    s = study.summarize(entries, now=None)
     assert (s["questions"], s["answered"], s["assessed"], s["correct"], s["partial"]) == (2, 1, 1, 1, 0)
     assert s["score"] == 1.0 and s["predictions"] == 1
 
-    appendix = study.render_appendix(entries)
+    appendix = study.render_appendix(entries, now=None)
     assert appendix.startswith(study.MARKER)
     assert "secret" not in appendix and "hidden" not in appendix
     assert "**Correct.** Now yes." in appendix
@@ -216,13 +216,13 @@ def test_briefing_and_skipped_prediction_are_on_the_record(cfg):
     q = study.append(cfg, 5, "question", by="model", head=None, question="Why?")
     study.append(cfg, 5, "answer", by="you", head=None, qid=q["qid"], text="Because.")
     entries = study.load(cfg, 5)
-    s = study.summarize(entries)
+    s = study.summarize(entries, now=None)
     assert (s["predictions"], s["prediction_skipped"], s["briefed"]) == (0, True, True)
-    appendix = study.render_appendix(entries)
+    appendix = study.render_appendix(entries, now=None)
     assert "_skipped_" in appendix
     assert "briefing before answering any quiz question" in appendix
     study.append(cfg, 5, "note", by="you", head=None, text="Worth remembering", pinned=3)
-    assert "pinned from the conversation" in study.render_appendix(study.load(cfg, 5))
+    assert "pinned from the conversation" in study.render_appendix(study.load(cfg, 5), now=None)
 
 
 def test_model_tools_read_only_paths_inside_the_repo():
@@ -266,14 +266,60 @@ def test_author_kind_overrides():
 
 
 def test_handoff_line_says_where_understanding_is_solid(cfg):
-    q1 = study.append(cfg, 6, "question", by="model", head=None, question="Why?", focus="intent")
-    q2 = study.append(cfg, 6, "question", by="model", head=None, question="Who owns it?", focus="responsibility")
-    study.append(cfg, 6, "question", by="model", head=None, question="Tests?", focus="tests")
+    a = "a" * 40
+    q1 = study.append(cfg, 6, "question", by="model", head=a, question="Why?", focus="intent")
+    q2 = study.append(cfg, 6, "question", by="model", head=a, question="Who owns it?", focus="responsibility")
+    study.append(cfg, 6, "question", by="model", head=a, question="Tests?", focus="tests")
     for q, v in ((q1, "correct"), (q2, "incorrect")):
-        study.append(cfg, 6, "answer", by="you", head=None, qid=q["qid"], text="...")
-        study.append(cfg, 6, "assessment", by="model", head=None, qid=q["qid"], verdict=v, feedback="f")
-    appendix = study.render_appendix(study.load(cfg, 6))
-    assert "**Handoff:** solid on Q1 (intent); revisit Q2 (responsibility); unanswered Q3 (tests)." in appendix
+        study.append(cfg, 6, "answer", by="you", head=a, qid=q["qid"], text="...")
+        study.append(cfg, 6, "assessment", by="model", head=a, qid=q["qid"], verdict=v, feedback="f")
+    appendix = study.render_appendix(study.load(cfg, 6), now=a)
+    assert "**Handoff:** solid on Q1 (intent); revisit Q2 (responsibility); unanswered Q3 (tests).\n" in appendix
+    assert "Evidence:" not in appendix and "before the latest commits" not in appendix, "all current: nothing added"
+
+
+def test_evidence_about_an_earlier_commit_says_so(cfg):
+    """Q1 was answered correctly at A and the PR is now at B. The Handoff must not open with "solid on Q1", and a
+    finding's line number says which commit it's in. Counts stay all-time, with the currency beside them."""
+    a, b = "a" * 40, "b" * 40
+    study.append(cfg, 6, "question", by="model", head=a, question="Why?", focus="control-flow")
+    study.append(cfg, 6, "answer", by="you", head=a, qid="Q1", text="...")
+    study.append(cfg, 6, "assessment", by="model", head=a, qid="Q1", verdict="correct", feedback="f")
+    study.append(cfg, 6, "question", by="model", head=b, question="And now?", focus="intent")
+    study.append(cfg, 6, "answer", by="you", head=b, qid="Q2", text="...")
+    study.append(cfg, 6, "assessment", by="model", head=b, qid="Q2", verdict="partial", feedback="f")
+    study.append(cfg, 6, "question", by="rules", head=None, question="Asked before heads were recorded?")
+    study.append(cfg, 6, "finding", by="you", head=a, severity="major", summary="leaks", path="x.py", line=3)
+    entries = study.load(cfg, 6)
+    assert study._handoff(entries, b) == (
+        "revisit Q2 (intent). Before the latest commits (now bbbbbbb): solid on Q1 (control-flow) at aaaaaaa. "
+        "Commit not recorded: unanswered Q3."
+    )
+    assert study._handoff(entries, None).endswith("so it can't say whether these still apply.")
+
+    s = study.summarize(entries, now=b)
+    assert (s["answered"], s["correct"], s["head"], s["earlier"], s["unpinned"]) == (2, 1, b, 1, 0)
+    appendix = study.render_appendix(entries, now=b)
+    assert "Evidence: 1 at the current commit, 1 at earlier commits, 0 with no commit recorded." in appendix
+    assert "**Q1.** Why? _(at aaaaaaa, before the latest commits)_" in appendix
+    assert "`x.py:3` _(at aaaaaaa, before the latest commits)_ leaks" in appendix
+    # Answered at one commit and graded at another: earlier, since one old part is enough.
+    assert study.currency([a, b], b) == study.Currency.EARLIER
+    assert (
+        study.currency([b, None], b) == study.Currency.UNKNOWN and study.currency([b], None) == study.Currency.UNKNOWN
+    )
+
+    # The brief says which head it was written for, so its appendix agrees with it with no head passed in.
+    cfg.briefs_dir.mkdir(parents=True, exist_ok=True)
+    brief = cfg.briefs_dir / "pr-6.md"
+    brief.write_text(f"# PR 6\n\nHead SHA: `{b}`\n<!-- readthrough:head {b} -->\n", encoding="utf-8")
+    study.refresh_brief(cfg, 6)
+    assert "`x.py:3` _(at aaaaaaa, before the latest commits)_" in brief.read_text(encoding="utf-8")
+
+    # Answered again after the push, and graded: the answer the brief shows is the one its commit comes from.
+    study.append(cfg, 6, "answer", by="you", head=b, qid="Q1", text="again, after the push")
+    study.append(cfg, 6, "assessment", by="model", head=b, qid="Q1", verdict="correct", feedback="f")
+    assert study.thread_currency(study.load(cfg, 6), b)["Q1"] == study.Currency.CURRENT
 
 
 def test_unresumable_study_session_falls_back_to_a_fresh_one():
