@@ -413,6 +413,10 @@ class Forge:
         """The git ref to fetch a PR's head from the remote, e.g. ``pull/12/head``."""
         raise NotImplementedError
 
+    def pr_head(self, ref: str) -> str:
+        """The revision of the PR's own head under the fetched ``pr_ref``, the commit the build calls its head."""
+        return ref
+
     def file_url(self, path: str, branch: str) -> str:
         raise NotImplementedError
 

@@ -366,7 +366,7 @@ def ensure_worktree(cfg: Config, number: int, *, base: str = "main") -> tuple[Pa
 def fetch_pr(cfg: Config, number: int, *, base: str = "main") -> str:
     """Fetch the PR's head and its base branch into the clone, without touching any checkout. Returns the head."""
     with _worktree_lock(worktree_path(cfg, number)):
-        return run(["git", "-C", _clone(cfg), "rev-parse", _fetch(cfg, number, base)]).strip()
+        return run(["git", "-C", _clone(cfg), "rev-parse", forges.make(cfg).pr_head(_fetch(cfg, number, base))]).strip()
 
 
 def has_commit(cfg: Config, sha: str) -> bool:
@@ -414,8 +414,12 @@ def _ensure_worktree(cfg: Config, number: int, base: str) -> tuple[Path, str, st
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "-C", clone, "worktree", "add", "--quiet", "--detach", str(path), ref])
-    head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
-    return path, merge_base(cfg, head, base), head
+    checkout = run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
+    # The diff is the checkout's; the head reported is the PR's own, which on a forge that publishes only a merge
+    # is a parent of the checkout, and is what the build, the brief, and the study log call its head.
+    pr_head = forges.make(cfg).pr_head(ref)
+    head = checkout if pr_head == ref else run(["git", "-C", clone, "rev-parse", pr_head]).strip()
+    return path, merge_base(cfg, checkout, base), head
 
 
 def _worktree_attached(clone: str, path: Path) -> bool:

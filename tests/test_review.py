@@ -290,6 +290,13 @@ def test_ensure_worktree_replaces_one_whose_clone_moved(tmp_path: Path, monkeypa
     review.ensure_worktree(cfg, 7)
     assert [c[3] for c in calls] == ["fetch", "worktree", "rev-parse", "checkout", "rev-parse", "merge-base"]
 
+    # A forge that publishes only the merge: the diff is the checkout's, the head reported is the PR's own.
+    monkeypatch.setattr(fake_forge, "pr_head", lambda self, ref: f"{ref}^2")
+    calls.clear()
+    review.ensure_worktree(cfg, 7)
+    assert ["rev-parse", "refs/remotes/readthrough/pr-7^2"] in [c[3:] for c in calls]
+    assert next(c for c in calls if c[3] == "merge-base")[4] == "deadbeef", "measured from the checkout"
+
 
 def test_a_worktree_takes_the_commits_kept_for_its_study_log_with_it(tmp_path: Path, monkeypatch):
     """A study turn keeps the commit it read reachable past a force-push; removing the worktree lets them go."""

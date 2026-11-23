@@ -30,6 +30,9 @@
 
 ### Fixed
 
+- On Azure DevOps, `readthrough worktree` reported the synthetic merge commit as the PR's head, so the review
+  skill told you the PR had moved when it hadn't, and what it recorded read as about an earlier commit. It now
+  reports the PR's own head, the merge's second parent; the checkout and its diff are unchanged.
 - The study assistant could read two versions of a PR in one turn: each tool call checked out whatever head the
   latest build had, in the worktree a deep review also uses. A turn now reads one commit throughout, by commit
   rather than checkout, and is told when the PR moved since its last turn.

@@ -260,6 +260,9 @@ class AzureDevOps(Forge):
     def pr_ref(self, number: int) -> str:
         return f"pull/{number}/merge"
 
+    def pr_head(self, ref: str) -> str:
+        return f"{ref}^2"  # only the merge is published; its parents are (target, source), seen on a public repo
+
     def file_url(self, path: str, branch: str) -> str:
         return f"{self.web_url()}?path={quote('/' + path)}&version=GB{quote(branch)}"
 
