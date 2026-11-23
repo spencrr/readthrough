@@ -8,16 +8,21 @@ platforms the functions explain what to set up by hand.
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
+import itertools
 import json
+import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from readthrough import __version__, agents
-from readthrough.files import write_atomic
+from readthrough.files import locked, write_atomic
 from readthrough.review import URL_SCHEME
 
 if sys.platform == "win32":
@@ -118,10 +123,23 @@ def registered_protocol_command() -> str | None:
 
 
 def uninstall_protocol() -> bool:
-    if sys.platform != "win32" or registered_protocol_command() is None:
+    return _delete_key(PROTOCOL_KEY)
+
+
+def _delete_key(path: str) -> bool:
+    """Delete an HKCU key and everything under it; False when there was none."""
+    if sys.platform != "win32":
         return False
-    for sub in (r"\shell\open\command", r"\shell\open", r"\shell", ""):
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, PROTOCOL_KEY + sub)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            children: list[str] = []
+            with contextlib.suppress(OSError):  # EnumKey raises once there are no more
+                children.extend(winreg.EnumKey(key, i) for i in itertools.count())
+    except OSError:
+        return False
+    for child in children:
+        _delete_key(f"{path}\\{child}")
+    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
     return True
 
 
@@ -135,6 +153,8 @@ class ScheduleStatus:
     next_run: str = ""
     last_run: str = ""
     last_result: str = ""
+    execute: str = ""  # the program the task runs, which says whose readthrough it is
+    arguments: str = ""
 
 
 def _powershell(script: str) -> subprocess.CompletedProcess[str]:
@@ -221,13 +241,13 @@ def schedule_status(name: str = TASK_NAME) -> ScheduleStatus:
 $t = Get-ScheduledTask -TaskName {_ps_quote(name)} -ErrorAction SilentlyContinue
 if (-not $t) {{ exit 3 }}
 $i = $t | Get-ScheduledTaskInfo
-"$($t.State)|$($i.NextRunTime)|$($i.LastRunTime)|$($i.LastTaskResult)"
+"$($t.State)|$($i.NextRunTime)|$($i.LastRunTime)|$($i.LastTaskResult)|$($t.Actions[0].Execute)|$($t.Actions[0].Arguments)"
 """
     result = _powershell(script)
     if result.returncode != 0:
         return ScheduleStatus(installed=False)
-    state, next_run, last_run, last_result = [*result.stdout.strip().split("|"), "", "", "", ""][:4]
-    return ScheduleStatus(True, state, next_run, last_run, last_result)
+    fields = [*result.stdout.strip().split("|", 5), *[""] * 6][:6]  # the arguments come last: they may hold a "|"
+    return ScheduleStatus(True, *fields)
 
 
 def run_schedule_now() -> None:
@@ -309,11 +329,16 @@ def pieces(agent: str, agent_options: dict[str, Any] | None = None) -> list[Piec
         (registered == handler_command()) if automated else None,
         registered or "not registered", "readthrough install protocol",
     ))  # fmt: skip
-    task = schedule_status(SERVER_TASK_NAME)
+    server = probe(PieceKind.SERVER, dict(load_receipt().get("server", {}).get("args") or {}))
+    if not server.present:
+        server_detail = "not installed"
+    elif not server.ours:
+        server_detail = f"starts at logon, but runs another readthrough: {server.where}"
+    else:
+        server_detail = "starts at logon" + ("" if server.fresh else f"; out of date ({server.where})")
     out.append(Piece(
         "server", "server", "start the live dashboard at logon, so it is always fresh and always up",
-        task.installed if automated else None,
-        "starts at logon" if task.installed else "not installed", "readthrough install server",
+        server.fresh if automated else None, server_detail, "readthrough install server",
     ))  # fmt: skip
     sched = schedule_status()
     out.append(Piece(
@@ -381,4 +406,297 @@ def uninstall_canvas(dest: Path | None = None) -> bool:
         dest.rmdir()
     if left := [p for p in ours if p.exists()]:
         raise OSError(", ".join(str(p) for p in left))
+    return removed
+
+
+# ---------------------------------------------------------------- what was installed, and keeping it current
+#
+# What `install` puts on the machine is derived state: this version, this interpreter, and the options it was
+# given say what each piece should look like. So there are no migrations to run in order. Each install is
+# recorded in a receipt with how to remove it, and `reconcile` brings the machine in line with the running
+# version: it updates what's out of date, removes what an earlier version installed and this one no longer
+# does (from the receipt alone, so no code for a retired piece has to survive it), and forgets what someone
+# removed by hand. The machine is the truth; the receipt only says where to look and how a piece was asked for.
+
+
+class PieceKind(StrEnum):
+    SKILL = "skill"
+    CANVAS = "canvas"
+    PROTOCOL = "protocol"
+    SERVER = "server"
+    SCHEDULE = "schedule"
+
+
+class HandleKind(StrEnum):
+    """What an installed piece left on the machine: what any later version needs in order to remove it."""
+
+    TASK = "task"  # a scheduled task, by name
+    REGISTRY = "registry"  # an HKCU key, with everything under it
+    FILE = "file"  # a file it wrote; its directory goes too once nothing else is in it
+
+
+@dataclass(frozen=True)
+class Handle:
+    kind: HandleKind
+    target: str
+
+
+# What a handle from the receipt may remove. The receipt is a file in the user's home, so it is read as input:
+# only files readthrough writes, keys under Software\Classes, and tasks named for readthrough.
+OUR_FILES = frozenset({"SKILL.md", *CANVAS_FILES, CANVAS_RECORD})
+
+
+@dataclass(frozen=True)
+class Found:
+    """A piece as it is on the machine."""
+
+    present: bool
+    ours: bool = False  # put there by this interpreter, so this install may change or remove it
+    fresh: bool = False  # and as this version, with the options recorded, would put it there
+    where: str = ""  # what it runs or where it is, for doctor
+
+
+def receipt_path() -> Path:
+    """The install receipt. The pieces belong to the OS user, not to whichever home a command names, so it lives in
+    the default home whatever ``--home`` says."""
+    return Path(os.environ.get("READTHROUGH_HOME") or Path.home() / ".readthrough") / "installed.json"
+
+
+def load_receipt() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(receipt_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    entries = data.get("pieces") if isinstance(data, dict) else None
+    return {k: v for k, v in entries.items() if isinstance(v, dict)} if isinstance(entries, dict) else {}
+
+
+def _edit_receipt(change: Callable[[dict[str, dict[str, Any]]], object]) -> None:
+    path = receipt_path()
+    with locked(path):
+        entries = load_receipt()
+        change(entries)
+        write_atomic(path, json.dumps({"schema": 1, "pieces": entries}, indent=1, sort_keys=True) + "\n")
+
+
+def _record(name: str, kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None) -> None:
+    entry = {
+        "kind": kind.value,
+        "args": args,
+        "version": __version__,
+        "interpreter": str(windowless_python()),
+        "recorded": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "handles": [{"kind": h.kind.value, "target": h.target} for h in handles(kind, args, agent_options)],
+    }
+    _edit_receipt(lambda entries: entries.__setitem__(name, entry))
+
+
+def _forget(name: str) -> None:
+    _edit_receipt(lambda entries: entries.pop(name, None))
+
+
+def _recorded_handles(entry: dict[str, Any]) -> list[Handle]:
+    out = []
+    for h in entry.get("handles") or []:
+        try:
+            out.append(Handle(HandleKind(h["kind"]), str(h["target"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _same_program(a: str | Path, b: str | Path) -> bool:
+    # Not resolved: a POSIX venv's python is a symlink to the base interpreter, which every venv shares.
+    return os.path.normcase(Path(a).absolute()) == os.path.normcase(Path(b).absolute())
+
+
+def _skill_file(args: dict[str, Any], agent_options: dict[str, Any] | None) -> Path:
+    dest = Path(args["dest"]) if args.get("dest") else agents.make(args["agent"], agent_options).skill_dir
+    return dest / "SKILL.md"
+
+
+def _canvas_dest(args: dict[str, Any]) -> Path:
+    return Path(args["dest"]) if args.get("dest") else canvas_dir()
+
+
+def _home(args: dict[str, Any]) -> Path | None:
+    return Path(args["home"]) if args.get("home") else None
+
+
+def _task_arguments(kind: PieceKind, args: dict[str, Any]) -> str:
+    command = "serve" if kind == PieceKind.SERVER else f"build --all --open {args.get('open_mode', 'auto')}"
+    return _module_args(_home(args), command)
+
+
+def handles(kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None = None) -> list[Handle]:
+    """Where a piece lives, as this version installs it."""
+    match kind:
+        case PieceKind.SKILL:
+            return [Handle(HandleKind.FILE, str(_skill_file(args, agent_options)))]
+        case PieceKind.CANVAS:
+            dest = _canvas_dest(args)
+            return [Handle(HandleKind.FILE, str(dest / name)) for name in (*CANVAS_FILES, CANVAS_RECORD)]
+        case PieceKind.PROTOCOL:
+            return [Handle(HandleKind.REGISTRY, PROTOCOL_KEY)]
+        case PieceKind.SERVER:
+            return [Handle(HandleKind.TASK, SERVER_TASK_NAME)]
+        case PieceKind.SCHEDULE:
+            return [Handle(HandleKind.TASK, TASK_NAME)]
+        case _:
+            assert_never(kind)
+
+
+def probe(kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None = None) -> Found:
+    """Whether a piece is on the machine, whether this interpreter put it there, and whether it is current."""
+    me = windowless_python()
+    match kind:
+        case PieceKind.SKILL:
+            path = _skill_file(args, agent_options)
+            if not path.exists():
+                return Found(present=False)
+            return Found(True, True, path.read_text(encoding="utf-8") == agents.bundled_skill(), str(path))
+        case PieceKind.CANVAS:
+            record_path = _canvas_dest(args) / CANVAS_RECORD
+            if not record_path.exists():
+                return Found(present=False)
+            try:
+                argv = json.loads(record_path.read_text(encoding="utf-8")).get("argv") or []
+            except (OSError, ValueError, AttributeError):
+                return Found(True, True, False, str(record_path.parent))  # ours by its place; reinstalling fixes it
+            ours = bool(argv) and _same_program(str(argv[0]), sys.executable)
+            return Found(True, ours, ours and canvas_state(record_path.parent)[0] is True, " ".join(map(str, argv)))
+        case PieceKind.PROTOCOL:
+            command = registered_protocol_command()
+            if command is None:
+                return Found(present=False)
+            ours = os.path.normcase(str(me)) in os.path.normcase(command)
+            return Found(True, ours, command == handler_command(), command)
+        case PieceKind.SERVER | PieceKind.SCHEDULE:
+            status = schedule_status(SERVER_TASK_NAME if kind == PieceKind.SERVER else TASK_NAME)
+            if not status.installed:
+                return Found(present=False)
+            ours = bool(status.execute) and _same_program(status.execute, me)
+            fresh = ours and status.arguments == _task_arguments(kind, args)
+            return Found(True, ours, fresh, f"{status.execute} {status.arguments}".strip())
+        case _:
+            assert_never(kind)
+
+
+def _put(kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None) -> str:
+    match kind:
+        case PieceKind.SKILL:
+            path = _skill_file(args, agent_options)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(path, agents.bundled_skill())
+            return str(path.parent)
+        case PieceKind.CANVAS:
+            return str(install_canvas(_canvas_dest(args)))
+        case PieceKind.PROTOCOL:
+            return install_protocol()
+        case PieceKind.SERVER:
+            return install_server_task(home=_home(args))
+        case PieceKind.SCHEDULE:
+            return install_schedule(at=args["at"], days=args["days"], open_mode=args["open_mode"], home=_home(args))
+        case _:
+            assert_never(kind)
+
+
+def _remove(handle: Handle) -> bool:
+    match handle.kind:
+        case HandleKind.TASK:
+            return handle.target.startswith("readthrough") and uninstall_schedule(handle.target)
+        case HandleKind.REGISTRY:
+            return handle.target.startswith("Software\\Classes\\") and _delete_key(handle.target)
+        case HandleKind.FILE:
+            path = Path(handle.target)
+            if path.name not in OUR_FILES or not path.exists():
+                return False
+            path.unlink()
+            with contextlib.suppress(OSError):
+                path.parent.rmdir()  # only if nothing else is in it
+            return True
+        case _:
+            assert_never(handle.kind)
+
+
+def _remove_all(targets: list[Handle]) -> bool:
+    """Remove every one, not up to the first that was there; says whether any was."""
+    results = [_remove(h) for h in dict.fromkeys(targets)]
+    return True in results
+
+
+def install(name: str, kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None = None) -> str:
+    """Put one piece on the machine and record it; returns what it runs, or where it went."""
+    done = _put(kind, args, agent_options)
+    _record(name, kind, args, agent_options)
+    return done
+
+
+def uninstall(name: str, kind: PieceKind, args: dict[str, Any], agent_options: dict[str, Any] | None = None) -> bool:
+    """Remove one piece: what its receipt entry says it left, else where this version would have put it."""
+    entry = load_receipt().get(name)
+    removed = _remove_all((_recorded_handles(entry) if entry else []) or handles(kind, args, agent_options))
+    if entry:
+        _forget(name)
+    return removed
+
+
+def _defaults(agent_options: dict[str, Any] | None) -> dict[str, tuple[PieceKind, dict[str, Any]]]:
+    """Each piece as an install with no options would ask for it: how a piece from before the receipt is found.
+    Not the schedule: when it runs was the user's choice, and only the receipt remembers it."""
+    out = {f"skill:{a.name}": (PieceKind.SKILL, {"agent": a.name}) for a in agents.all_agents(agent_options)}
+    out |= {k.value: (k, {}) for k in (PieceKind.CANVAS, PieceKind.PROTOCOL, PieceKind.SERVER)}
+    return out
+
+
+def reconcile(agent_options: dict[str, Any] | None = None) -> list[str]:
+    """Bring what this install put on the machine in line with this version, and say what changed, a line each.
+
+    Updates what is out of date, removes what an earlier version installed that this one doesn't, forgets what
+    someone removed by hand, and records what an earlier version installed before there was a receipt. It never
+    adds a piece, and never touches one another readthrough installed (another checkout, a tool install): that is
+    for an explicit ``install`` there or here. The skill has no interpreter; whichever readthrough runs last writes it.
+    """
+    me = windowless_python()
+    receipt = load_receipt()
+    changes: list[str] = []
+    wanted: dict[str, tuple[PieceKind, dict[str, Any]]] = {}
+    for name, entry in receipt.items():
+        if not _same_program(str(entry.get("interpreter") or ""), me):
+            continue
+        try:
+            wanted[name] = (PieceKind(entry.get("kind")), dict(entry.get("args") or {}))
+        except ValueError:  # a piece this version doesn't know: retired, and removed by what the receipt says
+            _remove_all(_recorded_handles(entry))
+            _forget(name)
+            changes.append(f"removed {name}, which this version no longer installs")
+    for name, piece in _defaults(agent_options).items():
+        wanted.setdefault(name, piece)
+    for name, (kind, args) in wanted.items():
+        try:
+            found = probe(kind, args, agent_options)
+            if not found.present:
+                if name in receipt:
+                    _forget(name)
+                    changes.append(f"{name} is no longer installed; forgot it")
+            elif not found.ours:
+                continue
+            elif not found.fresh:
+                install(name, kind, args, agent_options)
+                changes.append(f"updated {name} to {__version__}")
+            elif receipt.get(name, {}).get("version") != __version__:
+                _record(name, kind, args, agent_options)
+        except (OSError, RuntimeError, NotImplementedError) as exc:
+            changes.append(f"couldn't update {name}: {exc}")
+    return changes
+
+
+def uninstall_all(agent_options: dict[str, Any] | None = None) -> list[str]:
+    """Remove everything readthrough put on this machine, whichever install put it there: what the receipt lists,
+    and each piece where this version would have put it. Says what was removed."""
+    every = {name: _recorded_handles(entry) for name, entry in load_receipt().items()}
+    for name, (kind, args) in {**_defaults(agent_options), PieceKind.SCHEDULE.value: (PieceKind.SCHEDULE, {})}.items():
+        every.setdefault(name, []).extend(handles(kind, args, agent_options))
+    removed = [name for name, targets in every.items() if _remove_all(targets)]
+    _edit_receipt(lambda entries: entries.clear())
     return removed

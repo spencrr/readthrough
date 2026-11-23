@@ -31,6 +31,10 @@ Then run `readthrough install`. With nothing named it goes through everything re
 - `readthrough install protocol` registers a `readthrough://` link handler for your Windows user, so the buttons in the snapshot version can start a review. The live dashboard doesn't need it. No admin rights are needed; it writes a single key under `HKCU\Software\Classes`.
 - `readthrough install canvas` puts the dashboard beside agent sessions in VS Code's Agents window (see [The dashboard beside the session](#the-dashboard-beside-the-session-experimental)). Offered wherever the Copilot CLI is.
 
+readthrough keeps a receipt of what it installs (`installed.json` in `~/.readthrough`): each piece, the options it was installed with, the interpreter that installed it, and what it left on the machine (a scheduled task, a registry key, files). When a new version starts the live server, it brings what this install put there up to date (the skill's text, the canvas, a task whose command changed) and removes anything an earlier version installed that this one no longer does. It never adds a piece, and it leaves alone what another readthrough installed (another checkout, or a tool install): `doctor` says when the server task runs a different one. `readthrough install` with nothing named does the same tidying before it offers what's missing.
+ take readthrough off a machine, run `readthrough uninstall --all` before `uv tool uninstall readthrough`: a Python package can't run anything when it's removed, so the tasks, the link handler, and the files would otherwise stay.
+ Windows, everything that starts in the background (the server at logon, the link handler) runs through the environment's `pythonw.exe`. If that is a console program, which uv before 0.13 made, each start opens a terminal window; `install` refuses then and says how to recreate the environment, and `doctor` flags it.
+
 None of this does anything until you onboard a repo. With the server running, its front page takes you to onboarding.
 
 ## Onboarding a repo
