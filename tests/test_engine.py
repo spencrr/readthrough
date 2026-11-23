@@ -38,7 +38,7 @@ class RecordingAssistant:
         if self.fail:
             raise self.fail
         if self.reply and self.harness is not None:
-            self.harness.append(turn.number, "chat", by="rules", role="assistant", text=self.reply)
+            self.harness.append(turn.number, "chat", by="rules", head=None, role="assistant", text=self.reply)
 
     async def stop(self) -> None:
         self.stopped = True
@@ -69,59 +69,72 @@ def test_submit_validates_inputs_and_schedules_a_turn(cfg, monkeypatch: pytest.M
     monkeypatch.setattr(engine_mod.asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
 
     with pytest.raises(ValueError, match="action"):
-        engine.submit(7, "dance")
+        engine.submit(7, "dance", head=None)
     with pytest.raises(ValueError, match="open PR"):
-        engine.submit(8, "quiz")
+        engine.submit(8, "quiz", head=None)
 
     turns = []
     monkeypatch.setattr(engine, "_turn", lambda turn: turns.append(turn) or asyncio.sleep(0))
-    engine.submit(7, "quiz", "Focus on tests")
+    engine.submit(7, "quiz", "Focus on tests", head=None)
     assert turns[0].head == "abc", "the turn is about the head the data showed when it was asked for"
     assert 7 in engine._busy
     assert scheduled and scheduled[0][1] == "loop"
     assert events[-1] == ("study", {"pr": 7, "type": "start", "action": "quiz", "assistant": "rules"})
     with pytest.raises(Busy):
-        engine.submit(7, "quiz")
+        engine.submit(7, "quiz", head=None)
+
+
+def test_the_learner_is_recorded_against_the_commit_their_page_showed(cfg, monkeypatch: pytest.MonkeyPatch):
+    """A build that lands while the learner writes moves the data to B; they read A, so their answer is about A,
+    and the turn knows both."""
+    engine = _engine(cfg, [], RecordingAssistant(), pr_info=lambda n: {"number": n, "head": "b" * 40})
+    turns = []
+    monkeypatch.setattr(engine, "_ensure_loop", lambda: "loop")
+    monkeypatch.setattr(engine_mod.asyncio, "run_coroutine_threadsafe", lambda coro, loop: coro.close())
+    monkeypatch.setattr(engine, "_turn", lambda turn: turns.append(turn) or asyncio.sleep(0))
+    engine.submit(7, "chat", "why?", head="a" * 40)
+    assert study.load(cfg, 7)[-1]["head"] == "a" * 40
+    assert (turns[0].head, turns[0].seen) == ("b" * 40, "a" * 40)
 
 
 def test_submit_refuses_when_the_assistant_is_unavailable(cfg, monkeypatch: pytest.MonkeyPatch):
     engine = _engine(cfg)
     monkeypatch.setattr(assistants, "resolve", lambda name, **kw: assistants.Resolved("model", False, "needs the SDK"))
     with pytest.raises(RuntimeError, match="needs the SDK"):
-        engine.submit(7, "quiz")
+        engine.submit(7, "quiz", head=None)
 
 
 def test_record_and_prompt_covers_actions_and_validation(cfg):
     entries = []
     engine = _engine(cfg, entries)
-    study.append(cfg, 7, "question", by="model", question="Why?")
+    study.append(cfg, 7, "question", by="model", head=None, question="Why?")
 
-    assert "assess_answer" in engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1")
-    assert "assess_teachback" in engine._record_and_prompt(7, Action.TEACHBACK, "It changes routing", None)
-    assert "Ask me the next quiz question" in engine._record_and_prompt(7, Action.QUIZ, "", None)
-    assert "path:line" in engine._record_and_prompt(7, Action.BRIEF, "", None)
-    assert engine._record_and_prompt(7, Action.HINT, "", "Q1") == "Give me a hint for Q1, without the answer."
+    assert "assess_answer" in engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1", None)
+    assert "assess_teachback" in engine._record_and_prompt(7, Action.TEACHBACK, "It changes routing", None, None)
+    assert "Ask me the next quiz question" in engine._record_and_prompt(7, Action.QUIZ, "", None, None)
+    assert "path:line" in engine._record_and_prompt(7, Action.BRIEF, "", None, None)
+    assert engine._record_and_prompt(7, Action.HINT, "", "Q1", None) == "Give me a hint for Q1, without the answer."
     hint = study.load(cfg, 7)[-1]
     assert (hint["text"], hint["action"], hint["qid"]) == ("Hint for Q1", "hint", "Q1")
-    assert engine._record_and_prompt(7, Action.CHAT, "hello", None) == "hello"
+    assert engine._record_and_prompt(7, Action.CHAT, "hello", None, None) == "hello"
 
     with pytest.raises(ValueError, match="question id"):
-        engine._record_and_prompt(7, Action.ANSWER, "", None)
+        engine._record_and_prompt(7, Action.ANSWER, "", None, None)
     with pytest.raises(ValueError, match="teach-back"):
-        engine._record_and_prompt(7, Action.TEACHBACK, "", None)
+        engine._record_and_prompt(7, Action.TEACHBACK, "", None, None)
     assert entries[-1][1]["summary"]["questions"] == 1
 
 
 def test_answers_are_tagged_with_the_aids_that_came_first(cfg):
     engine = _engine(cfg)
-    study.append(cfg, 7, "question", by="rules", question="Why?")
-    study.append(cfg, 7, "question", by="rules", question="How?")
-    engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1")
-    engine._record_and_prompt(7, Action.HINT, "", "Q2")
-    engine._record_and_prompt(7, Action.ANSWER, "Like so", "Q2")
-    engine._record_and_prompt(7, Action.BRIEF, "", None)
-    study.append(cfg, 7, "question", by="rules", question="Where?")
-    engine._record_and_prompt(7, Action.ANSWER, "There", "Q3")
+    study.append(cfg, 7, "question", by="rules", head=None, question="Why?")
+    study.append(cfg, 7, "question", by="rules", head=None, question="How?")
+    engine._record_and_prompt(7, Action.ANSWER, "Because", "Q1", None)
+    engine._record_and_prompt(7, Action.HINT, "", "Q2", None)
+    engine._record_and_prompt(7, Action.ANSWER, "Like so", "Q2", None)
+    engine._record_and_prompt(7, Action.BRIEF, "", None, None)
+    study.append(cfg, 7, "question", by="rules", head=None, question="Where?")
+    engine._record_and_prompt(7, Action.ANSWER, "There", "Q3", None)
 
     answers = {e["qid"]: e["aided"] for e in study.load(cfg, 7) if e["kind"] == "answer"}
     assert answers == {"Q1": [], "Q2": ["hint"], "Q3": ["brief"]}
@@ -147,9 +160,9 @@ def test_turn_reports_errors_and_clears_busy(cfg):
     events = []
     engine = _engine(cfg, events, RecordingAssistant(fail=RuntimeError("no session")))
     engine._busy.add(7)
-    engine._record_and_prompt(7, Action.QUIZ, "", None)  # the request is logged before the turn runs...
+    engine._record_and_prompt(7, Action.QUIZ, "", None, None)  # the request is logged before the turn runs...
 
-    asyncio.run(engine._turn(assistants.Turn(7, Action.QUIZ, "", None, "quiz")))
+    asyncio.run(engine._turn(assistants.Turn(7, Action.QUIZ, "", None, "quiz", head="c" * 40)))
 
     assert events[-1] == ("study", {"pr": 7, "type": "error", "message": "no session"})
     assert 7 not in engine._busy
@@ -157,7 +170,7 @@ def test_turn_reports_errors_and_clears_busy(cfg):
     assert request["text"] == "Quiz me."
     assert failure["kind"] == "failure", "...so the log must also say it went unanswered, and by whom"
     assert failure["by"] == "readthrough"
-    assert (failure["assistant"], failure["text"]) == ("rules", "no session")
+    assert (failure["assistant"], failure["text"], failure["head"]) == ("rules", "no session", "c" * 40)
 
 
 def test_stop_stops_the_assistant_and_the_loop(cfg):
@@ -244,7 +257,7 @@ def test_submit_claims_a_pr_atomically(cfg, monkeypatch: pytest.MonkeyPatch):
     def go():
         gate.wait()
         try:
-            engine.submit(7, "chat", "hello")
+            engine.submit(7, "chat", "hello", head=None)
             outcomes.append("started")
         except Busy:
             outcomes.append("busy")

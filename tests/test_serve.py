@@ -152,15 +152,28 @@ def test_study_endpoints(live):
 
     token = {"X-Readthrough-Token": dashboard.token}
     status, body = _request(
-        port, R + "/api/study/7", method="POST", body={"kind": "prediction", "text": "Touches scorers"}, headers=token
+        port,
+        R + "/api/study/7",
+        method="POST",
+        body={"head": None, "kind": "prediction", "text": "Touches scorers"},
+        headers=token,
     )
     assert status == 200 and json.loads(body)["kind"] == "prediction"
     assert (
-        _request(port, R + "/api/study/7", method="POST", body={"kind": "question", "question": "q"}, headers=token)[0]
+        _request(
+            port,
+            R + "/api/study/7",
+            method="POST",
+            body={"head": None, "kind": "question", "question": "q"},
+            headers=token,
+        )[0]
         == 400
     )
     assert (
-        _request(port, R + "/api/study/999", method="POST", body={"kind": "note", "text": "x"}, headers=token)[0] == 400
+        _request(
+            port, R + "/api/study/999", method="POST", body={"head": None, "kind": "note", "text": "x"}, headers=token
+        )[0]
+        == 400
     )
     # Azure DevOps numbers PRs per organization; an eight-digit id must reach the handler, not fall off the router.
     status, body = _request(port, R + "/api/study/17185872")
@@ -168,18 +181,32 @@ def test_study_endpoints(live):
     assert json.loads(_request(port, R + "/api/brief/17185872")[1])["error"] == "No brief for #17185872"
     assert _request(port, R + "/api/brief/1234567890")[0] == 404, "ten digits is past any forge's numbering"
 
-    study.append(dashboard.cfg, 7, "question", by="model", question="Why?", expected_points=["secret"])
+    study.append(dashboard.cfg, 7, "question", by="model", head=None, question="Why?", expected_points=["secret"])
     state = json.loads(_request(port, R + "/api/study/7")[1])
     assert [e["kind"] for e in state["entries"]] == ["prediction", "question"]
     assert "expected_points" not in state["entries"][1]
     assert state["summary"]["predictions"] == 1
     assert set(state["engine"]) == {"name", "available", "reason", "busy", "runtime", "model", "describe"}
 
-    assert _request(port, R + "/api/study/7/ask", method="POST", body={"action": "dance"}, headers=token)[0] == 400
-    reflection = {"kind": "reflection", "text": "Missed the retry path", "qid": "Q1"}
+    assert (
+        _request(port, R + "/api/study/7/ask", method="POST", body={"head": None, "action": "dance"}, headers=token)[0]
+        == 400
+    )
+    reflection = {"head": None, "kind": "reflection", "text": "Missed the retry path", "qid": "Q1"}
     status, body = _request(port, R + "/api/study/7", method="POST", body=reflection, headers=token)
     assert status == 200 and json.loads(body)["qid"] == "Q1"
     assert _request(port, R + "/api/study/7", method="POST", body={**reflection, "qid": 3}, headers=token)[0] == 400
+
+    # Each entry is about the commit the page showed; a page that doesn't say is from an older readthrough.
+    note = {"kind": "note", "text": "x"}
+    status, body = _request(port, R + "/api/study/7", method="POST", body={**note, "head": "a" * 40}, headers=token)
+    assert status == 200 and json.loads(body)["head"] == "a" * 40
+    assert "head" not in json.loads(_request(port, R + "/api/study/7", method="POST", body={**note, "head": None},
+                                             headers=token)[1]), "unknown is no key, never null"  # fmt: skip
+    status, body = _request(port, R + "/api/study/7", method="POST", body=note, headers=token)
+    assert status == 400 and b"reload the page" in body
+    for bad in ("abc1234", "A" * 40, 7):
+        assert _request(port, R + "/api/study/7", method="POST", body={**note, "head": bad}, headers=token)[0] == 400
 
 
 def test_brief_endpoint(live):
@@ -215,14 +242,22 @@ def test_skip_and_pin_through_the_api(live):
     dashboard, port = live
     token = {"X-Readthrough-Token": dashboard.token}
     status, body = _request(
-        port, R + "/api/study/7", method="POST", body={"kind": "prediction", "skipped": True}, headers=token
+        port,
+        R + "/api/study/7",
+        method="POST",
+        body={"head": None, "kind": "prediction", "skipped": True},
+        headers=token,
     )
     assert status == 200 and json.loads(body)["skipped"] is True
     status, body = _request(
-        port, R + "/api/study/7", method="POST", body={"kind": "note", "text": "keep", "pinned": 1}, headers=token
+        port,
+        R + "/api/study/7",
+        method="POST",
+        body={"head": None, "kind": "note", "text": "keep", "pinned": 1},
+        headers=token,
     )
     assert status == 200 and json.loads(body)["pinned"] == 1
-    bad = {"kind": "note", "text": "keep", "pinned": "1; drop"}
+    bad = {"head": None, "kind": "note", "text": "keep", "pinned": "1; drop"}
     assert _request(port, R + "/api/study/7", method="POST", body=bad, headers=token)[0] == 400
 
 
@@ -337,11 +372,16 @@ def test_study_ask_accepts_and_reports_busy(live, monkeypatch):
     token = {"X-Readthrough-Token": dashboard.token}
     asked = []
     monkeypatch.setattr(dashboard, "ask", lambda number, body: asked.append((number, body["action"])))
-    assert _request(port, R + "/api/study/7/ask", method="POST", body={"action": "quiz"}, headers=token)[0] == 202
+    assert (
+        _request(port, R + "/api/study/7/ask", method="POST", body={"head": None, "action": "quiz"}, headers=token)[0]
+        == 202
+    )
     assert asked == [(7, "quiz")]
 
     monkeypatch.setattr(dashboard, "ask", lambda number, body: (_ for _ in ()).throw(serve_mod.Busy("already working")))
-    status, body = _request(port, R + "/api/study/7/ask", method="POST", body={"action": "quiz"}, headers=token)
+    status, body = _request(
+        port, R + "/api/study/7/ask", method="POST", body={"head": None, "action": "quiz"}, headers=token
+    )
     assert status == 409 and json.loads(body)["error"] == "already working"
 
 
@@ -564,10 +604,10 @@ def test_the_study_watcher_notices_an_append_within_the_same_timestamp(live):
     dashboard, _ = live
     events = dashboard.subscribe()
     path = study.log_path(dashboard.cfg, 7)
-    study.append(dashboard.cfg, 7, "note", by="you", text="first")
+    study.append(dashboard.cfg, 7, "note", by="you", head=None, text="first")
     dashboard._watch_once()  # first look at the file: remembered, not announced
     before = path.stat()
-    study.append(dashboard.cfg, 7, "note", by="you", text="second")
+    study.append(dashboard.cfg, 7, "note", by="you", head=None, text="second")
     os.utime(path, (before.st_atime, before.st_mtime))  # same mtime as before: only the size differs
     dashboard._watch_once()
     kinds = []

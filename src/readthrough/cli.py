@@ -261,11 +261,15 @@ def cmd_study(settings: Settings, args: argparse.Namespace) -> int:
         if line.isdigit():
             fields["line"] = int(line)
         adds.append((EntryKind.FINDING, fields))
+    if adds and args.head and not study.COMMIT_RE.fullmatch(args.head):
+        raise ConfigError(f"--head {args.head} isn't a full commit SHA (`readthrough worktree {args.pr}` prints it)")
+    head, source = (args.head, "from --head") if args.head else (_head_for(cfg, args.pr) or None, "from the last build")
     for kind, value in adds:
         entry_fields = value if isinstance(value, dict) else {"text": value}
         by = Writer.YOU if kind in (EntryKind.PREDICTION, EntryKind.TEACHBACK) else args.by
-        entry = study.append(cfg, args.pr, kind, by=by, **entry_fields)
-        _say(f"#{args.pr}: added {kind} #{entry['id']}")
+        entry = study.append(cfg, args.pr, kind, by=by, head=head, **entry_fields)
+        at = f"at {head[:7]}, {source}" if head else "without a commit: the last build has no head for it (pass --head)"
+        _say(f"#{args.pr}: added {kind} #{entry['id']} {at}")
     if adds:
         study.refresh_brief(cfg, args.pr)
         return 0
@@ -1050,6 +1054,7 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
         default=Writer.YOU.value,
         help="who wrote a --note or --finding: you, or a model (a review agent)",
     )
+    p.add_argument("--head", metavar="SHA", help="the commit the entry is about (default: the last build's head)")
     p.set_defaults(func=cmd_study)
 
     p = sub.add_parser("review", help="start or resume the deep-review session for a PR (the configured review agent)")

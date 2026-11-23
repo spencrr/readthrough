@@ -15,6 +15,11 @@ of yours. Both come from the entry, never from the current configuration, so cha
 an old grade. Older logs say ``by: copilot``, the assistant's former name; ``load`` reads it as ``model`` rather
 than rewriting the file, and leaves the runtime unrecorded, since those entries never said which it was.
 
+Each entry records ``head``, the commit it was about, when that's known: the log sets it from what the writer
+saw (the page's head for the learner, the commit a turn read for the model), and a pinned note takes its pinned
+entry's. An entry without one, including every entry from before this was recorded, says nothing about which
+commit it was about.
+
 The log lives in the repo's data directory (``study/pr-<n>.jsonl``), and its evidence is rendered as the last
 section of the brief, so a terminal deep review reads the same evidence the dashboard shows.
 """
@@ -23,6 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import threading
 from enum import StrEnum
 from pathlib import Path
@@ -34,7 +40,8 @@ from readthrough.files import locked
 from readthrough.limits import MAX_STUDY_TEXT
 
 MARKER = "<!-- readthrough:study-log -->"
-RESERVED = frozenset({"id", "ts", "kind", "by"})
+RESERVED = frozenset({"id", "ts", "kind", "by", "head"})
+COMMIT_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")  # a full SHA-1 or SHA-256 object name
 
 
 class Writer(StrEnum):
@@ -133,9 +140,12 @@ def _current(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> dict[str, Any]:
+def append(cfg: Config, number: int, kind: str, *, by: str, head: str | None, **fields: Any) -> dict[str, Any]:
     """Validate and append one entry. ``kind`` and ``by`` arrive as text from a request or a tool call, and
-    are checked here. Returns the stored entry (with its id)."""
+    are checked here. ``head`` is the commit the entry is about, or None when the writer can't know it; every
+    caller has to say which. Returns the stored entry (with its id)."""
+    if head is not None and not (isinstance(head, str) and COMMIT_RE.fullmatch(head)):
+        raise ValueError("head must be a full commit SHA, lowercase")
     try:
         kind = EntryKind(kind)
     except ValueError:
@@ -182,6 +192,11 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             and not any(e["kind"] == EntryKind.QUESTION and e.get("qid") == fields["qid"] for e in entries)
         ):
             raise ValueError(f"no question {fields['qid']}")
+        if kind == EntryKind.NOTE and fields.get("pinned") is not None:
+            pinned = next((e for e in entries if e["id"] == fields["pinned"]), None)
+            if pinned is None:
+                raise ValueError(f"no entry {fields['pinned']} to pin")
+            head = pinned.get("head")  # what the pinned words were about, whatever the page shows now
         if kind == EntryKind.ANSWER:
             fields["aided"] = aids_before(entries, fields["qid"])
         if kind == EntryKind.QUESTION:
@@ -191,6 +206,7 @@ def append(cfg: Config, number: int, kind: str, *, by: str, **fields: Any) -> di
             "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             "kind": kind,
             "by": by,
+            **({"head": head} if head else {}),
             **fields,
         }
         with path.open("a", encoding="utf-8") as handle:
