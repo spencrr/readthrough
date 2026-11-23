@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -169,6 +170,22 @@ def test_a_terminal_review_records_the_quiz_the_way_the_study_tab_does(isolated,
     assert dashboard(isolated, "study", "1", "--assess", "Q1", "correct", "me") != 0, "nor grade themselves"
     assert dashboard(isolated, "study", "1", "--hint", "Q1", "x") != 0
     assert len(load()) == len(log)
+
+
+def test_the_skill_uses_only_flags_the_study_command_has(capsys):
+    """The review skill records a terminal session with `readthrough study`; a flag it names that the command
+    doesn't have would fail mid-review, after the user had answered."""
+    with pytest.raises(SystemExit):
+        cli.main(["study", "--help"])
+    flags = set(re.findall(r"--[a-z][\w-]*", capsys.readouterr().out))
+    skill = (Path(cli.__file__).parent / "assets" / "SKILL.md").read_text(encoding="utf-8")
+    used = {
+        flag
+        for cmd in re.findall(r"readthrough R study N([^`]*)`", skill)
+        for flag in re.findall(r"--[a-z][\w-]*", cmd)
+    }
+    assert {"--question", "--hint", "--answer", "--assess", "--head"} <= used
+    assert used <= flags, sorted(used - flags)
 
 
 def test_config_shows_checks_and_explains_settings(isolated, capsys):

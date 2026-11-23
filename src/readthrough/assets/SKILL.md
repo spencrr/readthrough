@@ -41,39 +41,40 @@ In the commands below, `R` stands for `--repo OWNER/NAME`.
 ### Phase 0: Prepare (silent)
 
 1. `readthrough R profile show`. This is the repo's architecture profile: its layers and components, where its component contracts live, its review guidance, and its test command. Follow the review guidance throughout.
-2. `readthrough R brief N`. If the PR isn't found or the brief looks stale, run `readthrough R build --no-diffs` first. The brief's last section, **Study log**, holds evidence the user has already built, possibly from studying in the dashboard: predictions, quiz answers with verdicts, teach-backs, findings. Use it, starting with its **Handoff** line. Don't re-ask what they've already shown they understand; spend the time on what they got partial or wrong, and on unanswered questions.
-3. `readthrough R worktree N`. This prints the worktree path, head SHA, merge-base, and the diff command. The user's own checkout is never touched. If the head SHA differs from the brief's, say so: the PR moved.
+2. `readthrough R brief N`. If the PR isn't found or the brief looks stale, run `readthrough R build --no-diffs` first. The brief's last section, **Study log**, holds evidence the user has already built, possibly from studying in the dashboard: predictions, quiz answers with verdicts, teach-backs, findings. Use it, starting with its **Handoff** line. Don't re-ask what they've already shown they understand; spend the time on what they got partial or wrong, and on unanswered questions. Evidence the Handoff puts *before the latest commits* is a starting point, not proof: check what changed since (`git diff <that sha> HEAD -- <its refs>` in the worktree) before you skip it.
+3. `readthrough R worktree N`. This prints the worktree path, head SHA, merge-base, and the diff command. The user's own checkout is never touched. If the head SHA differs from the brief's, say so: the PR moved. Every `readthrough R study N` command below takes `--head <that sha>`, so what you record is about the commit you both read.
 4. Read the full diff, the rule files listed under "Rules that apply", and the contract sections the brief quotes. For anything non-trivial, also read the callers of changed public functions (`git grep` in the worktree).
 5. Silently form your own review: correctness bugs, responsibility bleed against the components' "does not own" lists, rule violations, and test adequacy (would the tests fail on the base branch?). Rank your top 1-3. Write them to the session workspace and **don't show them yet**.
 
 ### Phase 1: Predict
 
-Show only the title, a 2-3 line summary of the author's description, and the components touched. Ask: *"Before we look at code, what do you think the riskiest part of this change is, and what test would you want to see?"* Record the answer in the study log, in their words: `readthrough R study N --prediction "<their answer>"`.
+Show only the title, a 2-3 line summary of the author's description, and the components touched. Ask: *"Before we look at code, what do you think the riskiest part of this change is, and what test would you want to see?"* Record the answer in the study log, in their words: `readthrough R study N --prediction "<their answer>" --head <sha>`.
 
 ### Phase 2: Guided walk
 
 Follow the brief's reading order, in chunks of at most about 5 files. For each chunk:
 - Explain the **intent** in 2-3 sentences: why it changed, not a narration of the diff.
 - Show the 1-2 most important hunks with `path:line`.
-- Ask **one** check question tied to a component contract or an applicable rule. For example: "This module now writes to the database. Which component should own persistence?" Or: "What happens in this branch if the list is empty?"
-- If the answer is wrong or vague, give a hint, not the answer. After a second miss, explain briefly and move on.
+- Ask **one** check question tied to a component contract or an applicable rule. For example: "This module now writes to the database. Which component should own persistence?" Or: "What happens in this branch if the list is empty?" Record it first: `readthrough R study N --question "<question>" --focus <intent|control-flow|responsibility|unhappy-path|tests|risk> --ref path:line --expect "<what a good answer covers>" --by model --head <sha>`, which prints its id (`Q3`). Add `--model <name>` if you know which model you are.
+- Record their answer in their words: `readthrough R study N --answer Q3 "<their answer>" --head <sha>`, then your judgement: `readthrough R study N --assess Q3 <correct|partial|incorrect> "<one to three sentences>" --evidence path:line --by model --head <sha>`.
+- If the answer is wrong or vague, give a hint, not the answer, and record the hint before you give it: `readthrough R study N --hint Q3 "<the hint>" --by model --head <sha>`. An answer after a hint is marked as aided only if the hint is in the log. After a second miss, explain briefly and move on.
 
 Tie the change to code the user already knows (base classes, sibling implementations) using `git grep` in the worktree.
 
 ### Phase 3: Teach-back
 
-Ask the user to explain the whole PR in 3-4 sentences as if they were briefing a teammate. Record it with `readthrough R study N --teachback "<their words>"`. Name the specific gaps (a missed component, misunderstood control flow). If a gap matters, walk that part again.
+Ask the user to explain the whole PR in 3-4 sentences as if they were briefing a teammate. Record it with `readthrough R study N --teachback "<their words>" --head <sha>`. Name the specific gaps (a missed component, misunderstood control flow), and record your judgement: `readthrough R study N --assess-teachback <correct|partial|incorrect> "<feedback>" --gap "<gap>" --by model --head <sha>`, one `--gap` each. If a gap matters, walk that part again.
 
 ### Phase 4: Critique duel
 
 1. Ask: *"What are your concerns, if any? List them before I share mine."*
 2. Show your Phase 0 findings side by side with theirs, grouped as **both found**, **only you**, **only me**. For each "only me" item, give the evidence (`path:line` and the rule or contract) so the user can disagree.
 3. Settle disputed points empirically when that's cheap. Use the profile's test command (from `profile show`) in the worktree; the profile's review guidance says how to make sure the tests run the PR's code, not the user's checkout. To check whether the PR's tests actually exercise the change, run them against the merge-base source too.
-4. Record each finding the user agreed with: `readthrough R study N --finding "major: <one line>" --at path:line --by model` (severities: blocker, major, minor, question; `model` means you, the agent, wrote it). Use `--by you` for ones the user raised.
+4. Record each finding the user agreed with: `readthrough R study N --finding "major: <one line>" --at path:line --by model --head <sha>` (severities: blocker, major, minor, question; `model` means you, the agent, wrote it). Use `--by you` for ones the user raised.
 
 ### Phase 5: Draft and decide
 
-1. Draft review comments **only** for points the user agreed with, in their voice, each anchored to `path:line`. Aim for 2-3 high-signal comments, not 15.
+1. Draft review comments **only** for points the user agreed with, in their voice, each anchored to `path:line`. Aim for 2-3 high-signal comments, not 15. A finding the study log marks as at an earlier commit has an earlier line number: find where that code is now before anchoring a comment to it.
 2. Ask for the verdict: comment, approve, request changes, or not yet.
 3. On explicit confirmation, post the review. On GitHub: `gh pr review N -R OWNER/NAME --comment|--approve|--request-changes --body-file <file>`; for inline comments, `gh api repos/OWNER/NAME/pulls/N/reviews` with a `comments` array; if `readthrough config` shows an `account` for the repo, run `gh` as that account (`$env:GH_TOKEN = gh auth token --user <account>`). On GitLab use `glab mr note` / `glab mr approve`; on Azure DevOps `az repos pr set-vote` and `az repos pr update`; on Forgejo, hand the user the drafted comments to post, since there is no signed-in CLI to post through.
 4. Record the outcome. The ledger pins it to the head SHA, so new commits flag the PR again. If the live dashboard is open, the PR ticks off there within a few seconds:
