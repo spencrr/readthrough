@@ -46,6 +46,14 @@ def test_a_console_pythonw_is_reported(monkeypatch, tmp_path: Path):
     pythonw.write_bytes(_pe(3))  # console: what uv before 0.13 wrote
     assert system.opens_a_console(pythonw)
     assert "console program" in system.console_note()
+    # ...and nothing that Windows would start through it gets registered: each launch would open a window.
+    for install in (
+        system.install_protocol,
+        system.install_server_task,
+        lambda: system.install_schedule(at="08:30", days="daily", open_mode="auto"),
+    ):
+        with pytest.raises(RuntimeError, match="uv venv --clear"):
+            install()
 
     pythonw.write_bytes(b"MZ")  # not a PE file at all: no claim
     assert not system.opens_a_console(pythonw)

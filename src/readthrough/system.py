@@ -64,6 +64,20 @@ def console_note() -> str:
     return f"{exe} is a console program (an older uv made this environment): the server and link handler open a window"
 
 
+# A windowless launcher that is really a console program can't be worked around from here (a GUI entry point still
+# runs it), so the environment has to be made again by a uv that writes a GUI one (0.13 does).
+CONSOLE_FIX = (
+    "recreate the environment: in a checkout, `uv venv --clear` then `uv sync`; for a tool install, "
+    "`uv tool uninstall readthrough` then `uv tool install readthrough`"
+)
+
+
+def _windowless_or_refuse(what: str) -> None:
+    """Refuse to register something that would open a console window every time Windows starts it."""
+    if note := console_note():
+        raise RuntimeError(f"Not {what}: {note}. First {CONSOLE_FIX}.")
+
+
 def handler_command() -> str:
     return f'"{windowless_python()}" -m readthrough handle-url "%1"'
 
@@ -84,6 +98,7 @@ def install_protocol() -> str:
             "  Linux: add a .desktop file with MimeType=x-scheme-handler/readthrough and run\n"
             "         `xdg-mime default readthrough.desktop x-scheme-handler/readthrough`.",
         )
+    _windowless_or_refuse("registering the readthrough:// handler")
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PROTOCOL_KEY) as key:
         winreg.SetValueEx(key, None, 0, winreg.REG_SZ, "URL:Readthrough")
         winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
@@ -185,6 +200,7 @@ def _module_args(home: Path | None, command: str) -> str:
 
 
 def _register_task(name: str, args: str, trigger: str, settings: str, description: str) -> str:
+    _windowless_or_refuse(f"registering the {name} task")
     script = f"""
 $ErrorActionPreference = 'Stop'
 $action = New-ScheduledTaskAction -Execute {_ps_quote(str(windowless_python()))} -Argument {_ps_quote(args)}
