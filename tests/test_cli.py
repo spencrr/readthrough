@@ -131,6 +131,46 @@ def test_study_adds_entries_and_shows_the_log(isolated, capsys):
     assert "you" in err and "model" in err and "Writer" not in err, "the choices read as values, not enum reprs"
 
 
+def test_a_terminal_review_records_the_quiz_the_way_the_study_tab_does(isolated, capsys):
+    """Questions, hints, answers, and grades from a terminal land in the same log as the Study tab's: the answer
+    is tagged with the hint that came first, and only a model asks or grades."""
+    assert dashboard(isolated, "build", "--no-diffs") == 0
+    agent = ("--by", "model", "--model", "gpt-5")
+    assert dashboard(isolated, "study", "1", "--question", "Why 3?", "--focus", "intent", "--ref", "a.py:3",
+                     "--expect", "the limit", *agent) == 0  # fmt: skip
+    assert "added question Q1 #1" in capsys.readouterr().out
+    assert dashboard(isolated, "study", "1", "--hint", "Q1", "look at the limit", *agent) == 0
+    assert dashboard(isolated, "study", "1", "--answer", "Q1", "the retry limit") == 0
+    assert (
+        dashboard(isolated, "study", "1", "--assess", "Q1", "partial", "name it", "--evidence", "a.py:3", *agent) == 0
+    )
+    assert (
+        dashboard(isolated, "study", "1", "--reflection", "Q1: the constant's name", "--teachback", "adds retries") == 0
+    )
+    assert dashboard(isolated, "study", "1", "--assess-teachback", "correct", "yes", "--gap", "jitter", *agent) == 0
+
+    def load() -> list[dict]:
+        path = repo_dir(isolated) / "study" / "pr-1.jsonl"
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    log = load()
+    assert [(e["kind"], e["by"]) for e in log] == [
+        ("question", "model"), ("chat", "model"), ("answer", "you"), ("assessment", "model"),
+        ("reflection", "you"), ("teachback", "you"), ("teachback_assessment", "model"),
+    ]  # fmt: skip
+    question, hint, answer, grade, reflection, _, teach = log
+    assert (question["refs"], question["expected_points"], question["model"]) == (["a.py:3"], ["the limit"], "gpt-5")
+    assert (hint["action"], answer["aided"], grade["evidence"]) == ("hint", ["hint"], ["a.py:3"])
+    assert (reflection["qid"], reflection["text"], teach["gaps"]) == ("Q1", "the constant's name", ["jitter"])
+    assert all(e["head"] == "a" * 40 for e in log) and "model" not in answer
+
+    capsys.readouterr()
+    assert dashboard(isolated, "study", "1", "--question", "Mine?") != 0, "a person doesn't quiz themselves"
+    assert dashboard(isolated, "study", "1", "--assess", "Q1", "correct", "me") != 0, "nor grade themselves"
+    assert dashboard(isolated, "study", "1", "--hint", "Q1", "x") != 0
+    assert len(load()) == len(log)
+
+
 def test_config_shows_checks_and_explains_settings(isolated, capsys):
     assert dashboard(isolated, "config") == 0
     out = capsys.readouterr().out
