@@ -56,6 +56,9 @@ log = logging.getLogger(__name__)
 
 API = "7.1"
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"  # the Azure DevOps application id, for az access tokens
+LIST_DESCRIPTION_CHARS = (
+    400  # the PR list's cut-off for a description (seen: no listed one is longer, most are exactly this)
+)
 VOTES = {10: "APPROVED", 5: "APPROVED", 0: "COMMENTED", -5: "COMMENTED", -10: "CHANGES_REQUESTED"}
 STATUS = {
     "succeeded": "SUCCESS",
@@ -503,6 +506,17 @@ class AzureDevOps(Forge):
     def _complete(self, pr: dict[str, Any]) -> PullRequest:
         n = pr["pullRequestId"]
         base = f"{self._p}/pullrequests/{n}"
+        # .NET counts UTF-16 units, so an emoji is two; at or past the cut either way, ask for all of it.
+        if len((pr.get("description") or "").encode("utf-16-le", "surrogatepass")) // 2 >= LIST_DESCRIPTION_CHARS:
+            # The list cuts every description at this length; only the PR itself has all of it. One a fetch can't
+            # complete keeps the cut text, as before.
+            try:
+                full = (self._get_or_none(base) or {}).get("description")
+            except ForgeError as exc:
+                log.warning("Couldn't fetch the full description of #%d: %s", n, exc.reason)
+                full = None
+            if isinstance(full, str):
+                pr = {**pr, "description": full}
         if commits := self._merge_commits(pr):
             self._merge_commits_of[n] = commits
         files, complete = self._changed_files(pr, self.tuning.max_files_per_pr)

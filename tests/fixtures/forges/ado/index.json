@@ -101,5 +101,10 @@
   "method": "GET",
   "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/blobs/a864794cc3543614dc55ba4e83f2777218a75346?api-version=7.1&%24format=octetStream",
   "file": "23c144c8cae2.json"
+ },
+ {
+  "method": "GET",
+  "url": "https://dev.azure.com/powershell/PowerShell/_apis/git/repositories/PSGallery-Cache-Repo/pullrequests/53?api-version=7.1",
+  "file": "50a19c82ea7a.json"
  }
 ]

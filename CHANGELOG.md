@@ -17,6 +17,9 @@
 - On Windows, `install` registered the server and the link handler through a `pythonw.exe` that a uv before 0.13
   had made a console program, so a terminal window opened at every logon and every link click. It now refuses,
   and says how to recreate the environment.
+- Azure DevOps cuts a PR's description at 400 characters in the PR list, and readthrough analysed and briefed
+  that cut text as the whole description. One that reaches the cut (counted as Azure DevOps counts, an emoji
+  being two) is now fetched in full.
 
 ## 0.5.0 (2026-11-04)
 
