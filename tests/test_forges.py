@@ -160,6 +160,7 @@ def test_azure_devops_reads_a_public_project(replay, monkeypatch):
     assert viewer == "" and total == 1 and len(prs) == 1
     _check_common(prs)
     pr = prs[0]
+    assert len(pr.body) > 400, "the full description, not the list's 400 characters"
     assert (
         pr.number == 53
         and pr.url == "https://dev.azure.com/powershell/PowerShell/_git/PSGallery-Cache-Repo/pullrequest/53"
@@ -241,6 +242,36 @@ def test_azure_devops_assembles_diffs_from_both_sides_of_each_file(monkeypatch):
     small = AzureDevOps("o/p/r", tuning=load_tuning({"forge": {"max_assembled_diff_files": 3, "retries": 0}}).forge)
     with pytest.raises(faults.TooLarge, match="more than 3 files"):
         small.fetch_diff(9)
+
+
+def test_azure_devops_fetches_a_description_the_pr_list_cut_short(monkeypatch):
+    """The PR list cuts descriptions at 400 characters, counted as .NET does (an emoji is two); a PR whose listed
+    description reaches that is asked for on its own, and one shorter isn't."""
+    from readthrough.forges import azure_devops as ado
+
+    monkeypatch.setattr(ado, "_tenants", {"o": None})  # the tenant probe is a network call
+    full = "x" * 399 + " and the part the list leaves off"
+    rocket = "\U0001f680" + "x" * 398 + " and more"  # 399 characters reach the cut at 400 UTF-16 units
+    asked: list[str] = []
+
+    def pr(number: int, description: str) -> dict[str, Any]:
+        return {"pullRequestId": number, "title": f"PR {number}", "description": description,
+                "creationDate": "2026-11-01T00:00:00Z", "createdBy": {"id": f"a{number}", "uniqueName": "ann"}}  # fmt: skip
+
+    def call(self, method, path, *, params=None, headers=None, absent=()):
+        asked.append(path.rsplit("/", 2)[-2] + "/" + path.rsplit("/", 1)[-1])
+        if path.endswith("/pullrequests") and (params or {}).get("searchCriteria.status") == "active":
+            listed = [pr(1, full[: ado.LIST_DESCRIPTION_CHARS]), pr(2, "short"), pr(3, rocket[:399])]
+            return Response(200, {}, json.dumps({"value": listed}))
+        if path.endswith(("/pullrequests/1", "/pullrequests/3")):
+            number = int(path.rsplit("/", 1)[-1])
+            return Response(200, {}, json.dumps(pr(number, full if number == 1 else rocket)))
+        return Response(200, {}, json.dumps({"value": []}))
+
+    monkeypatch.setattr(Rest, "call", call)
+    _, prs, _ = AzureDevOps("o/p/r", tuning=TUNING).fetch_prs(10)
+    assert {p.number: p.body for p in prs} == {1: full, 2: "short", 3: rocket}
+    assert "pullrequests/1" in asked and "pullrequests/2" not in asked
 
 
 def test_azure_devops_tells_returning_authors_from_first_timers_and_checks_memberships(monkeypatch):
