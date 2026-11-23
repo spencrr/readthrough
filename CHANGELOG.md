@@ -20,6 +20,9 @@
 - Azure DevOps cuts a PR's description at 400 characters in the PR list, and readthrough analysed and briefed
   that cut text as the whole description. One that reaches the cut (counted as Azure DevOps counts, an emoji
   being two) is now fetched in full.
+- The study assistants looked for the repo's profile without asking the forge, so a repo whose
+  `readthrough.toml` is committed upstream got no quiz questions from the rules assistant and no study guidance
+  for the model, though its dashboard was built from that profile.
 
 ## 0.5.0 (2026-11-04)
 

@@ -220,11 +220,20 @@ def test_rules_hint_brief_teachback_and_chat(harness):
     asyncio.run(rules.stop())
 
 
-def test_rules_without_a_profile_has_no_questions(harness):
-    harness.cfg.local_profile_path.unlink()
+def test_rules_without_a_profile_has_no_questions(harness, fake_forge):
+    harness.cfg.local_profile_path.unlink()  # and the forge has no profile file either
     rules = RulesAssistant(harness, None)
     asyncio.run(rules.turn(Turn(7, Action.QUIZ, "", None, "")))
     assert "every question" in study.load(harness.cfg, 7)[-1]["text"]
+
+
+def test_rules_reads_a_profile_that_lives_only_in_the_repo(harness, fake_forge):
+    """The assistant finds the profile the build used, the repo's own file included, which only the forge can read.
+    It used to look without a forge, find nothing, and say there were no questions."""
+    fake_forge.files = {".github/readthrough.toml": harness.cfg.local_profile_path.read_text(encoding="utf-8")}
+    harness.cfg.local_profile_path.unlink()
+    asyncio.run(RulesAssistant(harness, None).turn(Turn(7, Action.QUIZ, "", None, "")))
+    assert study.load(harness.cfg, 7)[-1]["kind"] == "question"
 
 
 # ---------------------------------------------------------------- the model assistant, on a fake runtime
