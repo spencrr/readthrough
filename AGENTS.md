@@ -106,6 +106,10 @@ engine CI uses, else an installed Edge or Chrome; they skip when there is none, 
   consumer dispatches with `match` ending in `case _: assert_never(x)`, so the type checker fails on a missing
   member. Compare members with `==`, never `is`: the same value read back from a file or a request is a plain
   `str`, and `is` would be silently false. Parse outside input with `Enum(value)` at the boundary, once.
+- **What `install` puts on the machine is recorded, not migrated.** `system.install` writes a receipt entry (the
+  options, the interpreter, and the handles that remove it: a task, an HKCU key, a file) and `system.reconcile`
+  converges the machine on the running version, removing a retired piece from its handles alone. A new piece is a
+  `PieceKind` with a case in `handles`, `probe`, and `_put`; the type checker finds a missing one.
 - **Lint is `ruff` with `select = ["ALL"]`** and an ignore list that states each reason in `pyproject.toml`.
   Suppress per file (with a reason) rather than per line where a whole file legitimately differs. Types are
   checked by `ty`, pinned exactly; bump it deliberately.

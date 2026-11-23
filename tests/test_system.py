@@ -102,9 +102,15 @@ class FakeWinreg(ModuleType):
         return FakeKey(self, path)
 
     def OpenKey(self, root, path: str):
-        if path not in self.values:
+        if path not in self.values and not any(k.startswith(path + "\\") for k in self.values):
             raise OSError(path)
         return FakeKey(self, path)
+
+    def EnumKey(self, key: FakeKey, index: int) -> str:
+        children = sorted({k[len(key.path) + 1 :].split("\\")[0] for k in self.values if k.startswith(key.path + "\\")})
+        if index >= len(children):
+            raise OSError("no more subkeys")
+        return children[index]
 
     def SetValueEx(self, key: FakeKey, name, reserved, kind, value: str):
         self.values.setdefault(key.path, {})["" if name is None else name] = value
@@ -192,3 +198,129 @@ def test_schedule_failures(monkeypatch, tmp_path: Path):
     assert system.uninstall_schedule() is False
     with pytest.raises(RuntimeError, match="denied"):
         system.run_schedule_now()
+
+
+# ---------------------------------------------------------------- the receipt, and keeping installs current
+
+
+@pytest.fixture
+def me(monkeypatch, tmp_path: Path) -> Path:
+    """This install's interpreter: a pythonw.exe beside a python.exe, both empty (so neither is a console program)."""
+    python = tmp_path / "env" / "python.exe"
+    python.parent.mkdir()
+    python.write_text("", encoding="utf-8")
+    pythonw = python.with_name("pythonw.exe")
+    pythonw.write_text("", encoding="utf-8")
+    monkeypatch.setattr(system.sys, "executable", str(python))
+    monkeypatch.setattr(system, "windowless_python", lambda: pythonw)
+    return pythonw
+
+
+def _skill(name: str = "copilot") -> tuple[str, system.PieceKind, dict]:
+    return f"skill:{name}", system.PieceKind.SKILL, {"agent": name}
+
+
+def test_an_install_is_recorded_with_what_removes_it_and_an_uninstall_uses_that(me):
+    name, kind, args = _skill()
+    where = Path(system.install(name, kind, args))
+    entry = system.load_receipt()[name]
+    assert (entry["kind"], entry["args"], entry["interpreter"]) == ("skill", {"agent": "copilot"}, str(me))
+    assert entry["handles"] == [{"kind": "file", "target": str(where / "SKILL.md")}]
+
+    assert system.uninstall(name, kind, args) is True
+    assert not where.exists(), "the file, and the directory it was alone in"
+    assert name not in system.load_receipt()
+    assert system.uninstall(name, kind, args) is False, "nothing left to remove"
+
+
+def test_reconcile_updates_adopts_forgets_and_retires_only_what_this_install_put_there(me, tmp_path: Path):
+    copilot, claude = _skill("copilot"), _skill("claude")
+    system.install(*copilot)
+    skill = system.probe(copilot[1], copilot[2]).where
+    Path(skill).write_text("an older version's skill", encoding="utf-8")  # an upgrade changed the bundled text
+    pre_receipt = Path(system.install(*claude)) / "SKILL.md"  # as 0.5 would have left it: on disk, not recorded
+    system._forget(claude[0])
+
+    retired_file = tmp_path / "old-piece" / "SKILL.md"  # what a retired piece left, at a path only its record knows
+    retired_file.parent.mkdir()
+    retired_file.write_text("x", encoding="utf-8")
+    foreign_file = tmp_path / "foreign" / "SKILL.md"
+    foreign_file.parent.mkdir()
+    foreign_file.write_text("x", encoding="utf-8")
+    entries = {
+        "gadget": {"kind": "gadget", "interpreter": str(me), "handles": [{"kind": "file", "target": str(retired_file)}]},
+        "gizmo": {"kind": "gizmo", "interpreter": "C:/other/pythonw.exe",
+                  "handles": [{"kind": "file", "target": str(foreign_file)}]},
+        "canvas": {"kind": "canvas", "args": {}, "interpreter": str(me), "handles": []},  # removed by hand since
+    }  # fmt: skip
+    system._edit_receipt(lambda e: e.update(entries))
+
+    changes = system.reconcile()
+    assert f"updated skill:copilot to {system.__version__}" in changes
+    assert Path(skill).read_text(encoding="utf-8") == system.agents.bundled_skill()
+    assert "removed gadget, which this version no longer installs" in changes and not retired_file.exists()
+    assert foreign_file.exists(), "another install's retired piece is that install's to remove"
+    assert "canvas is no longer installed; forgot it" in changes
+    receipt = system.load_receipt()
+    assert claude[0] in receipt and pre_receipt.exists(), "a piece from before the receipt is adopted, not reinstalled"
+    assert "gadget" not in receipt and "canvas" not in receipt and "gizmo" in receipt
+    assert system.reconcile() == [], "and a second pass has nothing to do"
+
+
+def test_reconcile_never_touches_another_installs_canvas(me, monkeypatch, tmp_path: Path):
+    dest = system.install_canvas()
+    record = dest / system.CANVAS_RECORD
+    record.write_text(
+        '{"argv": ["C:/elsewhere/python.exe", "-m", "readthrough"], "version": "0.1.0"}', encoding="utf-8"
+    )
+    assert system.probe(system.PieceKind.CANVAS, {}) == system.Found(
+        True, False, False, "C:/elsewhere/python.exe -m readthrough"
+    )
+    assert system.reconcile() == []
+    assert "0.1.0" in record.read_text(encoding="utf-8")
+
+
+def test_reconcile_reregisters_this_installs_server_task_when_its_command_changed(me, monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(system.sys, "platform", "win32")
+    registered: list[str] = []
+    task = {"execute": str(me), "arguments": "-m readthrough serve --some-old-flag"}
+
+    def scheduler(script: str):
+        if "Register-ScheduledTask" in script:
+            registered.append(script)
+            task["arguments"] = "-m readthrough serve"
+        elif "Get-ScheduledTask " in script and "readthrough-server" in script:
+            out = f"Running|||0|{task['execute']}|{task['arguments']}"
+            return subprocess.CompletedProcess(["powershell"], 0, stdout=out, stderr="")
+        elif "Get-ScheduledTask " in script:
+            return subprocess.CompletedProcess(["powershell"], 3, stdout="", stderr="")
+        return subprocess.CompletedProcess(["powershell"], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(system, "_powershell", scheduler)
+    system._edit_receipt(lambda e: e.update({"server": {"kind": "server", "args": {}, "interpreter": str(me)}}))
+    assert system.reconcile() == [f"updated server to {system.__version__}"] and len(registered) == 1
+    assert system.reconcile() == [] and len(registered) == 1
+
+    task["execute"] = "C:/other/pythonw.exe"  # another checkout took the task over
+    task["arguments"] = "-m readthrough serve --old"
+    assert system.reconcile() == [] and len(registered) == 1, "another install's task is left alone"
+    piece = next(p for p in system.pieces("copilot") if p.name == "server")
+    assert piece.state is False and "runs another readthrough: C:/other/pythonw.exe" in piece.detail
+
+
+def test_a_tampered_receipt_removes_nothing_readthrough_did_not_write(me, tmp_path: Path):
+    precious = tmp_path / "notes.txt"
+    precious.write_text("keep", encoding="utf-8")
+    assert system._remove(system.Handle(system.HandleKind.FILE, str(precious))) is False
+    assert system._remove(system.Handle(system.HandleKind.TASK, "Microsoft Edge Update")) is False
+    assert system._remove(system.Handle(system.HandleKind.REGISTRY, r"Software\Microsoft\Windows")) is False
+    assert precious.exists()
+
+
+def test_uninstall_all_removes_the_receipts_pieces_and_those_from_before_it(me, tmp_path: Path):
+    copilot = Path(system.install(*_skill("copilot")))
+    claude = Path(system.install(*_skill("claude")))
+    system._forget("skill:claude")  # installed before there was a receipt
+    assert sorted(system.uninstall_all()) == ["skill:claude", "skill:copilot"]
+    assert not copilot.exists() and not claude.exists() and system.load_receipt() == {}
+    assert system.uninstall_all() == []

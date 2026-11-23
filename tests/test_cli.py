@@ -331,6 +331,12 @@ def test_skill_install_and_uninstall(isolated, capsys, monkeypatch):
     assert dashboard(isolated, "uninstall", "skill", "--agent", "claude") == 0
     assert not (isolated.tmp / "claude" / "skills" / "readthrough").exists()
     assert (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough" / "SKILL.md").exists()
+    capsys.readouterr()
+
+    assert dashboard(isolated, "uninstall") == 2, "naming nothing removes nothing"
+    assert dashboard(isolated, "uninstall", "--all") == 0
+    assert capsys.readouterr().out.strip().endswith("removed skill:copilot")
+    assert not (isolated.tmp / "homedir" / ".agents" / "skills" / "readthrough").exists()
 
 
 def test_install_with_nothing_named_offers_what_is_missing(isolated, capsys, monkeypatch):

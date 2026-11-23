@@ -2,6 +2,22 @@
 
 0.4.0 is the first published version; the entries before it are the project's history from before it was public.
 
+## Unreleased
+
+### Added
+
+- `readthrough install` keeps a receipt of what it puts on the machine, and the live server, when a new version
+  starts it, brings those pieces up to date and removes what that version no longer installs. Only what the same
+  installation put there: another checkout's or a tool install's pieces are left alone, and `doctor` says when the
+  server task runs a different readthrough. `readthrough uninstall --all` removes everything readthrough
+  installed, whichever installation did it.
+
+### Fixed
+
+- On Windows, `install` registered the server and the link handler through a `pythonw.exe` that a uv before 0.13
+  had made a console program, so a terminal window opened at every logon and every link click. It now refuses,
+  and says how to recreate the environment.
+
 ## 0.5.0 (2026-11-04)
 
 ### Added

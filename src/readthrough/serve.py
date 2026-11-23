@@ -47,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from readthrough import __version__, contract, ledger, logs, review, study
+from readthrough import __version__, contract, ledger, logs, review, study, system
 from readthrough.build import (
     DATA_SCHEMA,
     BuildFailed,
@@ -837,6 +837,7 @@ def serve(settings: Any, *, with_diffs: bool = True, on_ready: Any = None, setti
     write_serve_file(settings.home, port=httpd.server_address[1], instance=httpd.instance, token=httpd.token)
     stop = threading.Event()
     threading.Thread(target=httpd.watch_config, args=(stop,), daemon=True, name="config-watch").start()
+    threading.Thread(target=keep_installed_current, args=(settings,), daemon=True, name="installs").start()
     stagger = settings.tuning.server.start_stagger_seconds
     for i, dashboard in enumerate(dashboards):
         dashboard.start(build_now=not dashboard.load(), delay=i * stagger)
@@ -853,6 +854,16 @@ def serve(settings: Any, *, with_diffs: bool = True, on_ready: Any = None, setti
         httpd.stop_all()
         httpd.server_close()
         serve_file(settings.home).unlink(missing_ok=True)
+
+
+def keep_installed_current(settings: Any) -> None:
+    """After an upgrade, bring what `install` put on the machine up to date (the skill's text, the canvas, a task
+    whose command changed), and remove what this version no longer installs. Only what this install put there."""
+    try:
+        for change in system.reconcile(settings.agent_options):
+            log.info("Installed pieces: %s", change)
+    except Exception:
+        log.exception("Couldn't bring the installed pieces up to date")
 
 
 def serve_file(home: Path) -> Path:

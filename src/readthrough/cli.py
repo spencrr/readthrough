@@ -13,7 +13,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from readthrough import __version__, agents, contract, forges, ledger, logs, review, study, system, usage
 from readthrough.analyze import is_newsworthy
@@ -603,7 +603,10 @@ def cmd_install(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _install_pieces(settings: Settings, args: argparse.Namespace) -> int:
-    """``readthrough install`` with nothing named: offer every piece that isn't set up, or with ``--all`` do them."""
+    """``readthrough install`` with nothing named: bring what's installed up to date, then offer every piece that
+    isn't set up, or with ``--all`` do them."""
+    for change in system.reconcile(settings.agent_options):
+        _say(change)
     todo = [p for p in pieces(settings) if p.state is False]
     skipped = [p for p in pieces(settings) if p.state is None and p.name != "skill"]
     if not todo:
@@ -632,65 +635,71 @@ def _install_pieces(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _targets(
+    settings: Settings, args: argparse.Namespace, what: str, *, agent_name: str | None = None
+) -> list[tuple[str, system.PieceKind, dict[str, Any]]]:
+    """The pieces a command names, with the options to record for each: one, except the skill, which goes to each
+    installed agent unless one agent or one directory is named."""
+    kind = system.PieceKind(what)
+    if kind != system.PieceKind.SKILL:
+        options: dict[str, Any] = {}
+        if kind == system.PieceKind.CANVAS and args.dest:
+            options["dest"] = str(Path(args.dest))
+        if kind in (system.PieceKind.SERVER, system.PieceKind.SCHEDULE) and args.home_set:
+            options["home"] = str(settings.home)
+        if kind == system.PieceKind.SCHEDULE:
+            options |= {"at": getattr(args, "at", "08:30"), "days": getattr(args, "days", "weekdays"),
+                        "open_mode": getattr(args, "open", "auto")}  # fmt: skip
+        return [(kind.value, kind, options)]
+    if args.dest and not agent_name:
+        return [(f"skill:{Path(args.dest)}", kind, {"dest": str(Path(args.dest))})]
+    if agent_name or args.agent:
+        names = [agent_name or args.agent]
+    else:
+        available = [a.name for a in agents.all_agents(settings.agent_options) if a.available()]
+        names = available or [agents.resolve(settings.agent, settings.agent_options).name]
+    return [(f"skill:{n}", kind, {"agent": n}) for n in names]
+
+
 def _install(settings: Settings, args: argparse.Namespace, what: str, *, agent_name: str | None = None) -> None:
-    home = settings.home if args.home_set else None
-    if what == "skill":
-        dests = (
-            [agents.make(agent_name, settings.agent_options).skill_dir] if agent_name else _skill_dirs(settings, args)
-        )
-        for dest in dests:
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(agents.bundled_skill(), encoding="utf-8")
-            _say(f"Installed the {SKILL_NAME} skill to {dest}")
-    elif what == "protocol":
-        _say(f"Registered {review.URL_SCHEME}:// -> {system.install_protocol()}")
-        _say("Rebuild the dashboards (`readthrough build --all`) so their buttons switch to one-click launch.")
-    elif what == "schedule":
-        command = system.install_schedule(at=args.at, days=args.days, open_mode=args.open, home=home)
-        _say(f"Scheduled '{system.TASK_NAME}' ({args.days} at {args.at}): {command}")
-        _say(f"Next run: {system.schedule_status().next_run or 'unknown'}")
-    elif what == "server":
-        from readthrough.serve import base_url
+    for name, kind, options in _targets(settings, args, what, agent_name=agent_name):
+        done = system.install(name, kind, options, settings.agent_options)
+        match kind:
+            case system.PieceKind.SKILL:
+                _say(f"Installed the {SKILL_NAME} skill to {done}")
+            case system.PieceKind.PROTOCOL:
+                _say(f"Registered {review.URL_SCHEME}:// -> {done}")
+                _say("Rebuild the dashboards (`readthrough build --all`) so their buttons switch to one-click launch.")
+            case system.PieceKind.SCHEDULE:
+                _say(f"Scheduled '{system.TASK_NAME}' ({options['days']} at {options['at']}): {done}")
+                _say(f"Next run: {system.schedule_status().next_run or 'unknown'}")
+            case system.PieceKind.SERVER:
+                from readthrough.serve import base_url
 
-        command = system.install_server_task(home=home)
-        _say(f"'{system.SERVER_TASK_NAME}' starts at logon and is starting now: {command}")
-        _say(f"Dashboard: {base_url(settings.port)}")
-    elif what == "canvas":
-        dest = system.install_canvas(Path(args.dest) if args.dest else None)
-        _say(f"Installed the readthrough canvas (experimental) to {dest}")
-        _say("Copilot hosts that render canvases (VS Code's Agents window) load it when they next reload their "
-             "extensions. It shows the live dashboard, so keep `readthrough serve` running (`readthrough install server`).")  # fmt: skip
-
-
-def _skill_dirs(settings: Settings, args: argparse.Namespace) -> list[Path]:
-    """Where to put the skill: an explicit directory, one agent's, or every installed agent's (else the default's)."""
-    if args.dest:
-        return [Path(args.dest)]
-    if args.agent:
-        return [agents.make(args.agent, settings.agent_options).skill_dir]
-    available = [a for a in agents.all_agents(settings.agent_options) if a.available()]
-    return [a.skill_dir for a in available or [agents.resolve(settings.agent, settings.agent_options)]]
+                _say(f"'{system.SERVER_TASK_NAME}' starts at logon and is starting now: {done}")
+                _say(f"Dashboard: {base_url(settings.port)}")
+            case system.PieceKind.CANVAS:
+                _say(f"Installed the readthrough canvas (experimental) to {done}")
+                _say("Copilot hosts that render canvases (VS Code's Agents window) load it when they next reload their "
+                     "extensions. It shows the live dashboard, so keep `readthrough serve` running (`readthrough install server`).")  # fmt: skip
+            case _:
+                assert_never(kind)
 
 
 def cmd_uninstall(settings: Settings, args: argparse.Namespace) -> int:
-    if args.what == "skill":
-        removed = False
-        for dest in _skill_dirs(settings, args):
-            removed = dest.exists() or removed
-            shutil.rmtree(dest, ignore_errors=True)
-    elif args.what == "protocol":
-        removed = system.uninstall_protocol()
-    elif args.what == "server":
-        removed = system.uninstall_schedule(system.SERVER_TASK_NAME)
-    elif args.what == "canvas":
-        try:
-            removed = system.uninstall_canvas(Path(args.dest) if args.dest else None)
-        except OSError as exc:
-            log.error("Couldn't remove %s", exc)
-            return 1
-    else:
-        removed = system.uninstall_schedule()
-    _say("removed" if removed else "nothing to remove")
+    if args.all:
+        removed = system.uninstall_all(settings.agent_options)
+        _say(f"removed {', '.join(removed)}" if removed else "nothing to remove")
+        return 0
+    if args.what is None:
+        _say("Name what to uninstall, or `--all` for everything readthrough put on this machine.")
+        return 2
+    try:
+        results = [system.uninstall(n, k, o, settings.agent_options) for n, k, o in _targets(settings, args, args.what)]
+    except OSError as exc:
+        log.error("Couldn't remove %s", exc)
+        return 1
+    _say("removed" if any(results) else "nothing to remove")
     return 0
 
 
@@ -1070,12 +1079,15 @@ def build_parser(prog: str = "readthrough") -> argparse.ArgumentParser:
         )
         p.add_argument(
             "what",
-            nargs="?" if name == "install" else None,
+            nargs="?",
             choices=("skill", "protocol", "schedule", "server", "canvas"),
         )
         p.add_argument("--agent", choices=agents.AGENTS.names(),
                        help="skill: only this agent's skill directory (default: every installed agent's)")  # fmt: skip
         p.add_argument("--dest", help="skill, canvas: an explicit directory instead")
+        if name == "uninstall":
+            p.add_argument("--all", action="store_true",
+                           help="everything readthrough put on this machine, whichever install put it there")  # fmt: skip
         if name == "install":
             p.add_argument("--all", action="store_true",
                            help="with nothing named: set up every recommended piece without asking")  # fmt: skip
