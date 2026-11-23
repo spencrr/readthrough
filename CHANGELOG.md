@@ -19,6 +19,9 @@
   `--hint`, `--answer`, `--assess` (with `--evidence`), `--reflection`, and `--assess-teachback` (with `--gap`).
   Questions, hints, and grades take `--by model`, and `--model` names the model when the agent knows it; an
   answer after a recorded hint is tagged as aided, as it is on the page.
+- The deep-review skill records its check questions, hints, your answers, its grades, and its teach-back
+  assessment in the study log, each against the commit it checked out, and treats evidence from an earlier
+  commit as something to recheck rather than skip.
 - `readthrough install` keeps a receipt of what it puts on the machine, and the live server, when a new version
   starts it, brings those pieces up to date and removes what that version no longer installs. Only what the same
   installation put there: another checkout's or a tool install's pieces are left alone, and `doctor` says when the
