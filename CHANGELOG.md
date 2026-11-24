@@ -2,7 +2,7 @@
 
 0.4.0 is the first published version; the entries before it are the project's history from before it was public.
 
-## Unreleased
+## 0.6.0 (2026-11-23)
 
 ### Added
 
